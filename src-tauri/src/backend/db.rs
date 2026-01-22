@@ -1,6 +1,6 @@
 use std::path::{Path};
 use std::sync::{Mutex,MutexGuard};
-use rusqlite::{Connection, DropBehavior, Result, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, DropBehavior, Result, Transaction, TransactionBehavior, params, Params, Row};
 use crate::util::error;
 
 static SAVEPOINT_ID: Mutex<i64> = Mutex::new(0);
@@ -9,8 +9,37 @@ static mut GLOBAL_TRANSACTION: Option<Transaction<'static>> = None;
 
 /// Data structure locking access to the database while a function performs an action.
 pub struct DbAction<'a> {
-    trans: &'a mut Transaction<'a>,
+    pub trans: &'a mut Transaction<'a>,
     savepoint_id: MutexGuard<'a, i64>
+}
+
+impl DbAction<'_> {
+    /// Convenience method to prepare and execute a single SQL statement.
+    /// On success, returns the number of rows that were changed or inserted or deleted (via sqlite3_changes).
+    pub fn execute<P: Params>(&self, sql: &str, p: P) -> Result<usize, error::Error> {
+        match self.trans.execute(sql, p) {
+            Ok(t) => {
+                return Ok(t);
+            },
+            Err(e) => {
+                return Err(error::Error::RusqliteError(e));
+            }
+        }
+    }
+
+    /// Convenience method to execute a query that is expected to return exactly one row.
+    /// Returns Err(RusqliteError(QueryReturnedMoreThanOneRow)) if the query returns more than one row.
+    /// Returns Err(RusqliteError(QueryReturnedNoRows)) if no results are returned. If the query truly is optional, you can call .optional() on the result of this to get a Result<Option<T>> (requires that the trait rusqlite::OptionalExtension is imported).
+    pub fn query_one<T, P: Params, F: FnOnce(&Row<'_>) -> Result<T>>(&self, sql: &str, p: P, f: F) -> Result<T, error::Error> {
+        match self.trans.query_one(sql, p, f) {
+            Ok(t) => {
+                return Ok(t);
+            },
+            Err(e) => {
+                return Err(error::Error::RusqliteError(e));
+            }
+        }
+    }
 }
 
 /// Initializes a new database at the given path.
@@ -181,6 +210,27 @@ pub fn begin_db_action() -> Result<DbAction<'static>, error::Error> {
                         return Err(error::Error::RusqliteError(e));
                     }
                 }
+            },
+            None => {
+                return Err(error::Error::AdhocError("Database connection has not been opened."));
+            }
+        }
+    }
+}
+
+/// Starts a new action without recording the current state of the database.
+/// This should only be used if the action is readonly (e.g. only SELECT queries).
+pub fn begin_readonly_db_action() -> Result<DbAction<'static>, error::Error> {
+    unsafe {
+        // Obtain lock
+        let mut savepoint_id = SAVEPOINT_ID.lock().unwrap();
+
+        match &mut GLOBAL_TRANSACTION {
+            Some(trans) => {
+                return Ok(DbAction {
+                    trans,
+                    savepoint_id: savepoint_id
+                });
             },
             None => {
                 return Err(error::Error::AdhocError("Database connection has not been opened."));

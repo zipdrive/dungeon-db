@@ -4,8 +4,6 @@ export function initListeners() {
   // Set up the tab listeners
   let addTableButton: HTMLInputElement | null = document.querySelector('#add-new-table-button');
   addTableButton?.addEventListener("click", (e) => {
-    invoke("create_table", {
-        name: "TestTable"
-    });
+    invoke("dialog__create_table", {});
   });
 };
