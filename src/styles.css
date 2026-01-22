@@ -157,6 +157,45 @@ body {
   position: absolute;
   width: 200px;
   height: 100%;
-  flex-direction: row;
+  display: flex;
+  flex-direction: column;
   overflow-y: scroll;
+}
+
+.table-sidebar-button {
+  position: relative;
+  left: 0;
+  right: 0;
+  border-radius: 0;
+  border-left: none;
+  box-shadow: none;
+}
+.table-sidebar-button:hover {
+  background-color: #f0f0f0;
+}
+.table-sidebar-button:active {
+  background-color: #d8d8d8;
+}
+
+#add-new-table-button {
+  cursor: pointer;
+}
+
+
+
+#blank-startup {
+  position: fixed;
+  width: 100%;
+  height: 100%;
+  background-color: #f6f6f6;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+#blank-startup-menu-options {
+  width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }

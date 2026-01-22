@@ -5,22 +5,15 @@
     <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>StaticDB</title>
-    <script type="module" src="/src/main.ts" defer></script>
+    <script type="module" src="/src/frontend/index.ts" defer></script>
   </head>
 
   <body>
-    <div class="top-sidebar">
-      <button id="tables-tab" class="tab">Tables</button>
-      <button id="reports-tab" class="tab">Reports</button>
-      <button id="global-types-tab" class="tab">Global Data Types</button>
-    </div>
-    <form name="tables" class="container">
-      <div class="left-container-sidebar">
-        <select name="table-list" id="table-list" size="200">
-          <option value="table1">Table1</option>
-        </select>
-        <button id="add-new-table-button">Create New Table</button>
+    <div id="blank-startup">
+      <div id="blank-startup-menu-options">
+        <button id="new-db-button">New Database</button>
+        <button id="load-db-button">Load Database</button>
       </div>
-    </form>
+    </div>
   </body>
 </html>

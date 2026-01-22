@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>StaticDB</title>
+    <script type="module" src="/src/frontend/main.ts" defer></script>
+  </head>
+
+  <body>
+    <div class="top-sidebar">
+      <button id="tables-tab" class="tab">Tables</button>
+      <button id="reports-tab" class="tab">Reports</button>
+      <button id="global-types-tab" class="tab">Global Data Types</button>
+    </div>
+    <form name="tables" class="container">
+      <div class="left-container-sidebar">
+        <button class="table-sidebar-button">Table1</button>
+        <button class="table-sidebar-button">Table2</button>
+        <div style="display:flex; justify-content:center; padding-top:6px;">
+            <a id="add-new-table-button">Create New Table</button>
+        </div>
+      </div>
+      <div class="center-container">
+        <table id="table-content">
+        </table>
+      </div>
+    </form>
+  </body>
+</html>

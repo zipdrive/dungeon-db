@@ -1,6 +1,7 @@
 use std::{Option, None};
 use std::sync::{Mutex};
 use rusqlite::{params, Connection, Transaction, TransactionBehavior, DropBehavior, Result};
+mod structs;
 
 /// Initializes a new database at the given path.
 fn initialize_new_db<P: AsRef<Path>>(path: P) -> Result<()> {
@@ -84,6 +85,7 @@ static current_db_transaction: Mutex<Transaction> = Mutex::new();
 static current_db_transaction_last_savepoint_id: Mutex<u32> = Mutex::new(0);
 
 /// Closes any previous database connection, and opens a new one.
+#[tauri::command]
 pub fn init<P: AsRef<Path>>(path: P) -> Result<()> {
     // Initialize the database if it did not already exist
     if !path.exists() {
@@ -132,7 +134,8 @@ pub fn undo() -> Result<()> {
 }
 
 /// Creates a new table.
-pub fn create_table(name: &str) -> Result<i64> {
+#[tauri::command]
+pub fn create_table(name: String) -> Result<structs::Table> {
     create_savepoint()?;
     
     let mut tx = current_db_transaction.lock().unwrap();
@@ -140,11 +143,20 @@ pub fn create_table(name: &str) -> Result<i64> {
     let table_id: i64 = *tx.last_insert_rowid();
     *tx.execute(
         "INSERT INTO METADATA_TABLE (OID, NAME) VALUES (?1, ?2);",
-        params![table_id, String::from(name)]
+        params![table_id, name]
     );
     let create_cmd: String = String::from("CREATE TABLE TABLE") + table_id.to_string() + String::from(" (OID INTEGER PRIMARY KEY);");
     *tx.execute(&create_cmd);
-    Ok(table_id);
+    Ok(Table {
+        oid: table_id,
+        parent_table_oid: None,
+        name: name,
+        columns: vec![]
+    });
+}
+
+pub fn get_table(table_oid: i64) -> Result<structs::Table> {
+
 }
 
 /// Inserts a column into a table, such that the column initially has a globally-accessible type.
@@ -404,12 +416,12 @@ pub fn modify_table_column_globally_accessible_type(table_id: i64, column_id: i6
         } else { None };
         // Copy the column data into the temporary table
         match old_surrogate_key_column_id_nullable {
-            Some(old_surrogate_key_column_id) {
+            Some(old_surrogate_key_column_id) => {
                 // Copy data from the referenced table's surrogate key into the temporary table
                 let copy_cmd: String = String::from("INSERT INTO temp.DATA_HOLDER (OID, CONTENT) SELECT t1.OID, t2.COLUMN") + old_surrogate_key_column_id.to_string() + String::from(" FROM main.TABLE") + table_id.to_string() + String::from(" t1 INNER JOIN main.TABLE") + column_old_type_id.to_string() + String::from(" t2 ON t2.OID = t1.COLUMN") + column_id.to_string() + String::from(";");
                 *tx.execute(&copy_cmd)?;
             },
-            None {
+            None => {
                 // Copy the raw data from the old column into the temporary table
                 let copy_cmd: String = String::from("INSERT INTO temp.DATA_HOLDER (OID, CONTENT) SELECT OID, COLUMN") + column_id.to_string() + String::from(" FROM main.TABLE") + table_id.to_string() + String::from(";");
                 *tx.execute(&copy_cmd)?;
@@ -444,12 +456,12 @@ pub fn modify_table_column_globally_accessible_type(table_id: i64, column_id: i6
         ).optional()?;
         // Copy the values back over from the temporary table
         match new_surrogate_key_column_id_nullable {
-            Some(new_surrogate_key_column_id) {
+            Some(new_surrogate_key_column_id) => {
                 // Copy the values back over, attempting to match the value in the table with the referenced table's surrogate key
                 let update_cmd: String = String::from("UPDATE OR IGNORE main.TABLE") + table_id.to_string() + String::from(" AS u SET u.COLUMN") + column_id.to_string() + String::from(" = (SELECT v.OID FROM temp.DATA_HOLDER AS t INNER JOIN main.TABLE") + column_type_id.to_string() + String::from(" v ON v.COLUMN") + new_surrogate_key_column_id.to_string() + String::from(" = t.CONTENT WHERE t.OID = u.OID);");
                 *tx.execute(&update_cmd)?;
             },
-            None {
+            None => {
                 // Copy the values back over, raw
                 let update_cmd: String = String::from("UPDATE OR IGNORE main.TABLE") + table_id.to_string() + String::from(" AS u SET u.COLUMN") + column_id.to_string() + String::from(" = (SELECT t.CONTENT FROM temp.DATA_HOLDER AS t WHERE t.OID = u.OID);");
                 *tx.execute(&update_cmd)?;
