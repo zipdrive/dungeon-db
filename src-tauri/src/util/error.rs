@@ -23,3 +23,15 @@ impl Into<InvokeError> for Error {
         };
     }
 }
+
+impl From<RusqliteError> for Error {
+    fn from(e: RusqliteError) -> Error {
+        Error::RusqliteError(e)
+    }
+}
+
+impl From<TauriError> for Error {
+    fn from(e: TauriError) -> Error {
+        Error::TauriError(e)
+    }
+}

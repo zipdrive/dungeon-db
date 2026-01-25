@@ -3,19 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="/src/styles.css" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>StaticDB</title>
-    <script>
+    <script type="module">
         import { invoke } from "@tauri-apps/api/core";
 
         function createTable() {
-            
-            invoke("create_table", {});
+            invoke("create_table", {
+                name: 'Default Table Name'
+            });
+            invoke("dialog_close", {});
         }
 
         function cancel() {
             invoke("dialog_close", {});
         }
+
+        // Add initial listeners
+        window.addEventListener("DOMContentLoaded", () => {
+            document.querySelector('#create-table-button')?.addEventListener("click", createTable);
+            document.querySelector('#cancel-create-table-button')?.addEventListener("click", cancel);
+        });
     </script>
   </head>
 
@@ -28,8 +35,8 @@
             </tr>
         </table>
         <div class="dialog-buttons">
-            <button>Create Table</button>
-            <button>Cancel</button>
+            <button id="create-table-button">Create Table</button>
+            <button id="cancel-create-table-button">Cancel</button>
         </div>
     </form>
   </body>

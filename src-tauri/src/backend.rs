@@ -1,7 +1,9 @@
 mod db;
 mod table;
-use tauri::{AppHandle, WebviewWindowBuilder, WebviewUrl, Emitter};
-
+mod column;
+mod data;
+use tauri::{AppHandle, WebviewWindowBuilder, WebviewUrl, Emitter, Size, PhysicalSize};
+use tauri::ipc::Channel;
 use crate::util::error;
 
 #[tauri::command]
@@ -15,6 +17,11 @@ fn msg_update_table_list(app: &AppHandle) {
     app.emit("update-table-list", ()).unwrap();
 }
 
+/// Sends a message to the frontend that the currently-displayed table needs to be refreshed.
+fn msg_update_table_data(app: &AppHandle) {
+    app.emit("update-table-data", ()).unwrap();
+}
+
 #[tauri::command]
 /// Closes the current dialog window.
 pub fn dialog_close(window: tauri::Window) -> Result<(), error::Error> {
@@ -26,30 +33,52 @@ pub fn dialog_close(window: tauri::Window) -> Result<(), error::Error> {
 
 #[tauri::command]
 /// Pull up a dialog window for creating a new table.
-pub fn dialog_create_table(app: AppHandle) -> Result<(), error::Error> {
-    match WebviewWindowBuilder::new(
+pub async fn dialog_create_table(app: AppHandle) -> Result<(), error::Error> {
+    WebviewWindowBuilder::new(
         &app,
         String::from("createTableWindow"),
         WebviewUrl::App("/src/dialogs/createTable.html".into()),
-    ).build() {
-        Ok(_) => {
-            return Ok(());
-        },
-        Err(e) => {
-            return Err(error::Error::TauriError(e));
-        }
-    }
-}
-
-#[tauri::command]
-/// Create a table.
-pub fn create_table(app: AppHandle, name: String) -> Result<(), error::Error> {
-    table::Table::create(name)?;
-    msg_update_table_list(&app);
+    )
+    .inner_size(400.0, 200.0)
+    .resizable(false)
+    .maximizable(false)
+    .build()?;
     return Ok(());
 }
 
 #[tauri::command]
-pub fn get_table_list() -> Result<(), error::Error> {
-    // Use channel
+/// Create a table.
+pub fn create_table(app: AppHandle, name: String) -> Result<i64, error::Error> {
+    let table_oid: i64 = table::create(name)?;
+    msg_update_table_list(&app);
+    return Ok(table_oid);
+}
+
+#[tauri::command]
+pub fn get_table_list(table_channel: Channel<table::BasicMetadata>) -> Result<(), error::Error> {
+    // Use channel to send BasicMetadata objects
+    table::send_metadata_list(table_channel)?;
+    return Ok(());
+}
+
+#[tauri::command]
+/// Create a new column in a table.
+pub fn create_table_column(app: AppHandle, table_oid: i64, column_type: column::MetadataColumnType, column_ordering: i64, column_width: i64, is_nullable: bool, is_unique: bool, is_primary_key: bool) -> Result<i64, error::Error> {
+    // Wrapper for column::create
+    let column_oid = column::create(table_oid, column_type, column_ordering, column_width, is_nullable, is_unique, is_primary_key)?;
+    msg_update_table_data(&app);
+    return Ok(column_oid);
+}
+
+#[tauri::command]
+pub fn get_table_column_list(table_oid: i64, column_channel: Channel<column::Metadata>) -> Result<(), error::Error> {
+    // Use channel to send BasicMetadata objects
+    column::send_metadata_list(table_oid, column_channel)?;
+    return Ok(());
+}
+
+#[tauri::command]
+pub fn get_table_data(table_oid: i64, cell_channel: Channel<data::Cell>) -> Result<(), error::Error> {
+    data::send_table_data(table_oid, cell_channel)?;
+    return Ok(());
 }

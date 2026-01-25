@@ -11,6 +11,10 @@ pub fn run() {
             backend::dialog_close,
             backend::dialog_create_table,
             backend::create_table,
+            backend::get_table_list,
+            backend::create_table_column,
+            backend::get_table_column_list,
+            backend::get_table_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

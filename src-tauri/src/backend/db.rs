@@ -1,5 +1,7 @@
+use std::any::Any;
 use std::path::{Path};
 use std::sync::{Mutex,MutexGuard};
+use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
 use rusqlite::{Connection, DropBehavior, Result, Transaction, TransactionBehavior, params, Params, Row};
 use crate::util::error;
 
@@ -14,44 +16,31 @@ pub struct DbAction<'a> {
 }
 
 impl DbAction<'_> {
-    /// Convenience method to prepare and execute a single SQL statement.
-    /// On success, returns the number of rows that were changed or inserted or deleted (via sqlite3_changes).
-    pub fn execute<P: Params>(&self, sql: &str, p: P) -> Result<usize, error::Error> {
-        match self.trans.execute(sql, p) {
-            Ok(t) => {
-                return Ok(t);
-            },
-            Err(e) => {
-                return Err(error::Error::RusqliteError(e));
-            }
-        }
-    }
+    /// Convenience method to execute a query that returns multiple rows, then execute a function for each row.
+    pub fn query_iterate<P: Params, F: FnMut(&Row<'_>) -> Result<(), error::Error>>(&self, sql: &str, p: P, f: &mut F) -> Result<(), error::Error> {
+        // Prepare a statement
+        let mut stmt = match self.trans.prepare(sql) {
+            Ok(s) => s,
+            Err(e) => { return Err(error::Error::RusqliteError(e)); }
+        };
 
-    /// Convenience method to execute a query that is expected to return exactly one row.
-    /// Returns Err(RusqliteError(QueryReturnedMoreThanOneRow)) if the query returns more than one row.
-    /// Returns Err(RusqliteError(QueryReturnedNoRows)) if no results are returned. If the query truly is optional, you can call .optional() on the result of this to get a Result<Option<T>> (requires that the trait rusqlite::OptionalExtension is imported).
-    pub fn query_one<T, P: Params, F: FnOnce(&Row<'_>) -> Result<T>>(&self, sql: &str, p: P, f: F) -> Result<T, error::Error> {
-        match self.trans.query_one(sql, p, f) {
-            Ok(t) => {
-                return Ok(t);
-            },
-            Err(e) => {
-                return Err(error::Error::RusqliteError(e));
-            }
+        // Execute the statement to query rows
+        let mut rows = stmt.query(p)?;
+        loop {
+            let row = match rows.next()? {
+                Some(r) => r,
+                None => { break; }
+            };
+            f(row);
         }
+        return Ok(());
     }
 }
 
 /// Initializes a new database at the given path.
 fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
-    let conn_result = Connection::open(path);
-    let conn: Connection = match conn_result {
-        Ok(c) => c,
-        Err(e) => {
-            return Err(error::Error::RusqliteError(e));
-        }
-    };
-    let init_script_result = conn.execute_batch("
+    let conn = Connection::open(path)?;
+    conn.execute_batch("
     PRAGMA foreign_keys = ON;
     PRAGMA journal_mode = WAL;
 
@@ -120,15 +109,8 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
     ALTER TABLE METADATA_TABLE ADD COLUMN SURROGATE_KEY_COLUMN_OID INTEGER REFERENCES METADATA_TABLE_COLUMN (OID);
 
     COMMIT;
-    ");
-    match init_script_result {
-        Ok(_) => {
-            return Ok(());
-        },
-        Err(e) => {
-            return Err(error::Error::RusqliteError(e));
-        }
-    }
+    ")?;
+    return Ok(());
 }
 
 /// Closes any previous database connection, and opens a new one.
@@ -143,27 +125,14 @@ pub fn init<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
         let mut savepoint_id = SAVEPOINT_ID.lock().unwrap();
 
         // Open a connection to the database
-        GLOBAL_CONNECTION = Some(match Connection::open(&path) {
-            Ok(conn) => conn,
-            Err(e) => {
-                return Err(error::Error::RusqliteError(e));
-            }
-        });
+        GLOBAL_CONNECTION = Some(Connection::open(&path)?);
         match &mut GLOBAL_CONNECTION {
             Some(conn) => {
                 // Do commands to set up the necessary pragmas for the entire connection
-                match conn.execute_batch("PRAGMA foreign_keys = ON;PRAGMA journal_mode = WAL;") {
-                    Ok(_) => {},
-                    Err(e) => { return Err(error::Error::RusqliteError(e)); }
-                };
+                conn.execute_batch("PRAGMA foreign_keys = ON;PRAGMA journal_mode = WAL;PRAGMA database_list;")?;
 
                 // Start the transaction that will serve as the undo stack
-                GLOBAL_TRANSACTION = Some(match conn.transaction_with_behavior(TransactionBehavior::Immediate) {
-                    Ok(trans) => trans,
-                    Err(e) => {
-                        return Err(error::Error::RusqliteError(e));
-                    }
-                });
+                GLOBAL_TRANSACTION = Some(conn.transaction_with_behavior(TransactionBehavior::Immediate)?);
             },
             None => {
                 return Err(error::Error::AdhocError("GLOBAL_CONNECTION found to be None immediately following initialization."));
@@ -195,21 +164,14 @@ pub fn begin_db_action() -> Result<DbAction<'static>, error::Error> {
         match &mut GLOBAL_TRANSACTION {
             Some(trans) => {
                 // Create a savepoint
-                match trans.execute(
-                    "SAVEPOINT ?1;",
-                    params![format!("save{}", *savepoint_id + 1)]
-                ) {
-                    Ok(_) => {
-                        *savepoint_id += 1;
-                        return Ok(DbAction {
-                            trans,
-                            savepoint_id: savepoint_id
-                        });
-                    },
-                    Err(e) => {
-                        return Err(error::Error::RusqliteError(e));
-                    }
-                }
+                let savepoint_cmd: String = format!("SAVEPOINT save{};", *savepoint_id + 1);
+                trans.execute(&savepoint_cmd, [])?;
+                
+                *savepoint_id += 1;
+                return Ok(DbAction {
+                    trans,
+                    savepoint_id: savepoint_id
+                });
             },
             None => {
                 return Err(error::Error::AdhocError("Database connection has not been opened."));
@@ -249,17 +211,9 @@ pub fn undo_db_action() -> Result<(), error::Error> {
             match &mut GLOBAL_TRANSACTION {
                 Some(trans) => {
                     // Create a savepoint
-                    match trans.execute(
-                        "ROLLBACK TO SAVEPOINT ?1;",
-                        params![format!("save{}", *savepoint_id)]
-                    ) {
-                        Ok(_) => {
-                            *savepoint_id -= 1;
-                        },
-                        Err(e) => {
-                            return Err(error::Error::RusqliteError(e));
-                        }
-                    }
+                    let savepoint_cmd: String = format!("ROLLBACK TO SAVEPOINT save{};", *savepoint_id);
+                    trans.execute(&savepoint_cmd, [])?;
+                    *savepoint_id -= 1;
                 },
                 None => {
                     return Err(error::Error::AdhocError("Database connection has not been opened."))
