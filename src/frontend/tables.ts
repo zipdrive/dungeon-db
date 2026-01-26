@@ -1,3 +1,4 @@
+import { Menu } from "@tauri-apps/api/menu";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from '@tauri-apps/api/event';
 import { message } from "@tauri-apps/plugin-dialog";
@@ -42,19 +43,13 @@ async function updateTableListAsync() {
  * Opens the dialog to create a new table.
  */
 export async function createTable() {
-  /*
-  await invoke("create_table", { name: "Default Table Name" })
-    .then(oid => console.debug(`Successfully created table with OID ${oid}.`))
+  await invoke("dialog_create_table", {})
     .catch(async e => {
       await message(e, {
-        title: 'Error while creating table.',
+        title: 'Error while opening dialog box to create table.',
         kind: 'error'
       });
     });
-    */
-  //window.location.replace('/src/dialogs/createTable.html');
-
-  await invoke("dialog_create_table", {});
 }
 
 /**
@@ -85,7 +80,8 @@ export async function displayTable(tableOid: number) {
     element.remove();
   });
   let tableNode: HTMLTableElement | null = document.querySelector('#table-content');
-  tableNode?.insertAdjacentHTML('afterbegin', '<tr><th>OID</th>');
+  tableNode?.insertAdjacentHTML('afterbegin', '<thead><tr><th>OID</th></tr></thead>');
+  let tableHeaderRowNode: HTMLTableRowElement | null = document.querySelector('#table-content > thead > tr');
 
   // Set up a channel to populate the list of user-defined columns
   let tableColumnList: TableColumn[] = []
@@ -99,14 +95,19 @@ export async function displayTable(tableOid: number) {
     if (tableHeaderNode != null) {
       tableHeaderNode.style.columnWidth = `${column.width}px`;
       tableHeaderNode.innerText = column.name;
-      tableNode?.insertAdjacentElement('beforeend', tableHeaderNode);
+      tableHeaderRowNode?.insertAdjacentElement('beforeend', tableHeaderNode);
 
-      // TODO add context menu?
     }
   };
 
   // Send a command to Rust to get the list of table columns from the database
-  await invoke("get_table_column_list", { tableOid: tableOid, tableChannel: onReceiveColumn });
+  await invoke("get_table_column_list", { tableOid: tableOid, tableChannel: onReceiveColumn })
+    .catch(async e => {
+      await message(e, {
+        title: 'Error while retrieving list of columns for table.',
+        kind: 'error'
+      });
+    });
 
   // Add a final column header that is a button to add a new column
   let tableAddColumnHeaderNode = document.createElement('th');
@@ -136,7 +137,13 @@ export async function displayTable(tableOid: number) {
   };
 
   // Send a command to Rust to get the list of rows from the database
-  await invoke("get_table_row_list", { tableOid: tableOid, tableChannel: onReceiveRow });
+  await invoke("get_table_row_list", { tableOid: tableOid, tableChannel: onReceiveRow })
+    .catch(async e => {
+      await message(e, {
+        title: 'Error while retrieving rows of table.',
+        kind: 'error'
+      });
+    });
 
   // Close off the last row of the table
   tableNode?.insertAdjacentHTML('beforeend', '</tr>');

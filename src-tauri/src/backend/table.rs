@@ -15,16 +15,16 @@ use crate::util::error;
 pub fn create(name: String) -> Result<i64, error::Error> {
     let action = db::begin_db_action()?;
     action.trans.execute("INSERT INTO METADATA_TABLE_COLUMN_TYPE (MODE) VALUES (3);", [])?;
-    let table_id: i64 = action.trans.last_insert_rowid();
+    let table_oid: i64 = action.trans.last_insert_rowid();
     action.trans.execute(
         "INSERT INTO METADATA_TABLE (OID, NAME) VALUES (?1, ?2);",
-        params![table_id, &name]
+        params![table_oid, &name]
     )?;
-    let create_table_cmd: String = format!("CREATE TABLE TABLE{} (OID INTEGER PRIMARY KEY);", table_id);
+    let create_table_cmd: String = format!("CREATE TABLE TABLE{} (OID INTEGER PRIMARY KEY);", table_oid);
     action.trans.execute(&create_table_cmd, [])?;
-    let create_view_cmd = format!("CREATE VIEW TABLE{table_id}_SURROGATE (OID, DISPLAY_VALUE) AS SELECT OID, OID FROM TABLE{table_id};");
+    let create_view_cmd = format!("CREATE VIEW TABLE{table_oid}_SURROGATE (OID, DISPLAY_VALUE) AS SELECT OID, OID FROM TABLE{table_oid};");
     action.trans.execute(&create_view_cmd, [])?;
-    return Ok(table_id);
+    return Ok(table_oid);
 }
 
 // Deletes the table with the given OID and all associated local columns.

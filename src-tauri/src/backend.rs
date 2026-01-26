@@ -2,7 +2,7 @@ mod db;
 mod table;
 mod column;
 mod data;
-use tauri::{AppHandle, WebviewWindowBuilder, WebviewUrl, Emitter, Size, PhysicalSize};
+use tauri::{AppHandle, WebviewWindowBuilder, WebviewUrl, Emitter, Size, PhysicalSize, Manager};
 use tauri::ipc::Channel;
 use crate::util::error;
 
@@ -34,13 +34,14 @@ pub fn dialog_close(window: tauri::Window) -> Result<(), error::Error> {
 #[tauri::command]
 /// Pull up a dialog window for creating a new table.
 pub async fn dialog_create_table(app: AppHandle) -> Result<(), error::Error> {
+    let window_idx = app.webview_windows().len();
     WebviewWindowBuilder::new(
         &app,
-        String::from("createTableWindow"),
+        format!("createTableWindow-{window_idx}"),
         WebviewUrl::App("/src/dialogs/createTable.html".into()),
     )
-    .inner_size(400.0, 200.0)
-    .resizable(false)
+    .title("Create New Table")
+    .inner_size(400.0, 150.0)
     .maximizable(false)
     .build()?;
     return Ok(());
@@ -62,10 +63,27 @@ pub fn get_table_list(table_channel: Channel<table::BasicMetadata>) -> Result<()
 }
 
 #[tauri::command]
+/// Pull up a dialog window for creating a new table.
+pub async fn dialog_create_table_column(app: AppHandle, table_oid: i64, column_ordering: i64) -> Result<(), error::Error> {    
+    let window_idx = app.webview_windows().len();
+    WebviewWindowBuilder::new(
+        &app,
+        format!("createTableColumnWindow-{window_idx}"),
+        WebviewUrl::App(format!("/src/dialogs/createTableColumn.html?table_oid={table_oid}&column_ordering={column_ordering}").into()),
+    )
+    .title("Add New Column")
+    .inner_size(400.0, 200.0)
+    .resizable(false)
+    .maximizable(false)
+    .build()?;
+    return Ok(());
+}
+
+#[tauri::command]
 /// Create a new column in a table.
-pub fn create_table_column(app: AppHandle, table_oid: i64, column_type: column::MetadataColumnType, column_ordering: i64, column_width: i64, is_nullable: bool, is_unique: bool, is_primary_key: bool) -> Result<i64, error::Error> {
+pub fn create_table_column(app: AppHandle, table_oid: i64, column_name: String, column_type: column::MetadataColumnType, column_ordering: i64, column_width: i64, is_nullable: bool, is_unique: bool, is_primary_key: bool) -> Result<i64, error::Error> {
     // Wrapper for column::create
-    let column_oid = column::create(table_oid, column_type, column_ordering, column_width, is_nullable, is_unique, is_primary_key)?;
+    let column_oid = column::create(table_oid, &column_name, column_type, column_ordering, column_width, is_nullable, is_unique, is_primary_key)?;
     msg_update_table_data(&app);
     return Ok(column_oid);
 }

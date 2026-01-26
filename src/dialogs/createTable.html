@@ -6,16 +6,37 @@
     <title>StaticDB</title>
     <script type="module">
         import { invoke } from "@tauri-apps/api/core";
+        import { message } from "@tauri-apps/plugin-dialog";
 
-        function createTable() {
-            invoke("create_table", {
-                name: 'Default Table Name'
-            });
-            invoke("dialog_close", {});
+        async function createTable() {
+            let tableName = document.querySelector('[name="tableName"]')?.value;
+            if (!tableName || !tableName.trim()) {
+                message("Unable to create a table with no name.", {
+                    title: "An error occurred while creating table.",
+                    kind: 'error'
+                });
+            } else {
+                invoke("create_table", {
+                    name: tableName
+                })
+                .then(async (_) => await invoke("dialog_close", {}))
+                .catch(async (e) => {
+                    message(e, {
+                        title: "An error occurred while creating table.",
+                        kind: 'error'
+                    });
+                });
+            }
         }
 
         function cancel() {
-            invoke("dialog_close", {});
+            invoke("dialog_close", {})
+            .catch(async (e) => {
+                await message(e, {
+                    title: "An error occurred while closing dialog box.",
+                    kind: 'error'
+                });
+            });
         }
 
         // Add initial listeners
@@ -27,8 +48,8 @@
   </head>
 
   <body>
-    <form>
-        <table>
+    <form class="dialog-form">
+        <table class="dialog-form-table">
             <tr>
                 <td>Table Name:</td>
                 <td><input name="tableName" type="text" /></td>

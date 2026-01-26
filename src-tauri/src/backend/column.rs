@@ -110,7 +110,7 @@ pub struct Metadata {
 }
 
 /// Creates a new column in a table.
-pub fn create(table_oid: i64, column_type: MetadataColumnType, column_ordering: i64, column_width: i64, is_nullable: bool, is_unique: bool, is_primary_key: bool) -> Result<i64, error::Error> {
+pub fn create(table_oid: i64, column_name: &str, column_type: MetadataColumnType, column_ordering: i64, column_width: i64, is_nullable: bool, is_unique: bool, is_primary_key: bool) -> Result<i64, error::Error> {
     let is_nullable_bit = if is_nullable { 1 } else { 0 };
     let is_unique_bit = if is_unique { 1 } else { 0 };
     let is_primary_key_bit = if is_primary_key { 1 } else { 0 };
@@ -125,8 +125,8 @@ pub fn create(table_oid: i64, column_type: MetadataColumnType, column_ordering: 
         MetadataColumnType::Primitive(prim) => {
             // Add the column to the table's metadata
             action.trans.execute(
-                "INSERT INTO METADATA_TABLE_COLUMN (TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
-                params![&column_type.get_type_oid(), column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
+                "INSERT INTO METADATA_TABLE_COLUMN (NAME, TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+                params![column_name, &column_type.get_type_oid(), column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
             )?;
             let column_oid = action.trans.last_insert_rowid();
             
@@ -155,13 +155,13 @@ pub fn create(table_oid: i64, column_type: MetadataColumnType, column_ordering: 
             let column_type_oid = action.trans.last_insert_rowid();
 
             // Create the data table
-            let create_table_cmd = format!("CREATE TABLE TABLE{column_type_oid} (VALUE TEXT PRIMARY KEY) WITHOUT ROWID;");
+            let create_table_cmd = format!("CREATE TABLE TABLE{column_type_oid} (VALUE TEXT NOT NULL, PRIMARY KEY (VALUE) ON CONFLICT IGNORE) WITHOUT ROWID;");
             action.trans.execute(&create_table_cmd, [])?;
 
             // Add the column to the table's metadata
             action.trans.execute(
-                "INSERT INTO METADATA_TABLE_COLUMN (TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
-                params![column_type_oid, column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
+                "INSERT INTO METADATA_TABLE_COLUMN (NAME, TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+                params![column_name, column_type_oid, column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
             )?;
             let column_oid = action.trans.last_insert_rowid();
 
@@ -182,13 +182,13 @@ pub fn create(table_oid: i64, column_type: MetadataColumnType, column_ordering: 
 
             // Add the column to the table's metadata
             action.trans.execute(
-                "INSERT INTO METADATA_TABLE_COLUMN (TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
-                params![column_type_oid, column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
+                "INSERT INTO METADATA_TABLE_COLUMN (NAME, TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+                params![column_name, column_type_oid, column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
             )?;
             let column_oid = action.trans.last_insert_rowid();
 
             // Create the data table
-            let create_table_cmd = format!("CREATE TABLE TABLE{column_type_oid} (VALUE TEXT PRIMARY KEY) WITHOUT ROWID;");
+            let create_table_cmd = format!("CREATE TABLE TABLE{column_type_oid} (VALUE TEXT NOT NULL, PRIMARY KEY (VALUE) ON CONFLICT IGNORE) WITHOUT ROWID;");
             action.trans.execute(&create_table_cmd, [])?;
 
             // Create the *-to-* relationship table
@@ -202,8 +202,8 @@ pub fn create(table_oid: i64, column_type: MetadataColumnType, column_ordering: 
         | MetadataColumnType::ChildObject(referenced_table_oid) => {
             // Add the column to the table's metadata
             action.trans.execute(
-                "INSERT INTO METADATA_TABLE_COLUMN (TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
-                params![referenced_table_oid, column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
+                "INSERT INTO METADATA_TABLE_COLUMN (NAME, TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+                params![column_name, referenced_table_oid, column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
             )?;
             let column_oid = action.trans.last_insert_rowid();
 
@@ -224,12 +224,18 @@ pub fn create(table_oid: i64, column_type: MetadataColumnType, column_ordering: 
 
             // Add the column to the table's metadata
             action.trans.execute(
-                "INSERT INTO METADATA_TABLE_COLUMN (TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6);",
-                params![column_type_oid, column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
+                "INSERT INTO METADATA_TABLE_COLUMN (NAME, TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
+                params![column_name, column_type_oid, column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
             )?;
             let column_oid = action.trans.last_insert_rowid();
 
-            // Create a child table for the type
+            // Add metadata for the child table
+            action.trans.execute(
+                "INSERT INTO METADATA_TABLE (OID, PARENT_OID, NAME) VALUES (?1, ?2, ?3);", 
+                params![column_type_oid, table_oid, column_name]
+            )?;
+
+            // Create a table to hold data for the child table for the type
             let create_table_cmd = format!("CREATE TABLE TABLE{column_type_oid} (OID INTEGER PRIMARY KEY, _PARENT_OID_ INTEGER NOT NULL REFERENCES TABLE{table_oid} (OID));");
             action.trans.execute(&create_table_cmd, [])?;
 
