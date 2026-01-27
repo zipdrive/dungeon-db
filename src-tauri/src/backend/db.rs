@@ -223,3 +223,32 @@ pub fn undo_db_action() -> Result<(), error::Error> {
     }
     return Ok(());
 }
+
+/// Take ownership of the connection and close it.
+fn close_connection(conn_wrapper: Option<Connection>) -> Result<(), error::Error> {
+    match conn_wrapper {
+        Some(conn) => {
+            match conn.close() {
+            Ok(_) => { return Ok(()); },
+            Err((_, e)) => { return Err(error::Error::from(e)); }
+            }
+        },
+        None => { return Ok(()); }
+    }
+}
+
+/// Shut down the connection.
+pub fn close() -> Result<(), error::Error> {
+    unsafe {
+        // Obtain lock
+        let mut savepoint_id = SAVEPOINT_ID.lock().unwrap();
+
+        // Close the connection
+        GLOBAL_TRANSACTION = None;
+        GLOBAL_CONNECTION = None;
+
+        // Reset savepoint ID
+        *savepoint_id = 0;
+    }
+    return Ok(());
+}

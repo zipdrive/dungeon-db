@@ -12,14 +12,19 @@ pub fn init(path: String) -> Result<(), error::Error> {
     return db::init(path);
 }
 
+/// Shuts down the connection to the StaticDB database file.
+pub fn close() -> Result<(), error::Error> {
+    return db::close();
+}
+
 /// Sends a message to the frontend that the list of tables needs to be updated.
 fn msg_update_table_list(app: &AppHandle) {
     app.emit("update-table-list", ()).unwrap();
 }
 
 /// Sends a message to the frontend that the currently-displayed table needs to be refreshed.
-fn msg_update_table_data(app: &AppHandle) {
-    app.emit("update-table-data", ()).unwrap();
+fn msg_update_table_data(app: &AppHandle, table_oid: i64) {
+    app.emit("update-table-data", table_oid).unwrap();
 }
 
 #[tauri::command]
@@ -84,7 +89,7 @@ pub async fn dialog_create_table_column(app: AppHandle, table_oid: i64, column_o
 pub fn create_table_column(app: AppHandle, table_oid: i64, column_name: String, column_type: column::MetadataColumnType, column_ordering: i64, column_width: i64, is_nullable: bool, is_unique: bool, is_primary_key: bool) -> Result<i64, error::Error> {
     // Wrapper for column::create
     let column_oid = column::create(table_oid, &column_name, column_type, column_ordering, column_width, is_nullable, is_unique, is_primary_key)?;
-    msg_update_table_data(&app);
+    msg_update_table_data(&app, table_oid);
     return Ok(column_oid);
 }
 
@@ -93,6 +98,22 @@ pub fn get_table_column_list(table_oid: i64, column_channel: Channel<column::Met
     // Use channel to send BasicMetadata objects
     column::send_metadata_list(table_oid, column_channel)?;
     return Ok(());
+}
+
+#[tauri::command]
+/// Insert a blank row with default OID into data table.
+pub fn push_row(app: AppHandle, table_oid: i64) -> Result<i64, error::Error> {
+    let row_oid = data::push(table_oid)?;
+    msg_update_table_data(&app, table_oid);
+    return Ok(row_oid);
+}
+
+#[tauri::command]
+/// Insert a blank row and update OIDs such that the inserted row appears before the row with the given OID, but after any existing row with OID less than it.
+pub fn insert_row(app: AppHandle, table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
+    let row_oid = data::insert(table_oid, row_oid)?;
+    msg_update_table_data(&app, table_oid);
+    return Ok(row_oid);
 }
 
 #[tauri::command]

@@ -7,7 +7,6 @@ use crate::backend::{column, db};
 use crate::util::error;
 
 #[derive(Serialize, Deserialize)]
-#[serde(tag="primitiveType")]
 pub enum Primitive {
     Boolean,    // Mode = 0 && OID = 1
     Integer,    // Mode = 0 && OID = 2
@@ -21,7 +20,7 @@ pub enum Primitive {
 }
 
 #[derive(Serialize, Deserialize)]
-#[serde(rename_all="camelCase", rename_all_fields="camelCase", tag="mode")]
+#[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum MetadataColumnType {
     Primitive(Primitive),          // Mode = 0
     SingleSelectDropdown(i64),     // Mode = 1
@@ -125,8 +124,8 @@ pub fn create(table_oid: i64, column_name: &str, column_type: MetadataColumnType
         MetadataColumnType::Primitive(prim) => {
             // Add the column to the table's metadata
             action.trans.execute(
-                "INSERT INTO METADATA_TABLE_COLUMN (NAME, TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
-                params![column_name, &column_type.get_type_oid(), column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
+                "INSERT INTO METADATA_TABLE_COLUMN (TABLE_OID, NAME,TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);",
+                params![table_oid, column_name, &column_type.get_type_oid(), column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
             )?;
             let column_oid = action.trans.last_insert_rowid();
             
@@ -160,8 +159,8 @@ pub fn create(table_oid: i64, column_name: &str, column_type: MetadataColumnType
 
             // Add the column to the table's metadata
             action.trans.execute(
-                "INSERT INTO METADATA_TABLE_COLUMN (NAME, TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
-                params![column_name, column_type_oid, column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
+                "INSERT INTO METADATA_TABLE_COLUMN (TABLE_OID, NAME,TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);",
+                params![table_oid, column_name, column_type_oid, column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
             )?;
             let column_oid = action.trans.last_insert_rowid();
 
@@ -182,8 +181,8 @@ pub fn create(table_oid: i64, column_name: &str, column_type: MetadataColumnType
 
             // Add the column to the table's metadata
             action.trans.execute(
-                "INSERT INTO METADATA_TABLE_COLUMN (NAME, TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
-                params![column_name, column_type_oid, column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
+                "INSERT INTO METADATA_TABLE_COLUMN (TABLE_OID, NAME,TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);",
+                params![table_oid, column_name, column_type_oid, column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
             )?;
             let column_oid = action.trans.last_insert_rowid();
 
@@ -202,8 +201,8 @@ pub fn create(table_oid: i64, column_name: &str, column_type: MetadataColumnType
         | MetadataColumnType::ChildObject(referenced_table_oid) => {
             // Add the column to the table's metadata
             action.trans.execute(
-                "INSERT INTO METADATA_TABLE_COLUMN (NAME, TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
-                params![column_name, referenced_table_oid, column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
+                "INSERT INTO METADATA_TABLE_COLUMN (TABLE_OID, NAME,TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);",
+                params![table_oid, column_name, referenced_table_oid, column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
             )?;
             let column_oid = action.trans.last_insert_rowid();
 
@@ -224,8 +223,8 @@ pub fn create(table_oid: i64, column_name: &str, column_type: MetadataColumnType
 
             // Add the column to the table's metadata
             action.trans.execute(
-                "INSERT INTO METADATA_TABLE_COLUMN (NAME, TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);",
-                params![column_name, column_type_oid, column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
+                "INSERT INTO METADATA_TABLE_COLUMN (TABLE_OID, NAME,TYPE_OID, COLUMN_ORDERING, COLUMN_WIDTH, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);",
+                params![table_oid, column_name, column_type_oid, column_ordering, column_width, is_nullable_bit, is_unique_bit, is_primary_key_bit]
             )?;
             let column_oid = action.trans.last_insert_rowid();
 
@@ -254,21 +253,21 @@ pub fn send_metadata_list(table_oid: i64, column_channel: Channel<Metadata>) -> 
 
     action.query_iterate(
         "SELECT 
-                OID, 
-                NAME, 
-                COLUMN_WIDTH,
-                TYPE_OID, 
-                TYPE_MODE,
-                IS_NULLABLE,
-                IS_UNIQUE,
-                IS_PRIMARY_KEY
+                c.OID, 
+                c.NAME, 
+                c.COLUMN_WIDTH,
+                c.TYPE_OID, 
+                t.MODE,
+                c.IS_NULLABLE,
+                c.IS_UNIQUE,
+                c.IS_PRIMARY_KEY
             FROM METADATA_TABLE_COLUMN c
             INNER JOIN METADATA_TABLE_COLUMN_TYPE t ON t.OID = c.TYPE_OID
             WHERE c.OID = ?1 
-            ORDER BY COLUMN_ORDERING ASC;",
+            ORDER BY c.COLUMN_ORDERING ASC;",
          params![table_oid], 
         &mut |row| {
-            column_channel.send(Metadata {  
+            column_channel.send(Metadata {
                 oid: row.get(0)?,
                 name: row.get(1)?,
                 width: row.get(2)?,

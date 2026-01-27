@@ -10,6 +10,7 @@
 
         async function createTable() {
             let tableName = document.querySelector('[name="tableName"]')?.value;
+            
             if (!tableName || !tableName.trim()) {
                 message("Unable to create a table with no name.", {
                     title: "An error occurred while creating table.",
@@ -21,7 +22,7 @@
                 })
                 .then(async (_) => await invoke("dialog_close", {}))
                 .catch(async (e) => {
-                    message(e, {
+                    await message(e, {
                         title: "An error occurred while creating table.",
                         kind: 'error'
                     });
@@ -41,8 +42,17 @@
 
         // Add initial listeners
         window.addEventListener("DOMContentLoaded", () => {
-            document.querySelector('#create-table-button')?.addEventListener("click", createTable);
-            document.querySelector('#cancel-create-table-button')?.addEventListener("click", cancel);
+            document.querySelector('#create-table-button')?.addEventListener("click", async (e) => {
+                console.debug('createTable() called.');
+                e.preventDefault();
+                e.returnValue = false;
+                await createTable();
+            });
+            document.querySelector('#cancel-create-table-button')?.addEventListener("click", async (e) => {
+                e.preventDefault();
+                e.returnValue = false;
+                await cancel();
+            });
         });
     </script>
   </head>

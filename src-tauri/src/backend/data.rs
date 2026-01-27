@@ -18,6 +18,82 @@ pub enum Cell {
     }
 }
 
+/// Insert a row into the data such that the OID places it before any existing rows with that OID.
+pub fn insert(table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
+    let action = db::begin_db_action()?;
+
+    // If OID is already in database, shift every row with OID >= row_oid up by 1
+    let select_cmd = format!("SELECT OID FROM TABLE{table_oid} WHERE OID = ?1;");
+    let existing_row_oid = action.trans.query_one(&select_cmd, params![row_oid], 
+        |row| {
+            return Ok(row.get::<_, i64>(0)?);
+        }
+    ).optional()?;
+
+    match existing_row_oid {
+        None => {
+            // Insert with OID = row_oid
+            let insert_cmd = format!("INSERT INTO TABLE{table_oid} (OID) VALUES (?1);");
+            action.trans.execute(&insert_cmd, params![row_oid])?;
+            let row_oid = action.trans.last_insert_rowid();
+
+            // Return the row_oid
+            return Ok(row_oid);
+        },
+        Some(_) => {
+            let existing_prev_row_oid = action.trans.query_one(&select_cmd, params![row_oid - 1], 
+                |row| {
+                    return Ok(row.get::<_, i64>(0)?);
+                }
+            ).optional()?;
+            
+            match existing_prev_row_oid {
+                None => {
+                    // Insert with OID = row_oid - 1
+                    let insert_cmd = format!("INSERT INTO TABLE{table_oid} (OID) VALUES (?1);");
+                    action.trans.execute(&insert_cmd, params![row_oid - 1])?;
+                    let row_oid = action.trans.last_insert_rowid();
+
+                    // Return the row_oid
+                    return Ok(row_oid);
+                },
+                Some(_) => {
+                    // Increment every OID >= row_oid up by 1 to make room for the new row
+                    let select_all_cmd = format!("SELECT OID FROM TABLE{table_oid} WHERE OID >= ?1 ORDER BY OID DESC;");
+                    action.query_iterate(&select_all_cmd, params![row_oid], 
+                        &mut |row| {
+                            let update_cmd = format!("UPDATE TABLE{table_oid} SET OID = OID + 1 WHERE OID = ?1;");
+                            action.trans.execute(&update_cmd, params![row.get::<_, i64>(0)?])?;
+                            return Ok(());
+                        }
+                    )?;
+
+                    // Insert the row
+                    let insert_cmd = format!("INSERT INTO TABLE{table_oid} (OID) VALUES (?1);");
+                    action.trans.execute(&insert_cmd, params![row_oid])?;
+                    let row_oid = action.trans.last_insert_rowid();
+
+                    // Return the row_oid
+                    return Ok(row_oid);
+                }
+            }
+        }
+    }
+}
+
+/// Push a row into the table with a default OID.
+pub fn push(table_oid: i64) -> Result<i64, error::Error> {
+    let action = db::begin_db_action()?;
+
+    // Insert the row
+    let insert_cmd = format!("INSERT INTO TABLE{table_oid} DEFAULT VALUES;");
+    action.trans.execute(&insert_cmd, [])?;
+    let row_oid = action.trans.last_insert_rowid();
+
+    // Return the row OID
+    return Ok(row_oid);
+}
+
 pub fn send_table_data(table_oid: i64, cell_channel: Channel<Cell>) -> Result<(), error::Error> {
     let action = db::begin_readonly_db_action()?;
 

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <title>Create New Column</title>
+    <script type="module" src="createTableColumn.ts" defer></script>
+  </head>
+
+  <body>
+    <form class="dialog-form">
+        <table class="dialog-form-table">
+            <tbody>
+                <tr class="parameter-text parameter-bool parameter-int parameter-number parameter-date parameter-timestamp parameter-childTable parameter-object parameter-reference parameter-file parameter-image parameter-json">
+                    <td><label for="column-name">Column Name:</label></td>
+                    <td><input name="column-name" id="column-name" type="text" /></td>
+                </tr>
+                <tr class="parameter-text parameter-bool parameter-int parameter-number parameter-date parameter-timestamp parameter-childTable parameter-object parameter-reference parameter-file parameter-image parameter-json">
+                    <td><label for="column-type">Column Type:</label></td>
+                    <td>
+                        <select name="column-type" id="column-type">
+                            <option value="text">Text</option>
+                            <option value="bool">Checkbox</option>
+                            <option value="ssdropdown">Single-Select Dropdown</option>
+                            <option value="msdropdown">Multi-Select Dropdown</option>
+                            <option value="int">Integer</option>
+                            <option value="number">Number</option>
+                            <option value="date">Date</option>
+                            <option value="timestamp">Timestamp</option>
+                            <option value="childTable">Table</option>
+                            <option value="object">Global Data Type</option>
+                            <option value="reference">Reference</option>
+                            <option value="file">File</option>
+                            <option value="image">Image</option>
+                            <option value="json">JSON</option>
+                        </select>
+                    </td>
+                </tr>
+                <tr class="parameter-ssdropdown parameter-msdropdown">
+                    <td><label for="column-dropdown-values">Dropdown Values:</label></td>
+                    <td>
+                        <input name="column-dropdown-values" id="column-dropdown-values" type="text" />
+                    </td>
+                </tr>
+                <tr class="parameter-object">
+                    <td><label for="column-type-oid-object">Data Type:</label></td>
+                    <td>
+                        <select name="column-type-oid-object" id="column-type-oid-object">
+                        </select>
+                    </td>
+                </tr>
+                <tr class="parameter-reference">
+                    <td><label for="column-type-oid-reference">Referenced Table:</label></td>
+                    <td>
+                        <select name="column-type-oid-reference" id="column-type-oid-reference">
+                        </select>
+                    </td>
+                </tr>
+                <tr class="parameter-text parameter-bool parameter-int parameter-number parameter-date parameter-timestamp parameter-childTable parameter-object parameter-reference parameter-file parameter-image parameter-json">
+                    <td><label for="column-is-nullable">Is Nullable?</label></td>
+                    <td>
+                        <input name="column-is-nullable" id="column-is-nullable" type="checkbox" />
+                    </td>
+                </tr>
+                <tr class="parameter-text parameter-int parameter-number parameter-date parameter-timestamp parameter-reference parameter-json">
+                    <td><label for="column-is-unique">Is Unique?</label></td>
+                    <td>
+                        <input name="column-is-unique" id="column-is-unique" type="checkbox" />
+                    </td>
+                </tr>
+                <tr class="parameter-text parameter-bool parameter-int parameter-number parameter-date parameter-timestamp parameter-reference parameter-json">
+                    <td><label for="column-is-primary-key">Part of Table's Index?</label></td>
+                    <td>
+                        <input name="column-is-primary-key" id="column-is-primary-key" type="checkbox" />
+                    </td>
+                </tr>
+                <tr class="parameter-text parameter-bool parameter-int parameter-number parameter-date parameter-timestamp parameter-childTable parameter-object parameter-reference parameter-file parameter-image parameter-json">
+                    <td><label for="column-width">Column Width:</label></td>
+                    <td>
+                        <input type="number" name="column-width" id="column-width" value="100" />
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </form>
+    <div class="dialog-buttons">
+        <button id="create-table-column-button">Create Column</button>
+        <button id="cancel-create-table-column-button">Cancel</button>
+    </div>
+  </body>
+</html>
