@@ -6,7 +6,7 @@ use tauri::ipc::Channel;
 use crate::backend::{column, db};
 use crate::util::error;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub enum Primitive {
     Any,        // Mode = 0 && OID = 0
     Boolean,    // Mode = 0 && OID = 1
@@ -20,7 +20,7 @@ pub enum Primitive {
     Image,      // Mode = 0 && OID = 9
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum MetadataColumnType {
     Primitive(Primitive),          // Mode = 0
@@ -33,7 +33,7 @@ pub enum MetadataColumnType {
 
 impl MetadataColumnType {
     /// Converts a type from the database OID and mode.
-    fn from_database(type_oid: i64, type_mode: i64) -> MetadataColumnType {
+    pub fn from_database(type_oid: i64, type_mode: i64) -> MetadataColumnType {
         match type_mode {
             0 => {
                 match type_oid {

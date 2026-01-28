@@ -3,7 +3,8 @@ use std::collections::{HashMap, LinkedList};
 use rusqlite::{params, Row, Error as RusqliteError, OptionalExtension};
 use serde::Serialize;
 use tauri::ipc::Channel;
-use crate::backend::{db, table};
+use crate::backend::column::MetadataColumnType;
+use crate::backend::{column, db, table};
 use crate::util::error;
 
 #[derive(Serialize)]
@@ -14,6 +15,20 @@ pub enum Cell {
     },
     ColumnValue {
         column_oid: i64,
+        column_type: column::MetadataColumnType,
+        display_value: Option<String>
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", untagged)]
+pub enum RowCell {
+    RowExists {
+        row_exists: bool
+    },
+    ColumnValue {
+        column_oid: i64,
+        column_type: column::MetadataColumnType,
         display_value: Option<String>
     }
 }
@@ -115,7 +130,7 @@ pub fn send_table_data(table_oid: i64, cell_channel: Channel<Cell>) -> Result<()
     let mut select_cmd_tables: String = format!("FROM TABLE{table_oid} t");
     let mut ord: usize = 1;
     let mut table_num: i64 = 1;
-    let mut ord_to_column_oid: LinkedList<(usize, i64)> = LinkedList::<(usize, i64)>::new();
+    let mut ord_to_column_oid: LinkedList<(usize, i64, MetadataColumnType)> = LinkedList::<(usize, i64, MetadataColumnType)>::new();
     action.query_iterate(
         "SELECT 
             c.OID,
@@ -128,30 +143,31 @@ pub fn send_table_data(table_oid: i64, cell_channel: Channel<Cell>) -> Result<()
         params![table_oid], 
         &mut |row| {
             let column_oid: i64 = row.get(0)?;
-            let column_type_oid: i64 = row.get(1)?;
-            match row.get::<_, i64>(2)? {
-                0 => {
+            let column_type: MetadataColumnType = MetadataColumnType::from_database(row.get(1)?, row.get(2)?);
+            match column_type {
+                MetadataColumnType::Primitive(_) => {
                     // Primitive type
                     select_cmd_cols = format!("{select_cmd_cols}, t.COLUMN{column_oid}");
                 },
-                1 => {
+                MetadataColumnType::SingleSelectDropdown(column_type_oid) => {
                     // Single-select dropdown (i.e. *-to-1 join with table of values)
                     select_cmd_cols = format!("{select_cmd_cols}, t{table_num}.VALUE");
                     select_cmd_tables = format!("{select_cmd_tables} LEFT JOIN TABLE{column_type_oid} t{table_num} ON t{table_num}.OID = t.COLUMN{column_oid}");
                     table_num += 1;
                 },
-                2 => {
+                MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
                     // Multi-select dropdown (i.e. *-to-* join with table of values)
                     select_cmd_cols = format!("{select_cmd_cols}, (SELECT GROUP_CONCAT(b.VALUE) FROM TABLE{column_type_oid}_MULTISELECT b WHERE b.OID = t.OID GROUP BY b.OID) AS COLUMN{column_oid}");
                 },
-                3 | 4 => {
+                MetadataColumnType::Reference(column_type_oid)
+                | MetadataColumnType::ChildObject(column_type_oid) => {
                     // Reference to row in other table
                     // Pull display value from TABLE0_SURROGATE view
                     select_cmd_cols = format!("{select_cmd_cols}, t{table_num}.DISPLAY_VALUE");
                     select_cmd_tables = format!("{select_cmd_tables} LEFT JOIN TABLE{column_type_oid}_SURROGATE t{table_num} ON t{table_num}.OID = t.COLUMN{column_oid}");
                     table_num += 1;
                 },
-                5 => {
+                MetadataColumnType::ChildTable(column_type_oid) => {
                     // Child table
                     // Pull display values for items from TABLE0_SURROGATE view
                     select_cmd_cols = format!("{select_cmd_cols}, (SELECT GROUP_CONCAT(b.DISPLAY_VALUE) FROM TABLE{column_type_oid} a INNER JOIN TABLE{column_type_oid}_SURROGATE b ON b.OID = a.OID WHERE a.PARENT_OID = t.OID) AS COLUMN{column_oid}");
@@ -161,13 +177,12 @@ pub fn send_table_data(table_oid: i64, cell_channel: Channel<Cell>) -> Result<()
                 }
             }
 
-            ord_to_column_oid.push_back((ord, column_oid));
+            ord_to_column_oid.push_back((ord, column_oid, column_type));
             ord += 1;
             return Ok(());
         }
     )?;
     let table_select_cmd = format!("{select_cmd_cols} {select_cmd_tables}");
-    println!("{select_cmd_cols} {select_cmd_tables}");
 
     // Iterate over the results, sending each cell to the frontend
     action.query_iterate(
@@ -175,17 +190,11 @@ pub fn send_table_data(table_oid: i64, cell_channel: Channel<Cell>) -> Result<()
         [], 
         &mut |row| {
             // Start by sending the OID, which is the first ordinal
-            println!("Sending row with row OID {}.", row.get::<_, i64>(0)?);
-            println!("Number of columns in row: {:?}", row);
             cell_channel.send(Cell::RowStart { row_oid: row.get(0)? })?;
 
             // Iterate over the columns, sending over the displayed value of that cell in the current row for each
-            println!("Number of columns: {}", ord_to_column_oid.len());
-            for (ord, column_oid) in ord_to_column_oid.iter() {
-                println!("Ord: {}, OID: {}", *ord, *column_oid);
-                let display_value = row.get::<_, Option<String>>(*ord)?;
-                println!("Display value: \"{:?}\"", display_value);
-                cell_channel.send(Cell::ColumnValue { column_oid: *column_oid, display_value: row.get(*ord)? })?;
+            for (ord, column_oid, column_type) in ord_to_column_oid.iter() {
+                cell_channel.send(Cell::ColumnValue { column_oid: *column_oid, column_type: column_type.clone(), display_value: row.get(*ord)? })?;
             }
 
             // Conclude the row's iteration
@@ -193,4 +202,104 @@ pub fn send_table_data(table_oid: i64, cell_channel: Channel<Cell>) -> Result<()
         }
     )?;
     return Ok(());
+}
+
+/// Sends all cells for a row in the table through a channel.
+pub fn send_table_row(table_oid: i64, row_oid: i64, cell_channel: Channel<RowCell>) -> Result<(), error::Error> {
+    let action = db::begin_readonly_db_action()?;
+
+    // Build the SELECT query
+    let mut select_cmd_cols: String = String::from("SELECT t.OID");
+    let mut select_cmd_tables: String = format!("FROM TABLE{table_oid} t");
+    let mut ord: usize = 1;
+    let mut table_num: i64 = 1;
+    let mut ord_to_column_oid: LinkedList<(usize, i64, MetadataColumnType)> = LinkedList::<(usize, i64, MetadataColumnType)>::new();
+    action.query_iterate(
+        "SELECT 
+            c.OID,
+            c.TYPE_OID,
+            t.MODE
+        FROM METADATA_TABLE_COLUMN c
+        INNER JOIN METADATA_TABLE_COLUMN_TYPE t ON t.OID = c.TYPE_OID
+        WHERE c.TABLE_OID = ?1
+        ORDER BY c.COLUMN_ORDERING;",
+        params![table_oid], 
+        &mut |row| {
+            let column_oid: i64 = row.get(0)?;
+            let column_type = MetadataColumnType::from_database(row.get(1)?, row.get(2)?);
+            match column_type {
+                MetadataColumnType::Primitive(_) => {
+                    // Primitive type
+                    select_cmd_cols = format!("{select_cmd_cols}, t.COLUMN{column_oid}");
+                },
+                MetadataColumnType::SingleSelectDropdown(column_type_oid) => {
+                    // Single-select dropdown (i.e. *-to-1 join with table of values)
+                    select_cmd_cols = format!("{select_cmd_cols}, t{table_num}.VALUE");
+                    select_cmd_tables = format!("{select_cmd_tables} LEFT JOIN TABLE{column_type_oid} t{table_num} ON t{table_num}.OID = t.COLUMN{column_oid}");
+                    table_num += 1;
+                },
+                MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
+                    // Multi-select dropdown (i.e. *-to-* join with table of values)
+                    select_cmd_cols = format!("{select_cmd_cols}, (SELECT GROUP_CONCAT(b.VALUE) FROM TABLE{column_type_oid}_MULTISELECT b WHERE b.OID = t.OID GROUP BY b.OID) AS COLUMN{column_oid}");
+                },
+                MetadataColumnType::Reference(column_type_oid) 
+                | MetadataColumnType::ChildObject(column_type_oid) => {
+                    // Reference to row in other table
+                    // Pull display value from TABLE0_SURROGATE view
+                    select_cmd_cols = format!("{select_cmd_cols}, t{table_num}.DISPLAY_VALUE");
+                    select_cmd_tables = format!("{select_cmd_tables} LEFT JOIN TABLE{column_type_oid}_SURROGATE t{table_num} ON t{table_num}.OID = t.COLUMN{column_oid}");
+                    table_num += 1;
+                },
+                MetadataColumnType::ChildTable(column_type_oid) => {
+                    // Child table
+                    // Pull display values for items from TABLE0_SURROGATE view
+                    select_cmd_cols = format!("{select_cmd_cols}, (SELECT GROUP_CONCAT(b.DISPLAY_VALUE) FROM TABLE{column_type_oid} a INNER JOIN TABLE{column_type_oid}_SURROGATE b ON b.OID = a.OID WHERE a.PARENT_OID = t.OID) AS COLUMN{column_oid}");
+                },
+                _ => {
+                    return Err(error::Error::AdhocError("Unknown column type mode."));
+                }
+            }
+
+            ord_to_column_oid.push_back((ord, column_oid, column_type));
+            ord += 1;
+            return Ok(());
+        }
+    )?;
+    let table_select_cmd = format!("{select_cmd_cols} {select_cmd_tables} WHERE t.OID = ?1;");
+
+    // Query for the specified row
+    match action.trans.query_row_and_then(
+        &table_select_cmd, 
+        params![row_oid], 
+        |row| -> Result<(), error::Error> {
+            // Start by sending message that confirms the row exists
+            cell_channel.send(RowCell::RowExists { row_exists: true })?;
+
+            // Iterate over the columns, sending over the displayed value of that cell in the current row for each
+            for (ord, column_oid, column_type) in ord_to_column_oid.iter() {
+                cell_channel.send(RowCell::ColumnValue { column_oid: *column_oid, column_type: column_type.clone(), display_value: row.get(*ord)? })?;
+            }
+
+            // 
+            return Ok(());
+        }
+    ) {
+        Err(error::Error::RusqliteError(e)) => {
+            match e {
+                RusqliteError::QueryReturnedNoRows => {
+                    cell_channel.send(RowCell::RowExists { row_exists: false })?;
+                    return Ok(());
+                },
+                _ => {
+                    return Err(error::Error::from(e));
+                }
+            }
+        },
+        Err(e) => {
+            return Err(e);
+        }
+        Ok(_) => {
+            return Ok(());
+        }
+    }
 }

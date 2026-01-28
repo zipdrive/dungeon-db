@@ -1,4 +1,4 @@
-import { Menu } from "@tauri-apps/api/menu";
+import { Menu, MenuItem } from "@tauri-apps/api/menu";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from '@tauri-apps/api/event';
 import { message } from "@tauri-apps/plugin-dialog";
@@ -30,7 +30,7 @@ async function updateTableListAsync() {
         // Set this table as active
         tableSidebarButton?.classList.add("active");
         // Display the table
-        displayTable(table.oid);
+        displayTableAsync(table.oid);
       });
     }
   };
@@ -52,21 +52,173 @@ export async function createTable() {
     });
 }
 
+
+
+
+let currentTableOid: number = NaN;
+
+type ColumnType = { primitive: string } 
+  | { singleSelectDropdown: number }
+  | { multiSelectDropdown: number }
+  | { reference: number } 
+  | { childObject: number } 
+  | { childTable: number };
+
+/**
+ * Adds a row to the current table.
+ * @param tableBodyNode 
+ * @param rowOid 
+ */
+function addRowToTable(tableBodyNode: HTMLElement, rowOid: number): HTMLTableRowElement {
+  let tableRowNode: HTMLTableRowElement = document.createElement('tr');
+  tableRowNode.id = `table-content-row-${rowOid}`;
+  let tableRowOidNode = document.createElement('td');
+  tableRowOidNode.style.textAlign = 'center';
+  tableRowOidNode.innerText = rowOid.toString();
+  tableRowNode.insertAdjacentElement('beforeend', tableRowOidNode);
+  tableBodyNode?.insertAdjacentElement('beforeend', tableRowNode);
+
+  // Add listener to pull up context menu
+  tableRowOidNode.addEventListener('contextmenu', async (e) => {
+    e.preventDefault();
+    e.returnValue = false;
+
+    const contextMenuItems = await Promise.all([
+      MenuItem.new({
+        text: 'Insert New Row',
+        action: async () => {
+          await invoke('insert_row', {
+            tableOid: currentTableOid,
+            rowOid: rowOid
+          })
+          .catch(async e => {
+            await message(e, {
+              title: 'Error while inserting row into table.',
+              kind: 'error'
+            });
+          });
+        }
+      }),
+      MenuItem.new({
+        text: 'Delete Row',
+        action: async () => {
+          await invoke('delete_row', {
+            tableOid: currentTableOid,
+            rowOid: rowOid
+          })
+          .catch(async e => {
+            await message(e, {
+              title: 'Error while deleting row from table.',
+              kind: 'error'
+            });
+          });
+        }
+      })
+    ]);
+    const contextMenu = await Menu.new({
+      items: contextMenuItems
+    });
+    await contextMenu.popup()
+      .catch(async e => {
+        await message(e, {
+          title: 'Error while displaying context menu for table column.',
+          kind: 'error'
+        });
+      });
+  });
+
+  // Return the created row
+  return tableRowNode;
+}
+
+/**
+ * Adds a cell to a row in the current table.
+ * @param currentRowNode 
+ * @param rowOid 
+ * @param cell 
+ */
+function addCellToTableRow(currentRowNode: HTMLElement, rowOid: number, cell: { columnOid: number, columnType: ColumnType, displayValue: string | null }) {
+  const columnOid = cell.columnOid;
+
+  // Insert cell node
+  let tableCellNode: HTMLTableCellElement = document.createElement('td');
+  if (cell.displayValue) {
+    tableCellNode.innerText = cell.displayValue;
+  } else {
+    tableCellNode.classList.add('null-cell');
+  }
+  currentRowNode.insertAdjacentElement('beforeend', tableCellNode);
+
+  // Add listener to start editing when clicked
+  tableCellNode.addEventListener('click', async (_) => {
+    if ('primitive' in cell.columnType) {
+      // TODO
+    } else if ('singleSelectDropdown' in cell.columnType) {
+      // TODO
+    } else if ('multiSelectDropdown' in cell.columnType) {
+      // TODO
+    } else if ('reference' in cell.columnType) {
+      // TODO
+    } else if ('')
+  });
+
+  // Add listener to pull up context menu
+  tableCellNode.addEventListener('contextmenu', async (e) => {
+    e.preventDefault();
+    e.returnValue = false;
+
+    const contextMenuItems = await Promise.all([
+      MenuItem.new({
+        text: 'Cut',
+        action: async () => {
+          
+        }
+      }),
+      MenuItem.new({
+        text: 'Copy',
+        action: async () => {
+          
+        }
+      }),
+      MenuItem.new({
+        text: 'Paste',
+        action: async () => {
+          
+        }
+      }),
+      MenuItem.new({
+        text: 'Edit Cell',
+        action: async () => {
+          
+        }
+      })
+    ]);
+    const contextMenu = await Menu.new({
+      items: contextMenuItems
+    });
+    await contextMenu.popup()
+      .catch(async e => {
+        await message(e, {
+          title: 'Error while displaying context menu for table column.',
+          kind: 'error'
+        });
+      });
+  });
+}
+
 /**
  * Displays the data for a table.
  * @param tableOid The OID of the table.
  */
-export async function displayTable(tableOid: number) {
+export async function displayTableAsync(tableOid: number) {
+  console.debug(`displayTable(${tableOid}) called.`);
+  currentTableOid = tableOid;
+
   type TableColumn = {
     oid: number, 
     name: string,
     width: number,
-    columnType: { primitive: string } 
-      | { singleSelectDropdown: number }
-      | { multiSelectDropdown: number }
-      | { reference: number } 
-      | { childObject: number } 
-      | { childTable: number },
+    columnType: ColumnType,
     isNullable: boolean,
     isUnique: boolean,
     isPrimaryKey: boolean,
@@ -76,6 +228,7 @@ export async function displayTable(tableOid: number) {
     rowOid: number
   } | {
     columnOid: number,
+    columnType: ColumnType,
     displayValue: string | null
   };
 
@@ -106,7 +259,21 @@ export async function displayTable(tableOid: number) {
         e.preventDefault();
         e.returnValue = false;
 
-        await invoke("contextmenu_table_column", { tableOid: tableOid, columnOid: columnOid })
+        const contextMenuItems = await Promise.all([
+          MenuItem.new({
+            text: 'Insert New Column'
+          }),
+          MenuItem.new({
+            text: 'Edit Column'
+          }),
+          MenuItem.new({
+            text: 'Delete Column'
+          })
+        ]);
+        const contextMenu = await Menu.new({
+          items: contextMenuItems
+        });
+        await contextMenu.popup()
           .catch(async e => {
             await message(e, {
               title: 'Error while displaying context menu for table column.',
@@ -174,48 +341,14 @@ export async function displayTable(tableOid: number) {
       // New row
       const rowOid = cell.rowOid;
       rowOids.push(rowOid);
-      currentRowNode = document.createElement('tr');
-      currentRowNode.insertAdjacentHTML('beforeend', `<td style="text-align: center;">${rowOid}</td>`);
-      tableBodyNode?.insertAdjacentElement('beforeend', currentRowNode);
-
-      // Add listener to pull up context menu
-      currentRowNode.addEventListener('contextmenu', async (e) => {
-        e.preventDefault();
-        e.returnValue = false;
-
-        await invoke("contextmenu_table_row", { tableOid: tableOid, rowOid: rowOid })
-          .catch(async e => {
-            await message(e, {
-              title: 'Error while displaying context menu for table row.',
-              kind: 'error'
-            });
-          });
-      });
+      if (tableBodyNode)
+        currentRowNode = addRowToTable(tableBodyNode, rowOid);
     } else {
       // Add cell to current row
       if (currentRowNode != null) {
         // Get current row and column OID
         const rowOid = rowOids[rowOids.length - 1];
-        const columnOid = cell.columnOid;
-
-        // Insert cell node
-        let tableCellNode: HTMLElement = document.createElement('td');
-        tableCellNode.innerText = cell.displayValue ?? '';
-        currentRowNode.insertAdjacentElement('beforeend', tableCellNode);
-
-        // Add listener to pull up context menu
-        tableCellNode.addEventListener('contextmenu', async (e) => {
-          e.preventDefault();
-          e.returnValue = false;
-
-          await invoke("contextmenu_table_cell", { tableOid: tableOid, columnOid: columnOid, rowOid: rowOid })
-            .catch(async e => {
-              await message(e, {
-                title: 'Error while displaying context menu for table cell.',
-                kind: 'error'
-              });
-            });
-        });
+        addCellToTableRow(currentRowNode, rowOid, cell);
       }
     }
   };
@@ -230,13 +363,85 @@ export async function displayTable(tableOid: number) {
     });
 }
 
+/**
+ * Updates a single row of the current table.
+ * @param tableOid 
+ * @param rowOid 
+ * @returns 
+ */
+export async function updateRowAsync(tableOid: number, rowOid: number) {
+  if (tableOid != currentTableOid) {
+    await displayTableAsync(tableOid);
+    return;
+  }
+
+  type TableCell = {
+    rowExists: boolean
+  } | {
+    columnOid: number,
+    columnType: ColumnType,
+    displayValue: string | null
+  };
+
+  let tableRowNode: HTMLTableRowElement | null = document.getElementById(`table-content-row-${rowOid}`) as HTMLTableRowElement;
+
+  // Set up a channel to populate the columns of the table
+  const onReceiveCell = new Channel<TableCell>();
+  onReceiveCell.onmessage = (cell) => {
+    if ('rowExists' in cell) {
+      if (cell.rowExists) {
+        if (tableRowNode) {
+          // Clear all columns from row, other than OID
+          while (tableRowNode.lastElementChild && tableRowNode.childElementCount > 1) {
+            tableRowNode.removeChild(tableRowNode.lastElementChild);
+          }
+        } else {
+          let tableBodyNode: HTMLElement | null = document.querySelector('#table-content > tbody');
+          if (tableBodyNode) {
+            // Insert new row at end of table
+            tableRowNode = addRowToTable(tableBodyNode, rowOid);
+
+            // Rearrange rows so that it is in the correct position
+            // TODO
+          }
+        }
+      } else {
+        // Delete row
+        tableRowNode?.remove();
+        tableRowNode = null;
+      }
+    } else {
+      // Add cell to current row
+      if (tableRowNode != null) {
+        addCellToTableRow(tableRowNode, rowOid, cell);
+      }
+    }
+  };
+
+  // Send a command to Rust to get the list of rows from the database
+  await invoke("get_table_row", { tableOid: tableOid, rowOid: rowOid, cellChannel: onReceiveCell })
+    .catch(async e => {
+      await message(e, {
+        title: 'Error while retrieving row of table.',
+        kind: 'error'
+      });
+    });
+}
+
 
 // Add initial listeners
 window.addEventListener("DOMContentLoaded", () => {
   document.querySelector('#add-new-table-button')?.addEventListener("click", createTable);
 
-  updateTableListAsync();
+  navigator.locks.request('table-sidebar', async () => await updateTableListAsync());
 });
 
-listen<any>("update-table-list", updateTableListAsync);
-listen<number>("update-table-data", (e) => displayTable(e.payload));
+listen<any>("update-table-list", (_) => {
+  navigator.locks.request('table-sidebar', async () => await updateTableListAsync());
+});
+listen<number>("update-table-data", (e) => {
+  navigator.locks.request('table-content', async () => await displayTableAsync(e.payload));
+});
+listen<[number, number]>("update-table-row", (e) => {
+  navigator.locks.request('table-content', async () => await updateRowAsync(e.payload[0], e.payload[1]));
+});

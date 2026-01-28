@@ -29,6 +29,11 @@ fn msg_update_table_data(app: &AppHandle, table_oid: i64) {
     app.emit("update-table-data", table_oid).unwrap();
 }
 
+/// Sends a message to the frontend that a row in the currently-displayed table needs to be refreshed.
+fn msg_update_table_row(app: &AppHandle, table_oid: i64, row_oid: i64) {
+    app.emit("update-table-row", (table_oid, row_oid)).unwrap();
+}
+
 #[tauri::command]
 /// Closes the current dialog window.
 pub fn dialog_close(window: tauri::Window) -> Result<(), error::Error> {
@@ -99,7 +104,7 @@ pub fn create_table_column(app: AppHandle, table_oid: i64, column_name: String, 
 /// Create a context menu for a table column.
 pub async fn contextmenu_table_column(app: AppHandle, window: tauri::Window, table_oid: i64, column_oid: i64) -> Result<(), error::Error> {
     // Construct the context menu
-    let contextmenu = MenuBuilder::new(&app)
+    let contextmenu = MenuBuilder::new(&window)
         .text("insert_column", "Insert New Column")
         .text("edit_column", "Edit Column")
         .text("delete_column", "Delete Column")
@@ -160,7 +165,7 @@ pub fn get_table_column_list(table_oid: i64, column_channel: Channel<column::Met
 /// Insert a blank row with default OID into data table.
 pub fn push_row(app: AppHandle, table_oid: i64) -> Result<i64, error::Error> {
     let row_oid = data::push(table_oid)?;
-    msg_update_table_data(&app, table_oid);
+    msg_update_table_row(&app, table_oid, row_oid);
     return Ok(row_oid);
 }
 
@@ -173,80 +178,21 @@ pub fn insert_row(app: AppHandle, table_oid: i64, row_oid: i64) -> Result<i64, e
 }
 
 #[tauri::command]
-/// Create a context menu for a table column.
-pub async fn contextmenu_table_row(app: AppHandle, window: tauri::Window, table_oid: i64, row_oid: i64) -> Result<(), error::Error> {
-    // Construct the context menu
-    let contextmenu = MenuBuilder::new(&app)
-        .text("insert_row", "Insert New Row")
-        .text("delete_row", "Delete Row")
-        .build()?;
-    
-    // Listen for when an option is selected from the menu
-    app.on_menu_event(move |app: &AppHandle, event| {
-        match event.id().0.as_str() {
-            "insert_row" => {
-                match data::insert(table_oid, row_oid) {
-                    Ok(_) => { 
-                        msg_update_table_data(app, table_oid);
-                        return (); 
-                    },
-                    Err(e) => {
-                        app.dialog()
-                            .message(e) 
-                            .kind(MessageDialogKind::Error)
-                            .title("Error while inserting row.")
-                            .blocking_show();
-
-                        match db::undo_db_action() {
-                            Ok(_) => { return (); },
-                            Err(e_undo) => {
-                                app.dialog()
-                                    .message(e_undo) 
-                                    .kind(MessageDialogKind::Error)
-                                    .title("Error while undoing partial row insertion.")
-                                    .blocking_show();
-                            }
-                        } 
-                    }
-                }
-            },
-            "delete_row" => {
-                match data::delete(table_oid, row_oid) {
-                    Ok(_) => { 
-                        msg_update_table_data(app, table_oid);
-                        return (); 
-                    },
-                    Err(e) => {
-                        app.dialog()
-                            .message(e) 
-                            .kind(MessageDialogKind::Error)
-                            .title("Error while deleting row.")
-                            .blocking_show();
-
-                        match db::undo_db_action() {
-                            Ok(_) => { return (); },
-                            Err(e_undo) => {
-                                app.dialog()
-                                    .message(e_undo) 
-                                    .kind(MessageDialogKind::Error)
-                                    .title("Error while undoing partial row deletion.")
-                                    .blocking_show();
-                            }
-                        } 
-                    }
-                }
-            },
-            _ => {}
-        }
-    });
-
-    // Display the context menu
-    contextmenu.popup(window)?;
-    return Ok(());
+/// Deletes the row with the given OID.
+pub fn delete_row(app: AppHandle, table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
+    data::delete(table_oid, row_oid)?;
+    msg_update_table_row(&app, table_oid, row_oid);
+    return Ok(row_oid);
 }
 
 #[tauri::command]
 pub fn get_table_data(table_oid: i64, cell_channel: Channel<data::Cell>) -> Result<(), error::Error> {
     data::send_table_data(table_oid, cell_channel)?;
+    return Ok(());
+}
+
+#[tauri::command]
+pub fn get_table_row(table_oid: i64, row_oid: i64, cell_channel: Channel<data::RowCell>) -> Result<(), error::Error> {
+    data::send_table_row(table_oid, row_oid, cell_channel)?;
     return Ok(());
 }
