@@ -303,7 +303,7 @@ impl Action {
                 }
             },
             Self::InsertTableRow { table_oid, row_oid } => {
-                match data::push(table_oid.clone()) {
+                match data::insert(table_oid.clone(), row_oid.clone()) {
                     Ok(row_oid) => {
                         let mut reverse_stack = if is_forward {
                             REVERSE_STACK.lock().unwrap() 
@@ -322,6 +322,7 @@ impl Action {
                 }
             },
             Self::UpdateTableCellStoredAsPrimitiveValue { table_oid, column_oid, row_oid, value } => {
+                println!("Updating value to {value:?}");
                 match data::try_update_primitive_value(table_oid.clone(), row_oid.clone(), column_oid.clone(), value.clone()) {
                     Ok(old_value) => {
                         let mut reverse_stack = if is_forward {
@@ -478,8 +479,8 @@ pub fn get_table_column_list(table_oid: i64, column_channel: Channel<column::Met
 }
 
 #[tauri::command]
-pub fn get_table_data(table_oid: i64, cell_channel: Channel<data::Cell>) -> Result<(), error::Error> {
-    data::send_table_data(table_oid, cell_channel)?;
+pub fn get_table_data(table_oid: i64, page_num: i64, page_size: i64, cell_channel: Channel<data::Cell>) -> Result<(), error::Error> {
+    data::send_table_data(table_oid, page_num, page_size, cell_channel)?;
     return Ok(());
 }
 

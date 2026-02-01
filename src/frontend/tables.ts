@@ -144,7 +144,7 @@ export async function displayTableAsync(tableOid: number) {
   // Strip the former contents of the table
   let tableNode: HTMLTableElement | null = document.querySelector('#table-content');
   if (tableNode)
-    tableNode.innerHTML = '<colgroup><col span="1"></colgroup><thead><tr><th></th></tr></thead><tbody></tbody><tfoot><tr></tr></tfoot>';
+    tableNode.innerHTML = '<colgroup><col span="1" style="min-width: 2em;"></colgroup><tbody></tbody><thead><tr><th></th></tr></thead><tfoot><tr></tr></tfoot>';
   let tableColgroupNode: HTMLElement | null = document.querySelector('#table-content > colgroup');
   let tableHeaderRowNode: HTMLTableRowElement | null = document.querySelector('#table-content > thead > tr');
   let tableBodyNode: HTMLElement | null = document.querySelector('#table-content > tbody');

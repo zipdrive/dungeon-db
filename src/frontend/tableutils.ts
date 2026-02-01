@@ -38,13 +38,14 @@ export async function addTableColumnCellToRow(rowNode: HTMLTableRowElement, tabl
         // Set up an event listener for when the value is changed
         editableDivNode.addEventListener('focusout', async (_) => {
           const newPrimitiveValue = editableDivNode.innerText.trimEnd();
+          console.debug(`Updating value to "${(newPrimitiveValue == '' ? null : newPrimitiveValue)}"`);
 
           await executeAsync({
             updateTableCellStoredAsPrimitiveValue: {
               tableOid: tableOid,
               rowOid: rowOid,
               columnOid: columnOid,
-              newPrimitiveValue: newPrimitiveValue == '' ? null : newPrimitiveValue
+              value: newPrimitiveValue == '' ? null : newPrimitiveValue
             }
           })
           .catch(async e => {
@@ -110,7 +111,7 @@ export async function addTableColumnCellToRow(rowNode: HTMLTableRowElement, tabl
           tableOid: tableOid,
           rowOid: rowOid,
           columnOid: columnOid,
-          newPrimitiveValue: newPrimitiveValue == '' ? null : newPrimitiveValue
+          value: newPrimitiveValue == '' ? null : newPrimitiveValue
         }
       })
       .catch(async e => {

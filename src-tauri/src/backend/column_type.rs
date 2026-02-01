@@ -186,8 +186,10 @@ impl MetadataColumnType {
                 let create_table_cmd = format!("
                 CREATE TABLE TABLE{column_type_oid} (
                     OID INTEGER PRIMARY KEY, 
-                    TRASH TINYINT NOT NULL DEFAULT 0,
+                    TRASH BOOLEAN NOT NULL DEFAULT 0,
                     PARENT_OID INTEGER NOT NULL REFERENCES TABLE{table_oid} (OID)
+                        ON UPDATE CASCADE
+                        ON DELETE CASCADE
                 );");
                 trans.execute(&create_table_cmd, [])?;
 
@@ -197,7 +199,7 @@ impl MetadataColumnType {
                 AS 
                 SELECT 
                     OID, 
-                    CAST(OID AS TEXT) AS DISPLAY_VALUE
+                    CASE WHEN TRASH = 0 THEN '— NO PRIMARY KEY —' ELSE '— DELETED —' END AS DISPLAY_VALUE 
                 FROM TABLE{column_type_oid};");
                 trans.execute(&create_view_cmd, [])?;
 

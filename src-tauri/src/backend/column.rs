@@ -502,7 +502,7 @@ pub fn send_metadata_list(table_oid: i64, column_channel: Channel<Metadata>) -> 
                 c.IS_PRIMARY_KEY
             FROM METADATA_TABLE_COLUMN c
             INNER JOIN METADATA_TABLE_COLUMN_TYPE t ON t.OID = c.TYPE_OID
-            WHERE c.TABLE_OID = ?1 
+            WHERE c.TABLE_OID = ?1 AND c.TRASH = 0
             ORDER BY c.COLUMN_ORDERING ASC;",
          params![table_oid], 
         &mut |row| {

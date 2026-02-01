@@ -172,7 +172,7 @@ export type Action = {
         tableOid: number,
         rowOid: number,
         columnOid: number,
-        newPrimitiveValue: string | null
+        value: string | null
     }
 };
 

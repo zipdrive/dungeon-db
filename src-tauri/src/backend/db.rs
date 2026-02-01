@@ -121,9 +121,17 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
             ON DELETE SET DEFAULT
     );
 
-    -- Surrogate key is displayed by references
-    -- Each table has at most one surrogate key
-    ALTER TABLE METADATA_TABLE ADD COLUMN SURROGATE_KEY_COLUMN_OID INTEGER REFERENCES METADATA_TABLE_COLUMN (OID);
+    -- METADATA_TABLE_ORDERBY stores what columns the table is sorted by, in what order and what direction
+    CREATE TABLE METADATA_TABLE_ORDERBY (
+        TABLE_OID INTEGER NOT NULL REFERENCES METADATA_TABLE (OID)
+            ON UPDATE CASCADE
+            ON DELETE CASCADE,
+        COLUMN_OID INTEGER NOT NULL REFERENCES METADATA_TABLE_COLUMN (OID)
+            ON UPDATE CASCADE
+            ON DELETE CASCADE,
+        SORT_ORDERING INTEGER NOT NULL DEFAULT 0,
+        SORT_ASCENDING BOOLEAN NOT NULL DEFAULT 0
+    );
 
     COMMIT;
     ")?;

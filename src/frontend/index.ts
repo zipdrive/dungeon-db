@@ -2,8 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { open, save, message } from "@tauri-apps/plugin-dialog";
 
 /**
- * Start up StaticDB.
- * @param filePath The filepath of the database file used by StaticDB.
+ * Start up DungeonDB.
+ * @param filePath The filepath of the database file used by DungeonDB.
  */
 function initialize(filePath: string) {
   // Initialize the database connection
@@ -11,7 +11,7 @@ function initialize(filePath: string) {
     path: filePath
   }).catch(async e => {
     await message(e, {
-      title: 'Error while connecting to StaticDB file.',
+      title: 'Error while connecting to DungeonDB file.',
       kind: 'error'
     });
   });
@@ -27,8 +27,8 @@ window.addEventListener("DOMContentLoaded", () => {
   newDbButton?.addEventListener("click", async (e) => {
     const filePath = await save({
       filters: [{
-        name: "StaticDB (*.sdb)",
-        extensions: ['sdb']
+        name: "DungeonDB (*.db)",
+        extensions: ['db']
       }]
     });
     if (filePath != null) {
@@ -40,8 +40,8 @@ window.addEventListener("DOMContentLoaded", () => {
   loadDbButton?.addEventListener("click", async (e) => {
     const filePath = await open({
       filters: [{
-        name: "StaticDB (*.sdb)",
-        extensions: ['sdb']
+        name: "DungeonDB (*.db)",
+        extensions: ['db']
       }]
     });
     if (filePath != null) {

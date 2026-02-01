@@ -200,9 +200,9 @@ body {
   right: 0;
   top: 1.7em;
   bottom: 0;
-  margin: 0;
-  padding: 8px 8px 16px;
+  margin: 8px 8px 16px;
   overflow: auto;
+  font-size: 0.85em;
 }
 
 .container-inner {
@@ -215,16 +215,17 @@ body {
   border-top: none;
   border-right: none;
   border-spacing: 0;
-  border-collapse: collapse;
+  border-collapse: separate;
   cursor: default;
 }
 #table-content > tbody > tr {
-  background-color: var(--main-color-neutral);
+  --row-background-color: var(--main-color-neutral);
 }
 #table-content > tbody > tr:nth-child(even), #table-content > thead > tr, #table-content > tfoot > tr {
-  background-color: var(--main-color-light);
+  --row-background-color: var(--main-color-light);
 }
 #table-content th, #table-content td {
+  background-color: var(--row-background-color);
   border: var(--main-color-dark) 1px solid;
 }
 #table-content td {
@@ -232,14 +233,20 @@ body {
   padding: 0;
 }
 #table-content th {
+  position: sticky;
+  top: 0;
   padding: 2px 6px;
+}
+#table-content > tfoot > tr > td {
+  position: sticky;
+  bottom: 0;
 }
 
 #table-content #add-new-column-button {
   cursor: pointer;
   color: var(--text-color-link);
   border: none;
-  background-color: var(--main-color-neutral);
+  background-color: transparent;
   white-space: nowrap;
   font-weight: normal;
 }
