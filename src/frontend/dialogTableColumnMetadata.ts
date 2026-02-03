@@ -105,6 +105,7 @@ async function loadMetadataFromFields(): Promise<TableColumnMetadata> {
     return {
         oid: 0,
         name: columnName,
+        columnOrdering: 0,
         columnStyle: columnStyle,
         columnType: columnType,
         isNullable: isNullable,
@@ -134,11 +135,18 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (columnReferenceInput) {
         const referenceTypeChannel: Channel<BasicMetadata> = new Channel<BasicMetadata>();
         referenceTypeChannel.onmessage = (referenceType) => {
+            console.debug(`Received ${referenceType}`);
             let columnReferenceOption: HTMLOptionElement = document.createElement('option');
             columnReferenceOption.innerText = referenceType.name;
             columnReferenceOption.value = referenceType.oid.toString();
             columnReferenceInput.insertAdjacentElement('beforeend', columnReferenceOption);
         };
+        await queryAsync({
+            invokeAction: 'get_table_column_reference_values',
+            invokeParams: {
+                referenceTypeChannel: referenceTypeChannel
+            }
+        });
     }
 
     // Fill in the dropdown of possible Global Data Type types
@@ -151,6 +159,12 @@ window.addEventListener("DOMContentLoaded", async () => {
             columnObjDataTypeOption.value = objDataType.oid.toString();
             columnObjDataTypeInput.insertAdjacentElement('beforeend', columnObjDataTypeOption);
         };
+        await queryAsync({
+            invokeAction: 'get_table_column_object_values',
+            invokeParams: {
+                objectTypeChannel: objDataTypeChannel
+            }
+        });
     }
 
     if (urlParams.has('column_oid')) {
@@ -285,7 +299,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
             const tableOid = urlParams.get('table_oid');
             const columnOrdering = urlParams.get('column_ordering');
-            if (!tableOid || !columnOrdering) {
+            if (!tableOid) {
                 await message("Dialog window does not have expected GET parameters.", { title: "An error occurred while creating column.", kind: 'error' });
                 return;
             }
@@ -298,7 +312,7 @@ window.addEventListener("DOMContentLoaded", async () => {
                     columnName: metadata.name,
                     columnType: metadata.columnType,
                     columnStyle: metadata.columnStyle,
-                    columnOrdering: parseInt(columnOrdering),
+                    columnOrdering: columnOrdering ? parseInt(columnOrdering) : null,
                     isNullable: metadata.isNullable,
                     isUnique: metadata.isUnique,
                     isPrimaryKey: metadata.isPrimaryKey

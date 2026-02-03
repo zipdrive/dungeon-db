@@ -27,7 +27,7 @@ pub enum Action {
         table_oid: i64, 
         column_name: String, 
         column_type: column_type::MetadataColumnType, 
-        column_ordering: i64, 
+        column_ordering: Option<i64>, 
         column_style: String, 
         is_nullable: bool, 
         is_unique: bool, 
@@ -193,6 +193,7 @@ impl Action {
                 is_primary_key } => {
 
                 match column::edit(
+                    table_oid.clone(),
                     column_oid.clone(), 
                     column_name, 
                     column_type.clone(), 
@@ -431,12 +432,20 @@ pub async fn dialog_create_table(app: AppHandle) -> Result<(), error::Error> {
 
 #[tauri::command]
 /// Pull up a dialog window for creating a new table.
-pub async fn dialog_create_table_column(app: AppHandle, table_oid: i64, column_ordering: i64) -> Result<(), error::Error> {    
+pub async fn dialog_create_table_column(app: AppHandle, table_oid: i64, column_ordering: Option<i64>) -> Result<(), error::Error> {    
     let window_idx = app.webview_windows().len();
     WebviewWindowBuilder::new(
         &app,
         format!("tableColumnMetadataWindow-{window_idx}"),
-        WebviewUrl::App(format!("/src/frontend/dialogTableColumnMetadata.html?table_oid={table_oid}&column_ordering={column_ordering}").into()),
+        WebviewUrl::App(
+            format!(
+                "/src/frontend/dialogTableColumnMetadata.html?table_oid={table_oid}{}", 
+                match column_ordering {
+                    Some(o) => format!("column_ordering={o}"),
+                    None => String::from("")
+                }
+            ).into()
+        ),
     )
     .title("Add New Column")
     .inner_size(400.0, 200.0)

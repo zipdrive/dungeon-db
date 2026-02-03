@@ -185,7 +185,7 @@ if (urlParamTableOid) {
     onReceiveColumn.onmessage = (column) => {
       // Add the column to the list of columns
       const columnOid = column.oid;
-      const columnOrdering = tableColumnList.length;
+      const columnOrdering = column.columnOrdering;
       tableColumnList.push(column);
 
       // Add a header for the column
@@ -265,7 +265,6 @@ if (urlParamTableOid) {
     });
 
     // Add a final column header that is a button to add a new column
-    const numColumns = tableColumnList.length;
     let tableAddColumnHeaderNode = document.createElement('th');
     if (tableAddColumnHeaderNode != null) {
       tableAddColumnHeaderNode.id = 'add-new-column-button';
@@ -275,7 +274,7 @@ if (urlParamTableOid) {
           invokeAction: "dialog_create_table_column", 
           invokeParams: {
             tableOid: tableOid,
-            columnOrdering: numColumns
+            columnOrdering: null
           }
         });
       });

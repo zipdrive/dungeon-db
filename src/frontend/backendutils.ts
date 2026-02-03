@@ -16,6 +16,7 @@ export type ColumnType = { primitive: 'Any' | 'Boolean' | 'Integer' | 'Number' |
 export type TableColumnMetadata = {
     oid: number, 
     name: string,
+    columnOrdering: number,
     columnStyle: string,
     columnType: ColumnType,
     isNullable: boolean,
@@ -102,7 +103,7 @@ export type Dialog = {
     invokeAction: 'dialog_create_table_column',
     invokeParams: {
         tableOid: number,
-        columnOrdering: number
+        columnOrdering: number | null
     }
 } | {
     invokeAction: 'dialog_edit_table_column',
@@ -126,7 +127,7 @@ export type Action = {
 } | {
     createTableColumn: {
         tableOid: number,
-        columnOrdering: number,
+        columnOrdering: number | null,
         columnName: string,
         columnType: ColumnType,
         columnStyle: string,

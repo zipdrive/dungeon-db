@@ -15,6 +15,7 @@ use crate::util::error;
 pub struct Metadata {
     oid: i64,
     name: String,
+    column_ordering: i64,
     column_style: String,
     column_type: column_type::MetadataColumnType,
     is_nullable: bool,
@@ -23,7 +24,7 @@ pub struct Metadata {
 }
 
 /// Creates a new column in a table.
-pub fn create(table_oid: i64, column_name: &str, column_type: column_type::MetadataColumnType, column_ordering: i64, column_style: &str, is_nullable: bool, is_unique: bool, is_primary_key: bool) -> Result<i64, error::Error> {
+pub fn create(table_oid: i64, column_name: &str, column_type: column_type::MetadataColumnType, column_ordering: Option<i64>, column_style: &str, is_nullable: bool, is_unique: bool, is_primary_key: bool) -> Result<i64, error::Error> {
     let is_nullable_bit = if is_nullable { 1 } else { 0 };
     let is_unique_bit = if is_unique { 1 } else { 0 };
     let is_primary_key_bit = if is_primary_key { 1 } else { 0 };
@@ -31,10 +32,24 @@ pub fn create(table_oid: i64, column_name: &str, column_type: column_type::Metad
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
-    trans.execute(
-        "UPDATE METADATA_TABLE_COLUMN SET COLUMN_ORDERING = COLUMN_ORDERING + 1 WHERE TABLE_OID = ?1 AND COLUMN_ORDERING >= ?2;",
-        params![table_oid, column_ordering]
-    )?;
+    let column_ordering: i64 = match column_ordering {
+        Some(o) => {
+            // If an explicit ordering was given, shift every column to its right by 1 in order to make space
+            trans.execute(
+                "UPDATE METADATA_TABLE_COLUMN SET COLUMN_ORDERING = COLUMN_ORDERING + 1 WHERE TABLE_OID = ?1 AND COLUMN_ORDERING >= ?2;",
+                params![table_oid, o]
+            )?;
+            o
+        },
+        None => {
+            // If no explicit ordering was given, insert at the back
+            trans.query_one(
+                "SELECT COALESCE(MAX(COLUMN_ORDERING), 0) AS NEW_COLUMN_ORDERING FROM METADATA_TABLE_COLUMN WHERE TABLE_OID = ?1", 
+                params![table_oid], 
+                |row| row.get::<_, i64>(0)
+            )?
+        }
+    };
 
     let column_type = column_type.create_for_table(&trans, &table_oid)?;
     match &column_type {
@@ -99,10 +114,15 @@ pub fn create(table_oid: i64, column_name: &str, column_type: column_type::Metad
 }
 
 /// Edits a column's metadata and/or type.
-pub fn edit(column_oid: i64, column_name: &str, column_type: column_type::MetadataColumnType, column_style: &str, is_nullable: bool, is_unique: bool, is_primary_key: bool) -> Result<Option<i64>, error::Error> {
+pub fn edit(table_oid: i64, column_oid: i64, column_name: &str, column_type: column_type::MetadataColumnType, column_style: &str, is_nullable: bool, is_unique: bool, is_primary_key: bool) -> Result<Option<i64>, error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
+    // Drop the surrogate view
+    let drop_surrogate_cmd: String = format!("DROP VIEW IF EXISTS TABLE{table_oid}_SURROGATE");
+    trans.execute(&drop_surrogate_cmd, [])?;
+
+    // Record the old values of the column metadata
     trans.execute(
         "INSERT INTO METADATA_TABLE_COLUMN (
             TRASH, 
@@ -479,7 +499,8 @@ pub fn get_metadata(column_oid: i64) -> Result<Option<Metadata>, error::Error> {
     return Ok(trans.query_one(
         "SELECT 
                 c.OID, 
-                c.NAME, 
+                c.NAME,
+                c.COLUMN_ORDERING, 
                 c.COLUMN_CSS_STYLE,
                 c.TYPE_OID, 
                 t.MODE,
@@ -493,13 +514,14 @@ pub fn get_metadata(column_oid: i64) -> Result<Option<Metadata>, error::Error> {
          params![column_oid], 
         |row| {
             return Ok(Metadata {
-                oid: row.get(0)?,
-                name: row.get(1)?,
-                column_style: row.get(2)?,
-                column_type: column_type::MetadataColumnType::from_database(row.get(3)?, row.get(4)?),
-                is_nullable: row.get(5)?,
-                is_unique: row.get(6)?,
-                is_primary_key: row.get(7)?,
+                oid: row.get("OID")?,
+                name: row.get("NAME")?,
+                column_ordering: row.get("COLUMN_ORDERING")?,
+                column_style: row.get("COLUMN_CSS_STYLE")?,
+                column_type: column_type::MetadataColumnType::from_database(row.get("TYPE_OID")?, row.get("MODE")?),
+                is_nullable: row.get("IS_NULLABLE")?,
+                is_unique: row.get("IS_UNIQUE")?,
+                is_primary_key: row.get("IS_PRIMARY_KEY")?,
             });
         }
     ).optional()?);
@@ -514,6 +536,7 @@ pub fn send_metadata_list(table_oid: i64, column_channel: Channel<Metadata>) -> 
         "SELECT 
                 c.OID, 
                 c.NAME, 
+                c.COLUMN_ORDERING,
                 c.COLUMN_CSS_STYLE,
                 c.TYPE_OID, 
                 t.MODE,
@@ -527,13 +550,14 @@ pub fn send_metadata_list(table_oid: i64, column_channel: Channel<Metadata>) -> 
          params![table_oid], 
         &mut |row| {
             column_channel.send(Metadata {
-                oid: row.get(0)?,
-                name: row.get(1)?,
-                column_style: row.get(2)?,
-                column_type: column_type::MetadataColumnType::from_database(row.get(3)?, row.get(4)?),
-                is_nullable: row.get(5)?,
-                is_unique: row.get(6)?,
-                is_primary_key: row.get(7)?,
+                oid: row.get("OID")?,
+                name: row.get("NAME")?,
+                column_ordering: row.get("COLUMN_ORDERING")?,
+                column_style: row.get("COLUMN_CSS_STYLE")?,
+                column_type: column_type::MetadataColumnType::from_database(row.get("TYPE_OID")?, row.get("MODE")?),
+                is_nullable: row.get("IS_NULLABLE")?,
+                is_unique: row.get("IS_UNIQUE")?,
+                is_primary_key: row.get("IS_PRIMARY_KEY")?,
             })?;
             return Ok(());
         }
@@ -543,6 +567,7 @@ pub fn send_metadata_list(table_oid: i64, column_channel: Channel<Metadata>) -> 
 
 
 #[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all="camelCase")]
 /// A value for a dropdown (i.e. single-select dropdown, multi-select dropdown, reference).
 pub struct DropdownValue {
     true_value: Option<String>,
@@ -687,8 +712,8 @@ pub fn send_table_column_dropdown_values(column_oid: i64, dropdown_value_channel
                 [], 
             &mut |row| {
                 dropdown_value_channel.send(DropdownValue { 
-                    true_value: row.get::<_, Option<String>>(0)?, 
-                    display_value: row.get::<_, Option<String>>(1)? 
+                    true_value: row.get::<_, Option<String>>("OID")?, 
+                    display_value: row.get::<_, Option<String>>("DISPLAY_VALUE")? 
                 })?;
                 return Ok(());
             })?;
@@ -722,8 +747,8 @@ pub fn send_type_metadata_list(column_type: column_type::MetadataColumnType, typ
         [column_type.get_type_mode()], 
         &mut |row| {
             type_channel.send(BasicTypeMetadata {
-                oid: row.get(0)?,
-                name: row.get(1)?
+                oid: row.get("OID")?,
+                name: row.get("NAME")?
             })?;
             return Ok(());
         }

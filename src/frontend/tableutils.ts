@@ -64,7 +64,7 @@ export async function addTableColumnCellToRow(rowNode: HTMLTableRowElement, tabl
               if (isNaN(date)) {
                 newPrimitiveValue = null;
               } else {
-                newPrimitiveValue = date.toString();
+                newPrimitiveValue = Math.round(0.001 * date).toString();
               }
               break;
             case 'Timestamp':
@@ -72,7 +72,7 @@ export async function addTableColumnCellToRow(rowNode: HTMLTableRowElement, tabl
               if (isNaN(timestamp)) {
                 newPrimitiveValue = null;
               } else {
-                newPrimitiveValue = timestamp.toString();
+                newPrimitiveValue = Math.round(0.001 * timestamp).toString();
               }
               break;
           }
@@ -116,10 +116,12 @@ export async function addTableColumnCellToRow(rowNode: HTMLTableRowElement, tabl
     }
   } else if ('singleSelectDropdown' in cell.columnType || 'reference' in cell.columnType) {
     let selectNode: HTMLSelectElement = document.createElement('select');
+    selectNode.insertAdjacentHTML('beforeend', '<option value="">— NULL —</option>');
 
     // Retrieve dropdown values from database to populate dropdown
     const onReceiveDropdownValue = new Channel<DropdownValue>();
     onReceiveDropdownValue.onmessage = (dropdownValue) => {
+      console.debug(`Received ${JSON.stringify(dropdownValue)}`);
       let optionNode: HTMLOptionElement = document.createElement('option');
       optionNode.value = dropdownValue.trueValue ?? '';
       optionNode.innerText = dropdownValue.displayValue ?? '';
