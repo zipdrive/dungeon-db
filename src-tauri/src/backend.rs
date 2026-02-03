@@ -473,6 +473,25 @@ pub async fn dialog_edit_table_column(app: AppHandle, table_oid: i64, column_oid
 }
 
 #[tauri::command]
+/// Open a separate window for the contents of a table.
+pub async fn dialog_table_data(app: AppHandle, table_oid: i64) -> Result<(), error::Error> {
+    // Query the name of the table
+    let table_name: String = table::get_metadata(&table_oid)?.name;
+
+    // Create the window
+    let window_idx = app.webview_windows().len();
+    WebviewWindowBuilder::new(
+        &app,
+        format!("tableWindow-{window_idx}"),
+        WebviewUrl::App(format!("/src/frontend/table.html?table_oid={table_oid}&navigation_collapsed=1").into()),
+    )
+    .title(&table_name)
+    .inner_size(800.0, 600.0)
+    .build()?;
+    return Ok(());
+}
+
+#[tauri::command]
 /// Closes the current dialog window.
 pub fn dialog_close(window: tauri::Window) -> Result<(), error::Error> {
     match window.close() {

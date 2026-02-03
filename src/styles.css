@@ -1,3 +1,11 @@
+/**
+ * 
+ * This file is for defining universal styles. 
+ *
+ */
+
+
+
 :root {
   --main-color-neutral: #f6f6f6;
   --main-color-light: #fcfcfc;
@@ -56,57 +64,13 @@
 }
 
 
-.row {
-  display: flex;
-  justify-content: center;
-}
-
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: var(--text-color-neutral);
-  background-color: var(--main-color-light);
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
-  cursor: pointer;
-}
-
-button:hover {
-  border-color: var(--accent-color);
-}
-button:active {
-  border-color: var(--accent-color);
-  background-color: var(--main-color-dark);
-}
-
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
 
 /**
  * This is where my styles start.
  */
 
 .input {
+  cursor: pointer;
   border-radius: 8px;
   border: 1px solid transparent;
   padding: 0.6em 1.2em;
@@ -119,12 +83,17 @@ button {
   box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
   outline: none;
 }
-.input:hover {
+.input:hover, .input:focus {
   border-color: var(--accent-color);
 }
 .input:active, .input.active {
   border-color: var(--accent-color);
   background-color: var(--main-color-dark);
+}
+.input:disabled {
+  cursor: default;
+  background-color: var(--main-color-dark);
+  border: 1px solid transparent;
 }
 
 
@@ -136,6 +105,11 @@ button {
 }
 .clickable-text:hover {
   color: var(--text-color-link-hover);
+}
+
+
+.hidden {
+  display: none;
 }
 
 
@@ -161,6 +135,10 @@ body {
   background-color: var(--main-color-dark);
 }
 
+body.navigation-collapsed .top-sidebar {
+  display: none;
+}
+
 .tab {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
@@ -184,6 +162,10 @@ body {
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+}
+
+body.navigation-collapsed .left-sidebar {
+  display: none;
 }
 
 .left-sidebar-inner {
@@ -227,6 +209,11 @@ body {
   margin: 8px 8px 16px;
   overflow: auto;
   font-size: 0.85em;
+}
+
+body.navigation-collapsed .container {
+  left: 0;
+  top: 0;
 }
 
 .container-inner {

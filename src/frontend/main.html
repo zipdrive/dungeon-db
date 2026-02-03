@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="stylesheet" href="/src/frontend/main.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>StaticDB</title>
     <script type="module" src="/src/frontend/main.ts" defer></script>
@@ -10,21 +11,43 @@
   </head>
 
   <body>
-    <div class="top-sidebar">
-      <button id="tables-tab" class="tab">Tables</button>
-      <button id="reports-tab" class="tab">Reports</button>
-      <button id="global-types-tab" class="tab">Global Data Types</button>
+    <div class="tab-bar">
+      <input type="radio" name="tabs" id="tables-tab-button" class="hidden" checked>
+      <input type="radio" name="tabs" id="reports-tab-button" class="hidden">
+      <input type="radio" name="tabs" id="global-types-tab-button" class="hidden">
+      <label for="tables-tab-button" id="tables-tab" class="input tab" tabindex="0">Tables</label>
+      <label for="reports-tab-button" id="reports-tab" class="input tab" tabindex="0">Reports</label>
+      <label for="global-types-tab-button" id="global-types-tab" class="input tab" tabindex="0">Global Data Types</label>
     </div>
-    <div id="table-sidebar" class="sidebar">
-      <div id="add-new-table-button-wrapper" style="display:flex; flex-direction:column; justify-content:center; padding-top:6px;">
-          <a id="add-new-table-button">Create New Table</button>
+    <div id="tables-container" class="container">
+      <div class="header">
+        <button class="input" id="new-table-button" tabindex="0">New</button>
+        <button class="input" id="open-table-button" tabindex="0" disabled>Open</button>
+        <button class="input" id="edit-table-button" tabindex="0" disabled>Edit</button>
+        <button class="input" id="delete-table-button" tabindex="0" disabled>Delete</button>
+      </div>
+      <div class="list">
       </div>
     </div>
-    <form name="tables" class="container">
-      <div class="table-container">
-        <table id="table-content">
-        </table>
+    <div id="reports-container" class="container">
+      <div class="header">
+        <button class="input" id="new-report-button" tabindex="0">New</button>
+        <button class="input" id="open-report-button" tabindex="0" disabled>Open</button>
+        <button class="input" id="edit-report-button" tabindex="0" disabled>Edit</button>
+        <button class="input" id="delete-report-button" tabindex="0" disabled>Delete</button>
       </div>
-    </form>
+      <div class="list">
+      </div>
+    </div>
+    <div id="global-types-container" class="container">
+      <div class="header">
+        <button class="input" id="new-global-type-button" tabindex="0">New</button>
+        <button type="button" class="input" id="open-global-type-button" tabindex="0" disabled>Open</button>
+        <button class="input" id="edit-global-type-button" tabindex="0" disabled>Edit</button>
+        <button class="input" id="delete-global-type-button" tabindex="0" disabled>Delete</button>
+      </div>
+      <div class="list">
+      </div>
+    </div>
   </body>
 </html>

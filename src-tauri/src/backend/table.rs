@@ -479,6 +479,26 @@ pub struct BasicMetadata {
     name: String
 }
 
+/// Gets metadata for a specified table.
+pub fn get_metadata(table_oid: &i64) -> Result<BasicMetadata, error::Error> {
+    let mut conn = db::open()?;
+    let trans = conn.transaction()?;
+
+    let table_name: String = trans.query_one(
+        "SELECT 
+            NAME 
+        FROM METADATA_TABLE 
+        WHERE TRASH = 0 
+        WHERE OID = ?1;", 
+        params![table_oid], 
+        |row| row.get::<_, String>("NAME")
+    )?;
+    return Ok(BasicMetadata {
+        oid: table_oid.clone(),
+        name: table_name
+    });
+}
+
 /// Sends a list of tables through the provided channel.
 pub fn send_metadata_list(table_channel: Channel<BasicMetadata>) -> Result<(), error::Error> {
     let mut conn = db::open()?;

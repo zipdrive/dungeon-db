@@ -17,7 +17,7 @@ function initialize(filePath: string) {
   });
 
   // GOTO main page
-  window.location.replace('/src/frontend/tables.html');
+  window.location.replace('/src/frontend/table.html');
 }
 
 

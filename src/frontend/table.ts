@@ -7,79 +7,10 @@ import { addTableColumnCellToRow } from "./tableutils";
 
 const urlParams = new URLSearchParams(window.location.search);
 const urlParamTableOid = urlParams.get('table_oid');
-console.debug(`tables.html page loaded with table_oid=${urlParamTableOid ?? 'NULL'}`);
+console.debug(`table.html page loaded with table_oid=${urlParamTableOid ?? 'NULL'}`);
 
 
-/**
- * Update the displayed list of tables.
- */
-async function updateTableListAsync() {
-  // Remove the tables in the sidebar that were present before
-  document.querySelectorAll('.table-sidebar-button').forEach(element => {
-    element.remove();
-  });
-  let addTableButtonWrapper: HTMLElement | null = document.querySelector('#add-new-table-button-wrapper');
 
-  const tableOid: number | null = urlParamTableOid ? parseInt(urlParamTableOid) : null;
-
-  // Set up a channel
-  const onReceiveUpdatedTable = new Channel<{ oid: number, name: string }>();
-  onReceiveUpdatedTable.onmessage = (table) => {
-    // Load in each table and create a button for that table
-    if (table.oid === tableOid) {
-      // Create a nonfunctional button for that table, because the table is already active
-      addTableButtonWrapper?.insertAdjacentHTML('beforebegin', 
-        `<button class="table-sidebar-button active" id="table-sidebar-button-${table.oid}"></button>`
-      );
-      let tableSidebarButton: HTMLInputElement | null = document.querySelector(`#table-sidebar-button-${table.oid}`);
-      if (tableSidebarButton) {
-        tableSidebarButton.innerText = table.name;
-      }
-    } else {
-      addTableButtonWrapper?.insertAdjacentHTML('beforebegin', 
-        `<button class="table-sidebar-button" id="table-sidebar-button-${table.oid}"></button>`
-      );
-
-      // Add functionality when clicked
-      let tableSidebarButton: HTMLInputElement | null = document.querySelector(`#table-sidebar-button-${table.oid}`);
-      if (tableSidebarButton) {
-        tableSidebarButton.innerText = table.name;
-        tableSidebarButton?.addEventListener("click", _ => {
-          // Display the table
-          console.debug(`tables.html?table_oid=${encodeURIComponent(table.oid)}`);
-          window.location.href = `tables.html?table_oid=${encodeURIComponent(table.oid)}`;
-        });
-      }
-    }
-  };
-
-  // Send a command to Rust to get the list of tables from the database
-  await queryAsync({
-    invokeAction: "get_table_list", 
-    invokeParams: { tableChannel: onReceiveUpdatedTable }
-  });
-}
-
-/**
- * Opens the dialog to create a new table.
- */
-export async function createTable() {
-  await openDialogAsync({
-    invokeAction: "dialog_create_table", 
-    invokeParams: {}
-  });
-}
-
-// Add initial listeners
-window.addEventListener("DOMContentLoaded", () => {
-  document.querySelector('#add-new-table-button')?.addEventListener("click", createTable);
-
-  navigator.locks.request('table-sidebar', async () => await updateTableListAsync());
-});
-
-listen<any>("update-table-list", (_) => {
-  navigator.locks.request('table-sidebar', async () => await updateTableListAsync());
-});
 
 
 if (urlParamTableOid) {
@@ -401,8 +332,6 @@ if (urlParamTableOid) {
     navigator.locks.request('table-content', async () => {
       if (e.payload == tableOid) {
         await refreshTableAsync();
-      } else {
-        window.location.href = `tables.html?table_oid=${encodeURIComponent(e.payload)}`;
       }
     });
   });
@@ -411,8 +340,6 @@ if (urlParamTableOid) {
     const updateRowOid = e.payload[1];
     if (updateTableOid == tableOid) {
       navigator.locks.request('table-content', async () => await updateRowAsync(updateRowOid));
-    } else {
-      window.location.href = `tables.html?table_oid=${encodeURIComponent(updateTableOid)}`;
     }
   });
 
