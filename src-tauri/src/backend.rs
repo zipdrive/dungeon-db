@@ -512,8 +512,9 @@ pub fn get_report_list(report_channel: Channel<table::BasicMetadata>) -> Result<
 }
 
 #[tauri::command]
-pub fn get_object_type_list(object_type_channel: Channel<table::BasicMetadata>) -> Result<(), error::Error> {
+pub fn get_object_type_list(object_type_channel: Channel<obj_type::BasicMetadata>) -> Result<(), error::Error> {
     // Use channel to send BasicMetadata objects
+    obj_type::send_metadata_list(object_type_channel)?;
     return Ok(());
 }
 

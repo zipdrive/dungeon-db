@@ -14,7 +14,7 @@ use crate::util::error;
 
 
 /// Creates a new table.
-pub fn create(name: String) -> Result<i64, error::Error> {
+pub fn create(name: String, master_table_oid_list: Vec<i64>) -> Result<i64, error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
@@ -33,6 +33,19 @@ pub fn create(name: String) -> Result<i64, error::Error> {
         TRASH INTEGER NOT NULL DEFAULT 0
     ) STRICT;");
     trans.execute(&create_table_cmd, [])?;
+
+    // Add inheritance from each master table
+    for master_table_oid in master_table_oid_list.iter() {
+        // Insert metadata indicating that this table inherits from the master table
+        trans.execute(
+            "INSERT INTO METADATA_TABLE_INHERITANCE (INHERITOR_TABLE_OID, MASTER_TABLE_OID) VALUES (?1, ?2);",
+            params![table_oid, master_table_oid]
+        )?;
+
+        // Add a column to the table that references a row in the master list
+        let alter_table_cmd: String = format!("ALTER TABLE TABLE{table_oid} ADD COLUMN MASTER{master_table_oid}_OID INTEGER NOT NULL REFERENCES TABLE{master_table_oid} (OID) ON UPDATE CASCADE ON DELETE CASCADE;");
+        trans.execute(&alter_table_cmd, [])?;
+    }
     
     // Update the surrogate view
     update_surrogate_view(&trans, table_oid.clone())?;
@@ -470,16 +483,16 @@ pub fn get_metadata(table_oid: &i64) -> Result<BasicMetadata, error::Error> {
             NAME 
         FROM METADATA_TABLE 
         WHERE TRASH = 0 
-        WHERE OID = ?1;", 
+        WHERE TYPE_OID = ?1;", 
         params![table_oid], 
         |row| row.get::<_, String>("NAME")
     )?;
     return Ok(BasicMetadata {
         oid: table_oid.clone(),
-        name: table_name
+        name: table_name,
+        hierarchy_level: 0
     });
 }
-
 /// Sends a list of tables through the provided channel.
 pub fn send_metadata_list(table_channel: Channel<BasicMetadata>) -> Result<(), error::Error> {
     let mut conn = db::open()?;
