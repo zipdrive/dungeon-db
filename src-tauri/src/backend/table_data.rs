@@ -3,7 +3,8 @@ use serde_json::{Result as SerdeJsonResult, Value};
 use rusqlite::{Error as RusqliteError, OptionalExtension, Row, Transaction, params};
 use serde::Serialize;
 use tauri::ipc::Channel;
-use crate::backend::{column, column_type, db, table};
+use crate::backend::data_type::Primitive;
+use crate::backend::{table_column, data_type, db, table};
 use crate::util::error;
 
 
@@ -16,7 +17,7 @@ pub enum Cell {
     },
     ColumnValue {
         column_oid: i64,
-        column_type: column_type::MetadataColumnType,
+        column_type: data_type::MetadataColumnType,
         true_value: Option<String>,
         display_value: Option<String>,
         failed_validations: Vec<error::FailedValidation>
@@ -31,7 +32,7 @@ pub enum RowCell {
     },
     ColumnValue {
         column_oid: i64,
-        column_type: column_type::MetadataColumnType,
+        column_type: data_type::MetadataColumnType,
         true_value: Option<String>,
         display_value: Option<String>,
         failed_validations: Vec<error::FailedValidation>
@@ -179,13 +180,13 @@ pub fn try_update_primitive_value(table_oid: i64, row_oid: i64, column_oid: i64,
         WHERE c.OID = ?1", 
         params![column_oid], 
         |row| {
-            Ok(column_type::MetadataColumnType::from_database(row.get("TYPE_OID")?, row.get("MODE")?))
+            Ok(data_type::MetadataColumnType::from_database(row.get("TYPE_OID")?, row.get("MODE")?))
         }
     )?;
     match column_type {
-        column_type::MetadataColumnType::Primitive(prim) => {
+        data_type::MetadataColumnType::Primitive(prim) => {
             match prim {
-                column_type::Primitive::JSON => {
+                data_type::Primitive::JSON => {
                     // If column has JSON type, validate the JSON 
                     match new_value.clone() {
                         Some(json_str) => {
@@ -203,8 +204,8 @@ pub fn try_update_primitive_value(table_oid: i64, row_oid: i64, column_oid: i64,
             }
             // Ignore other primitive types
         },
-        column_type::MetadataColumnType::MultiSelectDropdown(_)
-        | column_type::MetadataColumnType::ChildTable(_) => {
+        data_type::MetadataColumnType::MultiSelectDropdown(_)
+        | data_type::MetadataColumnType::ChildTable(_) => {
             return Err(error::Error::AdhocError("Value of column cannot be updated like a primitive value."));
         }
         _ => {
@@ -235,19 +236,20 @@ struct Column {
     display_ord: String,
     column_oid: i64,
     column_name: String,
-    column_type: column_type::MetadataColumnType,
+    column_type: data_type::MetadataColumnType,
     is_nullable: bool,
     invalid_nonunique_oid: HashSet<i64>,
     is_primary_key: bool
 }
 
 /// Construct a SELECT query to get data from a table
-fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_clause: bool) -> Result<(String, LinkedList<Column>), error::Error> {
+fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_clause: bool, include_parent_row_oid_clause: bool) -> Result<(String, LinkedList<Column>), error::Error> {
     // Build the SELECT query
-    let mut select_cmd_cols: String = String::from("SELECT ts.*");
-    let select_surrogate_cmd: String = table::build_table_query(trans, table_oid.clone())?;
-    let select_cmd_tables: String = format!("FROM ({select_surrogate_cmd}) ts INNER JOIN TABLE{table_oid} t ON t.OID = ts.OID");
+    let mut select_cols_cmd: String = String::from("ROW_NUMBER() OVER (ORDER BY t.OID) AS ROW_INDEX, t.OID");
+    let mut select_tbls_cmd: String = format!("FROM TABLE{table_oid} t");
     let mut columns = LinkedList::<Column>::new();
+    let mut tbl_count: usize = 1;
+
     db::query_iterate(trans,
         "SELECT 
             c.OID,
@@ -264,25 +266,52 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
         params![table_oid], 
         &mut |row| {
             let column_oid: i64 = row.get(0)?;
-            let column_type: column_type::MetadataColumnType = column_type::MetadataColumnType::from_database(row.get(1)?, row.get(2)?);
+            let column_type: data_type::MetadataColumnType = data_type::MetadataColumnType::from_database(row.get(1)?, row.get(2)?);
             
             let enforce_uniqueness: bool = row.get(4)?;
             let mut invalid_nonunique_oid: HashSet<i64> = HashSet::<i64>::new();
 
             let display_ord: String = format!("COLUMN{column_oid}");
             let true_ord: Option<String>;
-            match column_type {
-                column_type::MetadataColumnType::Primitive(_) => {
+            match &column_type {
+                data_type::MetadataColumnType::Primitive(prim) => {
                     // Primitive type
+                    match prim {
+                        data_type::Primitive::Any 
+                        | data_type::Primitive::Boolean
+                        | data_type::Primitive::Integer
+                        | data_type::Primitive::Number
+                        | data_type::Primitive::Text
+                        | data_type::Primitive::JSON => {
+                            select_cols_cmd = format!("{select_cols_cmd}, CAST(t.COLUMN{column_oid} AS TEXT) AS COLUMN{column_oid}");
+                        },
+                        data_type::Primitive::Date => {
+                            select_cols_cmd = format!("{select_cols_cmd}, DATE(t.COLUMN{column_oid}, 'unixepoch') AS COLUMN{column_oid}");
+                        },
+                        data_type::Primitive::Timestamp => {
+                            select_cols_cmd = format!("{select_cols_cmd}, STRFTIME('%FT%TZ', t.COLUMN{column_oid}, 'unixepoch') AS COLUMN{column_oid}");
+                        },
+                        data_type::Primitive::File => {
+                            select_cols_cmd = format!("{select_cols_cmd}, CASE 
+                            WHEN t.COLUMN{column_oid} IS NULL THEN NULL 
+                            ELSE 
+                                CASE 
+                                    WHEN LENGTH(t.COLUMN{column_oid}) > 1000000000 THEN FORMAT('%.1f GB', LENGTH(t.COLUMN{column_oid}) * 0.000000001)
+                                    WHEN LENGTH(t.COLUMN{column_oid}) > 1000000 THEN FORMAT('%.1f MB', LENGTH(t.COLUMN{column_oid}) * 0.000001)
+                                    ELSE FORMAT('%.1f KB', LENGTH(t.COLUMN{column_oid}) * 0.001)
+                                END
+                            END AS COLUMN{column_oid}");
+                        },
+                        data_type::Primitive::Image => {
+                            select_cols_cmd = format!("{select_cols_cmd}, CASE WHEN t.COLUMN{column_oid} IS NULL THEN NULL ELSE 'Thumbnail' END AS COLUMN{column_oid}");
+                        }
+                    }
                     true_ord = Some(display_ord.clone());
                 },
-                column_type::MetadataColumnType::SingleSelectDropdown(_) 
-                | column_type::MetadataColumnType::Reference(_)
-                | column_type::MetadataColumnType::ChildObject(_) => {
-                    // True column is OID referencing row in other table
-
-                    // Pull true value from main table
-                    select_cmd_cols = format!("{select_cmd_cols}, CAST(t.COLUMN{column_oid} AS TEXT) AS _COLUMN{column_oid}");
+                data_type::MetadataColumnType::SingleSelectDropdown(column_type_oid) => {
+                    select_cols_cmd = format!("{select_cols_cmd}, t{tbl_count}.VALUE AS COLUMN{column_oid}, CAST(t{tbl_count}.OID AS TEXT) AS _COLUMN{column_oid}");
+                    select_tbls_cmd = format!("{select_tbls_cmd} LEFT JOIN TABLE{column_type_oid} t{tbl_count} ON t{tbl_count}.OID = t.COLUMN{column_oid}");
+                    tbl_count += 1;
                     true_ord = Some(format!("_COLUMN{column_oid}"));
                     
                     // Check for invalid nonunique rows
@@ -304,11 +333,19 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
                         )?;
                     }
                 },
-                column_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
-                    // Multi-select dropdown (i.e. *-to-* join with table of values)
-
-                    // Pull true value as comma-separated list of integers from main table
-                    select_cmd_cols = format!("{select_cmd_cols}, (SELECT GROUP_CONCAT(CAST(a.VALUE_OID AS TEXT)) AS VALUE FROM TABLE{column_type_oid}_MULTISELECT a WHERE a.ROW_OID = t.OID GROUP BY a.ROW_OID) AS _COLUMN{column_oid}");
+                data_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
+                    select_cols_cmd = format!("{select_cols_cmd}, 
+                        (SELECT 
+                            '[' || GROUP_CONCAT(b.VALUE) || ']' 
+                        FROM TABLE{column_type_oid}_MULTISELECT a 
+                        INNER JOIN TABLE{column_type_oid} b ON b.OID = a.VALUE_OID 
+                        WHERE a.ROW_OID = t.OID GROUP BY a.ROW_OID) AS COLUMN{column_oid},
+                        (SELECT 
+                            GROUP_CONCAT(CAST(b.OID AS TEXT))
+                        FROM TABLE{column_type_oid}_MULTISELECT a 
+                        INNER JOIN TABLE{column_type_oid} b ON b.OID = a.VALUE_OID 
+                        WHERE a.ROW_OID = t.OID GROUP BY a.ROW_OID) AS _COLUMN{column_oid}
+                        ");
                     true_ord = Some(format!("_COLUMN{column_oid}"));
 
                     // Check for invalid nonunique rows
@@ -337,14 +374,35 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
                         )?;
                     }
                 },
-                column_type::MetadataColumnType::ChildTable(_) => {
-                    // Child table
-                    true_ord = None;
-
-                    // Don't even try to enforce uniqueness
+                data_type::MetadataColumnType::Reference(referenced_table_oid) 
+                | data_type::MetadataColumnType::ChildObject(referenced_table_oid) => {
+                    select_cols_cmd = format!("{select_cols_cmd}, COALESCE(t{tbl_count}.DISPLAY_VALUE, CASE WHEN t.COLUMN{column_oid} IS NOT NULL THEN '— DELETED —' ELSE NULL END) AS COLUMN{column_oid}, CAST(t.COLUMN{column_oid} AS TEXT) AS _COLUMN{column_oid}");
+                    select_tbls_cmd = format!("{select_tbls_cmd} LEFT JOIN TABLE{referenced_table_oid}_SURROGATE t{tbl_count} ON t{tbl_count}.OID = t.COLUMN{column_oid}");
+                    tbl_count += 1;
+                    true_ord = Some(format!("_COLUMN{column_oid}"));
+                    
+                    // Check for invalid nonunique rows
+                    if enforce_uniqueness {
+                        let check_nonunique_cmd = format!("
+                            SELECT t.OID FROM TABLE{table_oid} t
+                            INNER JOIN (
+                                SELECT COLUMN{column_oid}, COUNT(OID) AS ROW_COUNT
+                                FROM TABLE{table_oid} 
+                                GROUP BY COLUMN{column_oid} 
+                                HAVING COUNT(OID) > 1
+                            ) a ON a.COLUMN{column_oid} = t.COLUMN{column_oid}
+                        ");
+                        db::query_iterate(trans, &check_nonunique_cmd, [], 
+                            &mut |row| {
+                                invalid_nonunique_oid.insert(row.get(0)?);
+                                return Ok(());
+                            }
+                        )?;
+                    }
                 },
-                _ => {
-                    return Err(error::Error::AdhocError("Unknown column type mode."));
+                data_type::MetadataColumnType::ChildTable(column_type_oid) => {
+                    select_cols_cmd = format!("{select_cols_cmd}, (SELECT '[' || GROUP_CONCAT(a.DISPLAY_VALUE) || ']' FROM TABLE{column_type_oid}_SURROGATE a WHERE a.PARENT_OID = t.OID GROUP BY a.PARENT_OID) AS COLUMN{column_oid}");
+                    true_ord = None;
                 }
             }
 
@@ -364,25 +422,35 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
     )?;
     return Ok((
         format!(
-            "{select_cmd_cols} {select_cmd_tables} {}",
-            if include_row_oid_clause { "WHERE t.OID = ?1" } else { "LIMIT ?1 OFFSET ?2" }
+            "SELECT {select_cols_cmd} {select_tbls_cmd} WHERE t.TRASH = 0 {}",
+            if include_row_oid_clause { 
+                "AND t.OID = ?1"
+            } else if include_parent_row_oid_clause { 
+                "AND t.PARENT_OID = ?1 LIMIT ?1 OFFSET ?2"
+            } else {
+                "LIMIT ?1 OFFSET ?2"
+            }
         ), 
         columns
     ));
 }
 
 /// Sends all cells for the table through a channel.
-pub fn send_table_data(table_oid: i64, page_num: i64, page_size: i64, cell_channel: Channel<Cell>) -> Result<(), error::Error> {
+pub fn send_table_data(table_oid: i64, parent_row_oid: Option<i64>, page_num: i64, page_size: i64, cell_channel: Channel<Cell>) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
-    let (table_select_cmd, columns) = construct_data_query(&trans, table_oid, false)?;
-    
+    let (table_select_cmd, columns) = construct_data_query(&trans, table_oid, false, match parent_row_oid { Some(_) => true, None => false })?;
+    let table_select_cmd_params = match parent_row_oid {
+        Some(o) => params![o.clone(), page_size, page_size * (page_num - 1)],
+        None => params![page_size, page_size * (page_num - 1)]
+    };
+
     println!("{table_select_cmd}");
 
     // Iterate over the results, sending each cell to the frontend
     db::query_iterate(&trans, 
         &table_select_cmd, 
-        params![page_size, page_size * (page_num - 1)], 
+        table_select_cmd_params,
         &mut |row| {
             // Start by sending the index and OID, which are the first and second ordinal respectively
             let row_index: i64 = row.get(0)?;
@@ -446,7 +514,7 @@ pub fn send_table_data(table_oid: i64, page_num: i64, page_size: i64, cell_chann
 pub fn send_table_row(table_oid: i64, row_oid: i64, cell_channel: Channel<RowCell>) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
-    let (table_select_cmd, columns) = construct_data_query(&trans, table_oid, true)?;
+    let (table_select_cmd, columns) = construct_data_query(&trans, table_oid, true, false)?;
 
     // Query for the specified row
     match trans.query_row_and_then(

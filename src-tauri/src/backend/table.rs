@@ -5,7 +5,7 @@ use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
 use rusqlite::{Error as RusqliteError, Row, Transaction, params};
 use serde::Serialize;
 use tauri::ipc::Channel;
-use crate::backend::{column_type, db, table};
+use crate::backend::{data_type, db, table};
 use crate::util::error;
 
 
@@ -14,7 +14,7 @@ use crate::util::error;
 
 
 /// Creates a new table.
-pub fn create(name: String, master_table_oid_list: Vec<i64>) -> Result<i64, error::Error> {
+pub fn create(name: String, master_table_oid_list: &Vec<i64>) -> Result<i64, error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
@@ -55,84 +55,6 @@ pub fn create(name: String, master_table_oid_list: Vec<i64>) -> Result<i64, erro
     return Ok(table_oid);
 }
 
-
-/// Builds a query to select columns from a table.
-pub fn build_table_query(trans: &Transaction, table_oid: i64) -> Result<String, error::Error> {
-    let mut select_cols_cmd: String = String::from("t.OID AS OID, ROW_NUMBER() OVER (ORDER BY t.OID) AS ROW_INDEX");
-    let mut select_tbls_cmd: String = format!("FROM TABLE{table_oid} t");
-    let mut tbl_count: i64 = 1;
-
-    // Iterate over all columns of the table, building up the table's view
-    db::query_iterate(trans, 
-        "SELECT
-            c.OID,
-            c.TYPE_OID,
-            t.MODE
-        FROM METADATA_TABLE_COLUMN c
-        INNER JOIN METADATA_TYPE t ON t.OID = c.TYPE_OID
-        WHERE c.TABLE_OID = ?1 AND c.TRASH = 0
-        ORDER BY c.COLUMN_ORDERING;", 
-        params![table_oid], 
-        &mut |row| {
-            let column_oid: i64 = row.get("OID")?;
-            let column_type: column_type::MetadataColumnType = column_type::MetadataColumnType::from_database(row.get("TYPE_OID")?, row.get("MODE")?);
-            
-            match column_type {
-                column_type::MetadataColumnType::Primitive(prim) => {
-                    match prim {
-                        column_type::Primitive::Any 
-                        | column_type::Primitive::Boolean
-                        | column_type::Primitive::Integer
-                        | column_type::Primitive::Number
-                        | column_type::Primitive::Text
-                        | column_type::Primitive::JSON => {
-                            select_cols_cmd = format!("{select_cols_cmd}, CAST(t.COLUMN{column_oid} AS TEXT) AS COLUMN{column_oid}");
-                        },
-                        column_type::Primitive::Date => {
-                            select_cols_cmd = format!("{select_cols_cmd}, DATE(t.COLUMN{column_oid}, 'unixepoch') AS COLUMN{column_oid}");
-                        },
-                        column_type::Primitive::Timestamp => {
-                            select_cols_cmd = format!("{select_cols_cmd}, STRFTIME('%FT%TZ', t.COLUMN{column_oid}, 'unixepoch') AS COLUMN{column_oid}");
-                        },
-                        column_type::Primitive::File => {
-                            select_cols_cmd = format!("{select_cols_cmd}, CASE WHEN t.COLUMN{column_oid} IS NULL THEN NULL ELSE 'File' END AS COLUMN{column_oid}");
-                        },
-                        column_type::Primitive::Image => {
-                            select_cols_cmd = format!("{select_cols_cmd}, CASE WHEN t.COLUMN{column_oid} IS NULL THEN NULL ELSE 'Thumbnail' END AS COLUMN{column_oid}");
-                        }
-                    }
-                },
-                column_type::MetadataColumnType::SingleSelectDropdown(column_type_oid) => {
-                    select_cols_cmd = format!("{select_cols_cmd}, t{tbl_count}.VALUE AS COLUMN{column_oid}");
-                    select_tbls_cmd = format!("{select_tbls_cmd} LEFT JOIN TABLE{column_type_oid} t{tbl_count} ON t{tbl_count}.OID = t.COLUMN{column_oid}");
-                    tbl_count += 1;
-                },
-                column_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
-                    select_cols_cmd = format!("{select_cols_cmd}, (SELECT '[' || GROUP_CONCAT(b.VALUE) || ']' FROM TABLE{column_type_oid}_MULTISELECT a INNER JOIN TABLE{column_type_oid} b ON b.OID = a.VALUE_OID WHERE a.ROW_OID = t.OID GROUP BY a.ROW_OID) AS COLUMN{column_oid}");
-                },
-                column_type::MetadataColumnType::Reference(referenced_table_oid) 
-                | column_type::MetadataColumnType::ChildObject(referenced_table_oid) => {
-                    select_cols_cmd = format!("{select_cols_cmd}, COALESCE(t{tbl_count}.DISPLAY_VALUE, CASE WHEN t.COLUMN{column_oid} IS NOT NULL THEN '— DELETED —' ELSE NULL END) AS COLUMN{column_oid}");
-                    select_tbls_cmd = format!("{select_tbls_cmd} LEFT JOIN TABLE{referenced_table_oid}_SURROGATE t{tbl_count} ON t{tbl_count}.OID = t.COLUMN{column_oid}");
-                    tbl_count += 1;
-                },
-                column_type::MetadataColumnType::ChildTable(column_type_oid) => {
-                    select_cols_cmd = format!("{select_cols_cmd}, (SELECT '[' || GROUP_CONCAT(a.DISPLAY_VALUE) || ']' FROM TABLE{column_type_oid}_SURROGATE a WHERE a.PARENT_OID = t.OID GROUP BY a.PARENT_OID) AS COLUMN{column_oid}");
-                }
-            }
-            return Ok(());
-        }
-    )?;
-
-    // Create the new surrogate view
-    let select_cmd: String = format!("
-        SELECT
-            {select_cols_cmd} 
-        {select_tbls_cmd}
-        WHERE t.TRASH = 0"
-    );
-    return Ok(select_cmd);
-}
 
 
 
@@ -263,46 +185,46 @@ fn create_surrogate_view(trans: &Transaction, table_oid: i64) -> Result<(), erro
                     return Err(error::Error::AdhocError("Couldn't serialize a String, for some reason."));
                 }
             };
-            let column_type: column_type::MetadataColumnType = column_type::MetadataColumnType::from_database(row.get("TYPE_OID")?, row.get("MODE")?);
+            let column_type: data_type::MetadataColumnType = data_type::MetadataColumnType::from_database(row.get("TYPE_OID")?, row.get("MODE")?);
             
             match column_type {
-                column_type::MetadataColumnType::Primitive(prim) => {
+                data_type::MetadataColumnType::Primitive(prim) => {
                     match prim {
-                        column_type::Primitive::Boolean => {
+                        data_type::Primitive::Boolean => {
                             select_display_value.push(PrimaryKey {
                                 single_expr: format!("CASE WHEN t.COLUMN{column_oid} = 1 THEN 'True' ELSE 'False' END"),
                                 json_expr: format!("'{json_column_name}: ' || CASE WHEN t.COLUMN{column_oid} = 1 THEN 'true' ELSE 'false' END")
                             });
                         },
-                        column_type::Primitive::Text => {
+                        data_type::Primitive::Text => {
                             select_display_value.push(PrimaryKey {
                                 single_expr: format!("t.COLUMN{column_oid}"),
                                 json_expr: format!("'{json_column_name}: ' || CASE WHEN t.COLUMN{column_oid} IS NOT NULL THEN '\"' || t.COLUMN{column_oid} || '\"' ELSE 'null' END")
                             });
                         },
-                        column_type::Primitive::Any 
-                        | column_type::Primitive::Integer
-                        | column_type::Primitive::Number
-                        | column_type::Primitive::JSON => {
+                        data_type::Primitive::Any 
+                        | data_type::Primitive::Integer
+                        | data_type::Primitive::Number
+                        | data_type::Primitive::JSON => {
                             select_display_value.push(PrimaryKey { 
                                 single_expr: format!("CAST(t.COLUMN{column_oid} AS TEXT)"), 
                                 json_expr: format!("'{json_column_name}: ' || CASE WHEN t.COLUMN{column_oid} IS NOT NULL THEN CAST(t.COLUMN{column_oid} AS TEXT) ELSE 'null' END")
                             });
                         },
-                        column_type::Primitive::Date => {
+                        data_type::Primitive::Date => {
                             select_display_value.push(PrimaryKey { 
                                 single_expr: format!("DATE(t.COLUMN{column_oid}, 'unixepoch')"), 
                                 json_expr: format!("'{json_column_name}: ' || CASE WHEN t.COLUMN{column_oid} IS NOT NULL THEN '\"' || DATE(t.COLUMN{column_oid}, 'unixepoch') || '\"' ELSE 'null' END") 
                             });
                         },
-                        column_type::Primitive::Timestamp => {
+                        data_type::Primitive::Timestamp => {
                             select_display_value.push(PrimaryKey { 
                                 single_expr: format!("STRFTIME('%FT%TZ', t.COLUMN{column_oid}, 'unixepoch')"), 
                                 json_expr: format!("'{json_column_name}: ' || CASE WHEN t.COLUMN{column_oid} IS NOT NULL THEN '\"' || STRFTIME('%FT%TZ', t.COLUMN{column_oid}, 'unixepoch') || '\"' ELSE 'null' END") 
                             });
                         },
-                        column_type::Primitive::File 
-                        | column_type::Primitive::Image => {
+                        data_type::Primitive::File 
+                        | data_type::Primitive::Image => {
                             select_display_value.push(PrimaryKey {
                                 single_expr: format!("CASE WHEN t.COLUMN{column_oid} IS NULL THEN NULL ELSE '{{}}' END"),
                                 json_expr: format!("'{json_column_name}: ' || CASE WHEN t.COLUMN{column_oid} IS NOT NULL THEN '{{}}' ELSE 'null' END")
@@ -310,7 +232,7 @@ fn create_surrogate_view(trans: &Transaction, table_oid: i64) -> Result<(), erro
                         }
                     }
                 },
-                column_type::MetadataColumnType::SingleSelectDropdown(column_type_oid) => {
+                data_type::MetadataColumnType::SingleSelectDropdown(column_type_oid) => {
                     select_display_value.push(PrimaryKey {
                         single_expr: format!("t{tbl_count}.VALUE"),
                         json_expr: format!("'{json_column_name}: ' || CASE WHEN t.COLUMN{column_oid} IS NOT NULL THEN '\"' || t{tbl_count}.VALUE || '\"' ELSE 'null' END")
@@ -318,14 +240,14 @@ fn create_surrogate_view(trans: &Transaction, table_oid: i64) -> Result<(), erro
                     select_tbls_cmd = format!("{select_tbls_cmd} LEFT JOIN TABLE{column_type_oid} t{tbl_count} ON t{tbl_count}.OID = t.COLUMN{column_oid}");
                     tbl_count += 1;
                 },
-                column_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
+                data_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
                     select_display_value.push(PrimaryKey {
                         single_expr: format!("(SELECT '[' || GROUP_CONCAT(b.VALUE) || ']' FROM TABLE{column_type_oid}_MULTISELECT a INNER JOIN TABLE{column_type_oid} b ON b.OID = a.VALUE_OID WHERE a.ROW_OID = t.OID GROUP BY a.ROW_OID)"),
                         json_expr: format!("'{json_column_name}: ' || COALESCE('[' || (SELECT GROUP_CONCAT(b.VALUE) FROM TABLE{column_type_oid}_MULTISELECT a INNER JOIN TABLE{column_type_oid} b ON b.OID = a.VALUE_OID WHERE a.ROW_OID = t.OID GROUP BY a.ROW_OID) || ']', 'null')")
                     });
                 },
-                column_type::MetadataColumnType::Reference(referenced_table_oid) 
-                | column_type::MetadataColumnType::ChildObject(referenced_table_oid) => {
+                data_type::MetadataColumnType::Reference(referenced_table_oid) 
+                | data_type::MetadataColumnType::ChildObject(referenced_table_oid) => {
                     select_display_value.push(PrimaryKey {
                         single_expr: format!("t{tbl_count}.DISPLAY_VALUE"),
                         json_expr: format!("'{json_column_name}: ' || t{tbl_count}.JSON_DISPLAY_VALUE")
@@ -333,7 +255,7 @@ fn create_surrogate_view(trans: &Transaction, table_oid: i64) -> Result<(), erro
                     select_tbls_cmd = format!("{select_tbls_cmd} LEFT JOIN TABLE{referenced_table_oid}_SURROGATE t{tbl_count} ON t{tbl_count}.OID = t.COLUMN{column_oid}");
                     tbl_count += 1;
                 },
-                column_type::MetadataColumnType::ChildTable(column_type_oid) => {
+                data_type::MetadataColumnType::ChildTable(column_type_oid) => {
                     select_display_value.push(PrimaryKey {
                         single_expr: format!("'[' || (SELECT GROUP_CONCAT(a.DISPLAY_VALUE) FROM TABLE{column_type_oid}_SURROGATE a WHERE a.PARENT_OID = t.OID GROUP BY a.PARENT_OID) || ']'"),
                         json_expr: format!("'{json_column_name}: [' || (SELECT GROUP_CONCAT(a.JSON_DISPLAY_VALUE) FROM TABLE{column_type_oid}_SURROGATE a WHERE a.PARENT_OID = t.OID GROUP BY a.PARENT_OID) || ']'")
@@ -437,24 +359,10 @@ pub fn delete(table_oid: i64) -> Result<(), error::Error> {
     }
 
     // Drop any of the table's single-select dropdown value tables
-    for child_table_oid_result in trans.prepare("SELECT t.OID FROM METADATA_TABLE_COLUMN c INNER JOIN METADATA_TYPE t ON t.OID = c.TYPE_OID WHERE c.TABLE_OID = ?1 AND t.MODE = 2")?
-        .query_and_then(
-            params![table_oid], |row| row.get::<_, i64>("OID")
-        )? {
-        
-        // Extract the OID of the child table
-        let child_table_oid = child_table_oid_result?;
+    // TODO
 
-        // Drop the child table's data
-        let drop_child_cmd = format!("DROP TABLE IF EXISTS TABLE{child_table_oid};");
-        trans.execute(&drop_child_cmd, [])?;
-
-        // Drop the child table from metadata
-        trans.execute(
-            "DELETE FROM METADATA_TYPE WHERE OID = ?1;",
-            params![child_table_oid]
-        )?;
-    }
+    // Drop any of the table's multi-select dropdown value tables
+    // TODO
 
     // Finally, drop the table's metadata
     trans.execute(
@@ -489,8 +397,7 @@ pub fn get_metadata(table_oid: &i64) -> Result<BasicMetadata, error::Error> {
     )?;
     return Ok(BasicMetadata {
         oid: table_oid.clone(),
-        name: table_name,
-        hierarchy_level: 0
+        name: table_name
     });
 }
 /// Sends a list of tables through the provided channel.

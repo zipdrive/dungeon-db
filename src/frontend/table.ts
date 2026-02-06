@@ -16,6 +16,8 @@ console.debug(`table.html page loaded with table_oid=${urlParamTableOid ?? 'NULL
 if (urlParamTableOid) {
 
   const tableOid: number = parseInt(urlParamTableOid);
+  const urlParamParentRowOid = urlParams.get('parent_oid');
+  const parentRowOid: number | null = urlParamParentRowOid ? parseInt(urlParamParentRowOid) : null;
   const urlParamTablePageNum = urlParams.get('page_num') ?? '1';
   const pageNum = parseInt(urlParamTablePageNum);
   const urlParamTablePageSize = urlParams.get('page_size') ?? '1000';
@@ -104,6 +106,11 @@ if (urlParamTableOid) {
   async function refreshTableAsync() {
     console.debug("Now refreshing the entire contents of the table.");
 
+    let headNode: HTMLHeadElement | null = document.querySelector('head');
+    let tableColStyleNode: HTMLStyleElement = document.createElement('style');
+    tableColStyleNode.type = 'text/css';
+    headNode?.appendChild(tableColStyleNode);
+
     // Strip the former contents of the table
     let tableNode: HTMLTableElement | null = document.querySelector('#table-content');
     if (tableNode)
@@ -124,11 +131,16 @@ if (urlParamTableOid) {
       // Add a header for the column
       let tableHeaderNode: HTMLElement | null = document.createElement('th');
       if (tableHeaderNode != null) {
+        // Create a style class for the column
+        tableColStyleNode.insertAdjacentHTML('beforeend', `.table-content-column${columnOid} { ${column.columnStyle} } `);
+
+        // Apply the style class to cells in that column
         let tableColNode: HTMLElement = document.createElement('col');
         tableColNode.setAttribute('span', '1');
-        tableColNode.setAttribute('style', column.columnStyle);
+        tableColNode.classList.add(`table-content-column${columnOid}`);
         tableColgroupNode?.insertAdjacentElement('beforeend', tableColNode);
 
+        // Add a label to the column header
         tableHeaderNode.innerText = column.name;
         tableHeaderRowNode?.insertAdjacentElement('beforeend', tableHeaderNode);
 
@@ -264,6 +276,7 @@ if (urlParamTableOid) {
       invokeAction: "get_table_data",
       invokeParams: {
         tableOid: tableOid, 
+        parentRowOid: parentRowOid,
         pageNum: pageNum,
         pageSize: pageSize,
         cellChannel: onReceiveCell 

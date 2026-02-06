@@ -129,17 +129,17 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
             ON DELETE SET DEFAULT
     );
 
-    -- METADATA_RPT_PARAMETER__RELATION
-    CREATE TABLE METADATA_RPT_PARAMETER__RELATION (
+    -- METADATA_RPT_PARAMETER__REFERENCED stores adhoc parameters that link a row of a base table to a column in another table through some form of reference
+    CREATE TABLE METADATA_RPT_PARAMETER__REFERENCED (
         RPT_PARAMETER_OID INTEGER PRIMARY KEY REFERENCES METADATA_RPT_PARAMETER (OID)
+            ON UPDATE CASCADE
+            ON DELETE CASCADE,
+        REFERENCED_THROUGH_PARAMETER_OID INTEGER NOT NULL REFERENCES METADATA_RPT_PARAMETER (OID) 
             ON UPDATE CASCADE
             ON DELETE CASCADE,
         COLUMN_OID INTEGER NOT NULL REFERENCES METADATA_TABLE_COLUMN (OID)
             ON UPDATE CASCADE
-            ON DELETE CASCADE,
-        LINKED_RPT_PARAMETER_OID INTEGER REFERENCES METADATA_RPT_PARAMETER (OID) 
-            ON UPDATE CASCADE
-            ON DELETE CASCADE 
+            ON DELETE CASCADE
     );
 
     -- METADATA_RPT stores all user-defined reports
@@ -149,10 +149,13 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
     );
     -- METADATA_RPT__REPORT stores all user-defined reports
     CREATE TABLE METADATA_RPT__REPORT (
-        RPT_OID INTEGER PRIMARY KEY,
+        RPT_OID INTEGER PRIMARY KEY REFERENCES METADATA_RPT (OID)
+            ON UPDATE CASCADE
+            ON DELETE CASCADE,
         BASE_TABLE_OID INTEGER NOT NULL REFERENCES METADATA_TABLE (TYPE_OID)
             ON UPDATE CASCADE
-            ON DELETE CASCADE
+            ON DELETE CASCADE,
+        NAME TEXT NOT NULL
     );
 
     -- METADATA_RPT_COLUMN stores all columns of user-defined reports
@@ -180,7 +183,7 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
             ON DELETE CASCADE,
         RPT_OID INTEGER NOT NULL REFERENCES METADATA_RPT (OID)
             ON UPDATE CASCADE,
-        RPT_PARAMETER__RELATED_TABLE__OID INTEGER NOT NULL REFERENCES METADATA_RPT_PARAMETER__RELATED_TABLE (OID)
+        RPT_PARAMETER__REFERENCED__OID INTEGER NOT NULL REFERENCES METADATA_RPT_PARAMETER__REFERENCED (OID)
             ON UPDATE CASCADE
     );
     

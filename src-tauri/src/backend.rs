@@ -1,8 +1,12 @@
 mod db;
+mod data_type;
 mod table;
-mod column_type;
-mod column;
+mod table_column;
 mod table_data;
+mod report;
+mod report_column;
+mod report_data;
+mod obj_type;
 use std::sync::Mutex;
 use serde::{Serialize, Deserialize};
 use tauri::menu::{ContextMenu, Menu, MenuItem, MenuBuilder};
@@ -15,7 +19,8 @@ use crate::util::error;
 #[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum Action {
     CreateTable {
-        table_name: String 
+        table_name: String,
+        master_table_oid_list: Vec<i64>
     },
     DeleteTable {
         table_oid: i64 
@@ -23,10 +28,30 @@ pub enum Action {
     RestoreDeletedTable {
         table_oid: i64
     },
+    CreateReport {
+        report_name: String,
+        base_table_oid: i64
+    },
+    DeleteReport {
+        report_oid: i64
+    },
+    RestoreDeletedReport {
+        report_oid: i64 
+    },
+    CreateObjectType {
+        obj_type_name: String,
+        master_table_oid_list: Vec<i64>
+    },
+    DeleteObjectType {
+        obj_type_oid: i64 
+    },
+    RestoreDeletedObjectType {
+        obj_type_oid: i64
+    },
     CreateTableColumn {
         table_oid: i64, 
         column_name: String, 
-        column_type: column_type::MetadataColumnType, 
+        column_type: data_type::MetadataColumnType, 
         column_ordering: Option<i64>, 
         column_style: String, 
         is_nullable: bool, 
@@ -37,7 +62,7 @@ pub enum Action {
         table_oid: i64, 
         column_oid: i64,
         column_name: String, 
-        column_type: column_type::MetadataColumnType, 
+        column_type: data_type::MetadataColumnType, 
         column_style: String, 
         is_nullable: bool, 
         is_unique: bool, 
@@ -51,7 +76,7 @@ pub enum Action {
     EditTableColumnDropdownValues {
         table_oid: i64,
         column_oid: i64,
-        dropdown_values: Vec<column::DropdownValue>
+        dropdown_values: Vec<table_column::DropdownValue>
     },
     DeleteTableColumn {
         table_oid: i64,
@@ -90,8 +115,8 @@ static FORWARD_STACK: Mutex<Vec<Action>> = Mutex::new(Vec::new());
 impl Action {
     fn execute(&self, app: &AppHandle, is_forward: bool) -> Result<(), error::Error> {
         match self {
-            Self::CreateTable { table_name } => {
-                match table::create(table_name.clone()) {
+            Self::CreateTable { table_name, master_table_oid_list } => {
+                match table::create(table_name.clone(), master_table_oid_list) {
                     Ok(table_oid) => {
                         let mut reverse_stack = if is_forward {
                             REVERSE_STACK.lock().unwrap() 
@@ -102,7 +127,6 @@ impl Action {
                             table_oid: table_oid
                         });
                         msg_update_table_list(app);
-                        msg_update_table_data(app, table_oid.clone());
                     },
                     Err(e) => {
                         return Err(e);
@@ -145,6 +169,114 @@ impl Action {
                     }
                 }
             },
+            Self::CreateReport { report_name, base_table_oid } => {
+                match report::create(&report_name, base_table_oid.clone()) {
+                    Ok(report_oid) => {
+                        let mut reverse_stack = if is_forward {
+                            REVERSE_STACK.lock().unwrap() 
+                        } else { 
+                            FORWARD_STACK.lock().unwrap() 
+                        };
+                        (*reverse_stack).push(Self::DeleteReport { 
+                            report_oid: report_oid
+                        });
+                        msg_update_report_list(app);
+                    },
+                    Err(e) => {
+                        return Err(e);
+                    }
+                }
+            },
+            Self::DeleteReport { report_oid } => {
+                match report::move_trash(report_oid.clone()) {
+                    Ok(_) => {
+                        let mut reverse_stack = if is_forward {
+                            REVERSE_STACK.lock().unwrap() 
+                        } else { 
+                            FORWARD_STACK.lock().unwrap() 
+                        };
+                        (*reverse_stack).push(Self::RestoreDeletedReport { 
+                            report_oid: report_oid.clone() 
+                        });
+                        msg_update_report_list(app);
+                    },
+                    Err(e) => {
+                        return Err(e);
+                    }
+                }
+            },
+            Self::RestoreDeletedReport { report_oid } => {
+                match report::unmove_trash(report_oid.clone()) {
+                    Ok(_) => {
+                        let mut reverse_stack = if is_forward {
+                            REVERSE_STACK.lock().unwrap() 
+                        } else { 
+                            FORWARD_STACK.lock().unwrap() 
+                        };
+                        (*reverse_stack).push(Self::DeleteReport { 
+                            report_oid: report_oid.clone() 
+                        });
+                        msg_update_report_list(app);
+                    },
+                    Err(e) => {
+                        return Err(e);
+                    }
+                }
+            },
+            Self::CreateObjectType { obj_type_name, master_table_oid_list } => {
+                match obj_type::create(obj_type_name.clone(), master_table_oid_list) {
+                    Ok(table_oid) => {
+                        let mut reverse_stack = if is_forward {
+                            REVERSE_STACK.lock().unwrap() 
+                        } else { 
+                            FORWARD_STACK.lock().unwrap() 
+                        };
+                        (*reverse_stack).push(Self::DeleteTable { 
+                            table_oid: table_oid
+                        });
+                        msg_update_obj_type_list(app);
+                    },
+                    Err(e) => {
+                        return Err(e);
+                    }
+                }
+            },
+            Self::DeleteObjectType { obj_type_oid } => {
+                match table::move_trash(obj_type_oid.clone()) {
+                    Ok(_) => {
+                        let mut reverse_stack = if is_forward {
+                            REVERSE_STACK.lock().unwrap() 
+                        } else { 
+                            FORWARD_STACK.lock().unwrap() 
+                        };
+                        (*reverse_stack).push(Self::RestoreDeletedObjectType { 
+                            obj_type_oid: obj_type_oid.clone() 
+                        });
+                        msg_update_obj_type_list(app);
+                    },
+                    Err(e) => {
+                        return Err(e);
+                    }
+                }
+            },
+            Self::RestoreDeletedObjectType { obj_type_oid } => {
+                match table::unmove_trash(obj_type_oid.clone()) {
+                    Ok(_) => {
+                        let mut reverse_stack = if is_forward {
+                            REVERSE_STACK.lock().unwrap() 
+                        } else { 
+                            FORWARD_STACK.lock().unwrap() 
+                        };
+                        (*reverse_stack).push(Self::DeleteObjectType { 
+                            obj_type_oid: obj_type_oid.clone() 
+                        });
+                        msg_update_obj_type_list(app);
+                    },
+                    Err(e) => {
+                        return Err(e);
+                    }
+                }
+            },
             Self::CreateTableColumn { 
                 table_oid, 
                 column_name, 
@@ -155,7 +287,7 @@ impl Action {
                 is_unique, 
                 is_primary_key } => {
                 
-                match column::create(
+                match table_column::create(
                     table_oid.clone(), 
                     column_name, 
                     column_type.clone(), 
@@ -192,7 +324,7 @@ impl Action {
                 is_unique, 
                 is_primary_key } => {
 
-                match column::edit(
+                match table_column::edit(
                     table_oid.clone(),
                     column_oid.clone(), 
                     column_name, 
@@ -226,8 +358,8 @@ impl Action {
                 }
             },
             Self::EditTableColumnDropdownValues { table_oid, column_oid, dropdown_values } => {
-                let prior_dropdown_values: Vec<column::DropdownValue> = column::get_table_column_dropdown_values(column_oid.clone())?;
-                match column::set_table_column_dropdown_values(column_oid.clone(), dropdown_values.clone()) {
+                let prior_dropdown_values: Vec<table_column::DropdownValue> = table_column::get_table_column_dropdown_values(column_oid.clone())?;
+                match table_column::set_table_column_dropdown_values(column_oid.clone(), dropdown_values.clone()) {
                     Ok(_) => {
                         let mut reverse_stack = if is_forward {
                             REVERSE_STACK.lock().unwrap() 
@@ -247,7 +379,7 @@ impl Action {
                 }
             },
             Self::DeleteTableColumn { table_oid, column_oid } => {
-                match column::move_trash(table_oid.clone(), column_oid.clone()) {
+                match table_column::move_trash(table_oid.clone(), column_oid.clone()) {
                     Ok(_) => {
                         let mut reverse_stack = if is_forward {
                             REVERSE_STACK.lock().unwrap() 
@@ -266,7 +398,7 @@ impl Action {
                 }
             },
             Self::RestoreDeletedTableColumn { table_oid, column_oid } => {
-                match column::unmove_trash(table_oid.clone(), column_oid.clone()) {
+                match table_column::unmove_trash(table_oid.clone(), column_oid.clone()) {
                     Ok(_) => {
                         let mut reverse_stack = if is_forward {
                             REVERSE_STACK.lock().unwrap() 
@@ -403,6 +535,16 @@ fn msg_update_table_list(app: &AppHandle) {
     app.emit("update-table-list", ()).unwrap();
 }
 
+/// Sends a message to the frontend that the list of reports needs to be updated.
+fn msg_update_report_list(app: &AppHandle) {
+    app.emit("update-report-list", ()).unwrap();
+}
+
+/// Sends a message to the frontend that the list of object types needs to be updated.
+fn msg_update_obj_type_list(app: &AppHandle) {
+    app.emit("update-object-type-list", ()).unwrap();
+}
+
 /// Sends a message to the frontend that the currently-displayed table needs to be refreshed.
 fn msg_update_table_data(app: &AppHandle, table_oid: i64) {
     app.emit("update-table-data", table_oid).unwrap();
@@ -520,42 +662,42 @@ pub fn get_object_type_list(object_type_channel: Channel<obj_type::BasicMetadata
 
 #[tauri::command]
 /// Get the metadata for a particular column in a table.
-pub fn get_table_column(column_oid: i64) -> Result<Option<column::Metadata>, error::Error> {
-    return column::get_metadata(column_oid);
+pub fn get_table_column(column_oid: i64) -> Result<Option<table_column::Metadata>, error::Error> {
+    return table_column::get_metadata(column_oid);
 }
 
 #[tauri::command]
 /// Send possible dropdown values for a column.
-pub fn get_table_column_dropdown_values(column_oid: i64, dropdown_value_channel: Channel<column::DropdownValue>) -> Result<(), error::Error> {
+pub fn get_table_column_dropdown_values(column_oid: i64, dropdown_value_channel: Channel<table_column::DropdownValue>) -> Result<(), error::Error> {
     // Use channel to send DropdownValue objects
-    column::send_table_column_dropdown_values(column_oid, dropdown_value_channel)?;
+    table_column::send_table_column_dropdown_values(column_oid, dropdown_value_channel)?;
     return Ok(());
 }
 
 #[tauri::command] 
 /// Send possible tables to be referenced.
-pub fn get_table_column_reference_values(reference_type_channel: Channel<column::BasicTypeMetadata>) -> Result<(), error::Error> {
-    column::send_type_metadata_list(column_type::MetadataColumnType::Reference(0), reference_type_channel)?;
+pub fn get_table_column_reference_values(reference_type_channel: Channel<table_column::BasicTypeMetadata>) -> Result<(), error::Error> {
+    table_column::send_type_metadata_list(data_type::MetadataColumnType::Reference(0), reference_type_channel)?;
     return Ok(());
 }
 
 #[tauri::command] 
 /// Send possible global data types for an object.
-pub fn get_table_column_object_values(object_type_channel: Channel<column::BasicTypeMetadata>) -> Result<(), error::Error> {
-    column::send_type_metadata_list(column_type::MetadataColumnType::ChildObject(0), object_type_channel)?;
+pub fn get_table_column_object_values(object_type_channel: Channel<table_column::BasicTypeMetadata>) -> Result<(), error::Error> {
+    table_column::send_type_metadata_list(data_type::MetadataColumnType::ChildObject(0), object_type_channel)?;
     return Ok(());
 }
 
 #[tauri::command]
-pub fn get_table_column_list(table_oid: i64, column_channel: Channel<column::Metadata>) -> Result<(), error::Error> {
+pub fn get_table_column_list(table_oid: i64, column_channel: Channel<table_column::Metadata>) -> Result<(), error::Error> {
     // Use channel to send BasicMetadata objects
-    column::send_metadata_list(table_oid, column_channel)?;
+    table_column::send_metadata_list(table_oid, column_channel)?;
     return Ok(());
 }
 
 #[tauri::command]
-pub fn get_table_data(table_oid: i64, page_num: i64, page_size: i64, cell_channel: Channel<table_data::Cell>) -> Result<(), error::Error> {
-    table_data::send_table_data(table_oid, page_num, page_size, cell_channel)?;
+pub fn get_table_data(table_oid: i64, parent_row_oid: Option<i64>, page_num: i64, page_size: i64, cell_channel: Channel<table_data::Cell>) -> Result<(), error::Error> {
+    table_data::send_table_data(table_oid, parent_row_oid, page_num, page_size, cell_channel)?;
     return Ok(());
 }
 

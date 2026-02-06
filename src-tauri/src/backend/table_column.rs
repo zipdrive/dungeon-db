@@ -5,7 +5,7 @@ use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
 use rusqlite::{params, Row, Error as RusqliteError, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
-use crate::backend::{column_type, db, table};
+use crate::backend::{data_type, db, table};
 use crate::util::error;
 
 
@@ -17,14 +17,14 @@ pub struct Metadata {
     name: String,
     column_ordering: i64,
     column_style: String,
-    column_type: column_type::MetadataColumnType,
+    column_type: data_type::MetadataColumnType,
     is_nullable: bool,
     is_unique: bool,
     is_primary_key: bool,
 }
 
 /// Creates a new column in a table.
-pub fn create(table_oid: i64, column_name: &str, column_type: column_type::MetadataColumnType, column_ordering: Option<i64>, column_style: &str, is_nullable: bool, is_unique: bool, is_primary_key: bool) -> Result<i64, error::Error> {
+pub fn create(table_oid: i64, column_name: &str, column_type: data_type::MetadataColumnType, column_ordering: Option<i64>, column_style: &str, is_nullable: bool, is_unique: bool, is_primary_key: bool) -> Result<i64, error::Error> {
     let is_nullable_bit = if is_nullable { 1 } else { 0 };
     let is_unique_bit = if is_unique { 1 } else { 0 };
     let is_primary_key_bit = if is_primary_key { 1 } else { 0 };
@@ -53,7 +53,7 @@ pub fn create(table_oid: i64, column_name: &str, column_type: column_type::Metad
 
     let column_type = column_type.create_for_table(&trans, &table_oid)?;
     match &column_type {
-        column_type::MetadataColumnType::Primitive(prim) => {
+        data_type::MetadataColumnType::Primitive(prim) => {
             // Add the column to the table's metadata
             trans.execute(
                 "INSERT INTO METADATA_TABLE_COLUMN (TABLE_OID, NAME,TYPE_OID, COLUMN_ORDERING, COLUMN_CSS_STYLE, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);",
@@ -73,9 +73,9 @@ pub fn create(table_oid: i64, column_name: &str, column_type: column_type::Metad
             trans.commit()?;
             return Ok(column_oid);
         },
-        column_type::MetadataColumnType::SingleSelectDropdown(referenced_table_oid)
-        | column_type::MetadataColumnType::Reference(referenced_table_oid)
-        | column_type::MetadataColumnType::ChildObject(referenced_table_oid) => {
+        data_type::MetadataColumnType::SingleSelectDropdown(referenced_table_oid)
+        | data_type::MetadataColumnType::Reference(referenced_table_oid)
+        | data_type::MetadataColumnType::ChildObject(referenced_table_oid) => {
             // Add the column to the table's metadata
             trans.execute(
                 "INSERT INTO METADATA_TABLE_COLUMN (TABLE_OID, NAME,TYPE_OID, COLUMN_ORDERING, COLUMN_CSS_STYLE, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);",
@@ -94,8 +94,8 @@ pub fn create(table_oid: i64, column_name: &str, column_type: column_type::Metad
             trans.commit()?;
             return Ok(column_oid);
         },
-        column_type::MetadataColumnType::MultiSelectDropdown(column_type_oid)
-        | column_type::MetadataColumnType::ChildTable(column_type_oid) => {
+        data_type::MetadataColumnType::MultiSelectDropdown(column_type_oid)
+        | data_type::MetadataColumnType::ChildTable(column_type_oid) => {
             // Add the column to the table's metadata
             trans.execute(
                 "INSERT INTO METADATA_TABLE_COLUMN (TABLE_OID, NAME,TYPE_OID, COLUMN_ORDERING, COLUMN_CSS_STYLE, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);",
@@ -114,7 +114,7 @@ pub fn create(table_oid: i64, column_name: &str, column_type: column_type::Metad
 }
 
 /// Edits a column's metadata and/or type.
-pub fn edit(table_oid: i64, column_oid: i64, column_name: &str, column_type: column_type::MetadataColumnType, column_style: &str, is_nullable: bool, is_unique: bool, is_primary_key: bool) -> Result<Option<i64>, error::Error> {
+pub fn edit(table_oid: i64, column_oid: i64, column_name: &str, column_type: data_type::MetadataColumnType, column_style: &str, is_nullable: bool, is_unique: bool, is_primary_key: bool) -> Result<Option<i64>, error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
@@ -162,7 +162,7 @@ pub fn edit(table_oid: i64, column_oid: i64, column_name: &str, column_type: col
         WHERE c.OID = ?1;", 
         params![column_oid], 
         |row| {
-            let prior_column_type = column_type::MetadataColumnType::from_database(row.get(0)?, row.get(1)?);
+            let prior_column_type = data_type::MetadataColumnType::from_database(row.get(0)?, row.get(1)?);
             let table_oid: i64 = row.get(2)?;
             return Ok((prior_column_type, table_oid));
         }
@@ -188,9 +188,9 @@ pub fn edit(table_oid: i64, column_oid: i64, column_name: &str, column_type: col
 
                 // Start by deconstructing any tables and dropping any columns for the previous type
                 match prior_column_type {
-                    column_type::MetadataColumnType::Primitive(_)
-                    | column_type::MetadataColumnType::Reference(_)
-                    | column_type::MetadataColumnType::ChildObject(_)  => {
+                    data_type::MetadataColumnType::Primitive(_)
+                    | data_type::MetadataColumnType::Reference(_)
+                    | data_type::MetadataColumnType::ChildObject(_)  => {
                         // Create temporary table to hold prior data
                         let create_temp_cmd = format!("CREATE TABLE TRANS_COLUMN{trash_column_oid} AS SELECT OID, COLUMN{column_oid} AS VALUE FROM TABLE{table_oid};");
                         trans.execute(&create_temp_cmd, [])?;
@@ -200,7 +200,7 @@ pub fn edit(table_oid: i64, column_oid: i64, column_name: &str, column_type: col
                         let alter_cmd = format!("ALTER TABLE TABLE{table_oid} DROP COLUMN COLUMN{column_oid};");
                         trans.execute(&alter_cmd, [])?;
                     },
-                    column_type::MetadataColumnType::SingleSelectDropdown(column_type_oid) => {
+                    data_type::MetadataColumnType::SingleSelectDropdown(column_type_oid) => {
                         // Create temporary table to hold prior data
                         let create_temp_cmd = format!("CREATE TABLE TRANS_COLUMN{trash_column_oid} AS SELECT OID, COLUMN{column_oid} AS VALUE FROM TABLE{table_oid};");
                         trans.execute(&create_temp_cmd, [])?;
@@ -220,7 +220,7 @@ pub fn edit(table_oid: i64, column_oid: i64, column_name: &str, column_type: col
                             params![column_type_oid]
                         )?;
                     },
-                    column_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
+                    data_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
                         // Do not create a temporary table
                         trans_table_created = false;
 
@@ -238,7 +238,7 @@ pub fn edit(table_oid: i64, column_oid: i64, column_name: &str, column_type: col
                             params![column_type_oid]
                         )?;
                     },
-                    column_type::MetadataColumnType::ChildTable(column_type_oid) => {
+                    data_type::MetadataColumnType::ChildTable(column_type_oid) => {
                         // Do not create a temporary table
                         trans_table_created = false;
 
@@ -268,7 +268,7 @@ pub fn edit(table_oid: i64, column_oid: i64, column_name: &str, column_type: col
                 // Then construct any tables/columns for the new type, and upload data if applicable
                 let column_type = column_type.create_for_table(&trans, &table_oid)?;
                 match column_type {
-                    column_type::MetadataColumnType::Primitive(prim) => {
+                    data_type::MetadataColumnType::Primitive(prim) => {
                         // Add the column to the table
                         let sqlite_type = prim.get_sqlite_type();
                         let alter_table_cmd = format!("ALTER TABLE TABLE{table_oid} ADD COLUMN COLUMN{column_oid} {sqlite_type};");
@@ -285,9 +285,9 @@ pub fn edit(table_oid: i64, column_oid: i64, column_name: &str, column_type: col
                             trans.execute(&copy_cmd, [])?;
                         }
                     },
-                    column_type::MetadataColumnType::SingleSelectDropdown(referenced_table_oid)
-                    | column_type::MetadataColumnType::Reference(referenced_table_oid)
-                    | column_type::MetadataColumnType::ChildObject(referenced_table_oid) => {
+                    data_type::MetadataColumnType::SingleSelectDropdown(referenced_table_oid)
+                    | data_type::MetadataColumnType::Reference(referenced_table_oid)
+                    | data_type::MetadataColumnType::ChildObject(referenced_table_oid) => {
                         // Update the table's metadata with the newly-constructed type
                         trans.execute(
                             "UPDATE METADATA_TABLE_COLUMN
@@ -312,8 +312,8 @@ pub fn edit(table_oid: i64, column_oid: i64, column_name: &str, column_type: col
                             trans.execute(&copy_cmd, [])?;
                         }
                     },
-                    column_type::MetadataColumnType::MultiSelectDropdown(column_type_oid)
-                    | column_type::MetadataColumnType::ChildTable(column_type_oid) => {
+                    data_type::MetadataColumnType::MultiSelectDropdown(column_type_oid)
+                    | data_type::MetadataColumnType::ChildTable(column_type_oid) => {
                         // Update the table's metadata with the newly-constructed type
                         trans.execute(
                             "UPDATE METADATA_TABLE_COLUMN
@@ -388,15 +388,15 @@ pub fn delete(column_oid: i64) -> Result<(), error::Error> {
         |row| {
             return Ok((
                 row.get::<_, i64>(2)?,
-                column_type::MetadataColumnType::from_database(row.get(0)?, row.get(1)?)
+                data_type::MetadataColumnType::from_database(row.get(0)?, row.get(1)?)
             ));
         }
     ).optional()? {
         Some((table_oid, column_type)) => {
             match column_type {
-                column_type::MetadataColumnType::Primitive(_)
-                | column_type::MetadataColumnType::Reference(_)
-                | column_type::MetadataColumnType::ChildObject(_)  => {
+                data_type::MetadataColumnType::Primitive(_)
+                | data_type::MetadataColumnType::Reference(_)
+                | data_type::MetadataColumnType::ChildObject(_)  => {
                     // Delete the column from the data
                     let alter_cmd = format!("ALTER TABLE TABLE{table_oid} DROP COLUMN COLUMN{column_oid};");
                     trans.execute(&alter_cmd, [])?;
@@ -409,7 +409,7 @@ pub fn delete(column_oid: i64) -> Result<(), error::Error> {
                     trans.commit()?;
                     return Ok(());
                 },
-                column_type::MetadataColumnType::SingleSelectDropdown(column_type_oid) => {
+                data_type::MetadataColumnType::SingleSelectDropdown(column_type_oid) => {
                     // Drop the column from the data table
                     let alter_cmd = format!("ALTER TABLE TABLE{table_oid} DROP COLUMN COLUMN{column_oid};");
                     trans.execute(&alter_cmd, [])?;
@@ -432,7 +432,7 @@ pub fn delete(column_oid: i64) -> Result<(), error::Error> {
                     trans.commit()?;
                     return Ok(());
                 },
-                column_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
+                data_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
                     // Drop the relationship table
                     let drop_relationship_cmd = format!("DROP TABLE TABLE{column_type_oid}_MULTISELECT;");
                     trans.execute(&drop_relationship_cmd, [])?;
@@ -455,7 +455,7 @@ pub fn delete(column_oid: i64) -> Result<(), error::Error> {
                     trans.commit()?;
                     return Ok(());
                 },
-                column_type::MetadataColumnType::ChildTable(column_type_oid) => {
+                data_type::MetadataColumnType::ChildTable(column_type_oid) => {
                     // Drop the surrogate view of the child table
                     let drop_view_cmd = format!("DROP VIEW TABLE{column_type_oid}_SURROGATE;");
                     trans.execute(&drop_view_cmd, [])?;
@@ -518,7 +518,7 @@ pub fn get_metadata(column_oid: i64) -> Result<Option<Metadata>, error::Error> {
                 name: row.get("NAME")?,
                 column_ordering: row.get("COLUMN_ORDERING")?,
                 column_style: row.get("COLUMN_CSS_STYLE")?,
-                column_type: column_type::MetadataColumnType::from_database(row.get("TYPE_OID")?, row.get("MODE")?),
+                column_type: data_type::MetadataColumnType::from_database(row.get("TYPE_OID")?, row.get("MODE")?),
                 is_nullable: row.get("IS_NULLABLE")?,
                 is_unique: row.get("IS_UNIQUE")?,
                 is_primary_key: row.get("IS_PRIMARY_KEY")?,
@@ -554,7 +554,7 @@ pub fn send_metadata_list(table_oid: i64, column_channel: Channel<Metadata>) -> 
                 name: row.get("NAME")?,
                 column_ordering: row.get("COLUMN_ORDERING")?,
                 column_style: row.get("COLUMN_CSS_STYLE")?,
-                column_type: column_type::MetadataColumnType::from_database(row.get("TYPE_OID")?, row.get("MODE")?),
+                column_type: data_type::MetadataColumnType::from_database(row.get("TYPE_OID")?, row.get("MODE")?),
                 is_nullable: row.get("IS_NULLABLE")?,
                 is_unique: row.get("IS_UNIQUE")?,
                 is_primary_key: row.get("IS_PRIMARY_KEY")?,
@@ -588,14 +588,14 @@ pub fn set_table_column_dropdown_values(column_oid: i64, dropdown_values: Vec<Dr
             WHERE c.OID = ?1;",
          params![column_oid], 
         |row| {
-            return Ok(column_type::MetadataColumnType::from_database(
+            return Ok(data_type::MetadataColumnType::from_database(
                 row.get(0)?, 
                 row.get(1)?
             ));
         }
     )? {
-        column_type::MetadataColumnType::SingleSelectDropdown(column_type_oid) 
-        | column_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
+        data_type::MetadataColumnType::SingleSelectDropdown(column_type_oid) 
+        | data_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
             // Flag all values in the corresponding table as trash
             let flag_cmd = format!("UPDATE TABLE{column_type_oid} SET TRASH = 1;");
             trans.execute(&flag_cmd, [])?;
@@ -643,14 +643,14 @@ pub fn get_table_column_dropdown_values(column_oid: i64) -> Result<Vec<DropdownV
             WHERE c.OID = ?1;",
          params![column_oid], 
         |row| {
-            return Ok(column_type::MetadataColumnType::from_database(
+            return Ok(data_type::MetadataColumnType::from_database(
                 row.get(0)?, 
                 row.get(1)?
             ));
         }
     )? {
-        column_type::MetadataColumnType::SingleSelectDropdown(column_type_oid) 
-        | column_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
+        data_type::MetadataColumnType::SingleSelectDropdown(column_type_oid) 
+        | data_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
             // Select the values from the corresponding table
             let select_cmd = format!("SELECT VALUE FROM TABLE{column_type_oid};");
             db::query_iterate(&trans, 
@@ -683,14 +683,14 @@ pub fn send_table_column_dropdown_values(column_oid: i64, dropdown_value_channel
             WHERE c.OID = ?1;",
          params![column_oid], 
         |row| {
-            return Ok(column_type::MetadataColumnType::from_database(
+            return Ok(data_type::MetadataColumnType::from_database(
                 row.get(0)?, 
                 row.get(1)?
             ));
         }
     )? {
-        column_type::MetadataColumnType::SingleSelectDropdown(column_type_oid) 
-        | column_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
+        data_type::MetadataColumnType::SingleSelectDropdown(column_type_oid) 
+        | data_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
             // Select the values from the corresponding table
             let select_cmd = format!("SELECT VALUE FROM TABLE{column_type_oid};");
             db::query_iterate(&trans, 
@@ -704,7 +704,7 @@ pub fn send_table_column_dropdown_values(column_oid: i64, dropdown_value_channel
                 return Ok(());
             })?;
         },
-        column_type::MetadataColumnType::Reference(referenced_table_oid) => {
+        data_type::MetadataColumnType::Reference(referenced_table_oid) => {
             // Select the values from the TABLE0_SURROGATE view
             let select_cmd = format!("SELECT CAST(OID AS TEXT) AS OID, DISPLAY_VALUE FROM TABLE{referenced_table_oid}_SURROGATE;");
             db::query_iterate(&trans, 
@@ -731,7 +731,7 @@ pub struct BasicTypeMetadata {
 }
 
 /// Send a list of basic metadata for a particular kind of type with associated tables (i.e. Reference, ChildObject, ChildTable).
-pub fn send_type_metadata_list(column_type: column_type::MetadataColumnType, type_channel: Channel<BasicTypeMetadata>) -> Result<(), error::Error> {
+pub fn send_type_metadata_list(column_type: data_type::MetadataColumnType, type_channel: Channel<BasicTypeMetadata>) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
