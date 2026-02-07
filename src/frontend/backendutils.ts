@@ -5,6 +5,9 @@ export type BasicMetadata = {
     oid: number,
     name: string 
 };
+export type BasicHierarchicalMetadata = BasicMetadata & {
+    hierarchyLevel: number
+};
 
 export type ColumnType = { primitive: 'Any' | 'Boolean' | 'Integer' | 'Number' | 'Date' | 'Timestamp' | 'Text' | 'JSON' | 'File' | 'Image' } 
     | { singleSelectDropdown: number }
@@ -45,8 +48,9 @@ export type TableCellChannelPacket = {
 } | TableColumnCell;
 
 export type TableRowCellChannelPacket = {
-    rowExists: boolean
-} | TableColumnCell;
+    rowExists: boolean,
+    tableOid: number
+} | (TableColumnCell & { columnName: string, columnOrdering: number });
 
 
 export type Query = {
@@ -62,7 +66,13 @@ export type Query = {
 } | {
     invokeAction: 'get_object_type_list',
     invokeParams: {
-        objectTypeChannel: Channel<BasicMetadata>
+        objectTypeChannel: Channel<BasicHierarchicalMetadata>
+    }
+} | {
+    invokeAction: 'get_subtype_list',
+    invokeParams: {
+        tableOid: number,
+        objectTypeChannel: Channel<BasicHierarchicalMetadata>
     }
 } | {
     invokeAction: 'get_table_column',
@@ -110,8 +120,9 @@ export type Query = {
 } | {
     invokeAction: 'get_object_data',
     invokeParams: {
-        tableOid: number,
-        objOid: number
+        objTypeOid: number,
+        objRowOid: number,
+        objDataChannel: Channel<TableRowCellChannelPacket>
     }
 };
 

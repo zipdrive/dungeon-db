@@ -33,13 +33,16 @@ pub enum Cell {
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", untagged)]
 pub enum RowCell {
     RowExists {
-        row_exists: bool
+        row_exists: bool,
+        table_oid: i64
     },
     ColumnValue {
         table_oid: i64,
         row_oid: i64,
         column_oid: i64,
+        column_name: String,
         column_type: data_type::MetadataColumnType,
+        column_ordering: i64,
         true_value: Option<String>,
         display_value: Option<String>,
         failed_validations: Vec<error::FailedValidation>
@@ -293,6 +296,7 @@ struct Column {
     column_oid: i64,
     column_name: String,
     column_type: data_type::MetadataColumnType,
+    column_ordering: i64,
     is_nullable: bool,
     is_primary_key: bool,
     invalid_nonunique_oid: HashSet<i64>
@@ -368,7 +372,8 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
             c.IS_NULLABLE,
             c.IS_UNIQUE,
             c.IS_PRIMARY_KEY,
-            c.NAME
+            c.NAME,
+            c.COLUMN_ORDERING
         FROM METADATA_TABLE_COLUMN c
         INNER JOIN METADATA_TYPE t ON t.OID = c.TYPE_OID
         WHERE c.TABLE_OID IN (SELECT * FROM SUPERTYPE_QUERY) AND c.TRASH = 0
@@ -377,7 +382,8 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
         &mut |row| {
             let column_oid: i64 = row.get("OID")?;
             let column_type: data_type::MetadataColumnType = data_type::MetadataColumnType::from_database(row.get("TYPE_OID")?, row.get("MODE")?);
-            
+            let column_ordering: i64 = row.get("COLUMN_ORDERING")?;
+
             let column_source_table_oid: i64 = row.get("TABLE_OID")?;
             let source_alias: String = if column_source_table_oid == table_oid { String::from("t") } else { format!("m{column_source_table_oid}") };
             
@@ -547,6 +553,7 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
                 column_oid: column_oid,
                 column_name: row.get("NAME")?,
                 column_type: column_type,
+                column_ordering,
                 is_nullable: row.get("IS_NULLABLE")?,
                 invalid_nonunique_oid: invalid_nonunique_oid,
                 is_primary_key: row.get("IS_PRIMARY_KEY")?
@@ -658,7 +665,7 @@ pub fn send_table_row(table_oid: i64, row_oid: i64, cell_channel: Channel<RowCel
         params![row_oid], 
         |row| -> Result<(), error::Error> {
             // Start by sending message that confirms the row exists
-            cell_channel.send(RowCell::RowExists { row_exists: true })?;
+            cell_channel.send(RowCell::RowExists { row_exists: true, table_oid })?;
 
             let invalid_key = false;
 
@@ -699,7 +706,9 @@ pub fn send_table_row(table_oid: i64, row_oid: i64, cell_channel: Channel<RowCel
                     table_oid: column.table_oid,
                     row_oid: row_oid,
                     column_oid: column.column_oid, 
+                    column_name: column.column_name.clone(),
                     column_type: column.column_type.clone(), 
+                    column_ordering: column.column_ordering,
                     true_value: true_value,
                     display_value: display_value,
                     failed_validations: failed_validations
@@ -713,7 +722,7 @@ pub fn send_table_row(table_oid: i64, row_oid: i64, cell_channel: Channel<RowCel
         Err(error::Error::RusqliteError(e)) => {
             match e {
                 RusqliteError::QueryReturnedNoRows => {
-                    cell_channel.send(RowCell::RowExists { row_exists: false })?;
+                    cell_channel.send(RowCell::RowExists { row_exists: false, table_oid })?;
                     return Ok(());
                 },
                 _ => {

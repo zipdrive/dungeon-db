@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use rusqlite::{OptionalExtension, Statement, ToSql, Transaction, params};
 use tauri::ipc::Channel;
 use serde::{Serialize, Deserialize};
-use crate::backend::{db, table, data_type};
+use crate::backend::{data_type, db, table, table_data};
 use crate::util::error;
 
 
@@ -155,24 +155,8 @@ pub fn send_metadata_list(obj_type_oid: Option<i64>, obj_type_channel: Channel<B
 }
 
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", untagged)]
-pub enum Cell {
-    Subtype {
-        subtype_oid: i64
-    },
-    ColumnValue {
-        column_oid: i64,
-        column_type: data_type::MetadataColumnType,
-        true_value: Option<String>,
-        display_value: Option<String>,
-        failed_validations: Vec<error::FailedValidation>
-    }
-}
 
-
-
-pub fn send_obj_data(obj_type_oid: i64, obj_row_oid: i64, obj_data_channel: Channel<Cell>) -> Result<(), error::Error> {
+pub fn send_obj_data(obj_type_oid: i64, obj_row_oid: i64, obj_data_channel: Channel<table_data::RowCell>) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
@@ -244,51 +228,8 @@ pub fn send_obj_data(obj_type_oid: i64, obj_row_oid: i64, obj_data_channel: Chan
     }
     let final_obj_type_oid: i64 = max_level_subtype[0];
     let final_obj_row_oid: i64 = subtypes[&final_obj_type_oid];
-    obj_data_channel.send(Cell::Subtype { subtype_oid: final_obj_type_oid })?;
 
-    // Build up indices of supertype rows
-    let mut supertypes: HashMap<i64, i64> = subtypes;
-    let mut supertype_statement = trans.prepare(
-        "WITH RECURSIVE SUBTYPE_QUERY (TYPE_OID, INHERITOR_TYPE_OID) AS (
-                SELECT
-                    u.MASTER_TABLE_OID AS TYPE_OID,
-                    u.INHERITOR_TABLE_OID AS INHERITOR_TYPE_OID
-                FROM METADATA_TABLE_INHERITANCE u ON 
-                WHERE u.TRASH = 0 AND u.INHERITOR_TABLE_OID = ?1
-                UNION
-                SELECT
-                    u.MASTER_TABLE_OID AS TYPE_OID,
-                    s.TYPE_OID AS INHERITOR_TYPE_OID
-                FROM SUBTYPE_QUERY s
-                INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.TYPE_OID
-                WHERE u.TRASH = 0
-            )
-            SELECT
-                TYPE_OID,
-                INHERITOR_TYPE_OID
-            FROM SUBTYPE_QUERY"
-    )?;
-    let supertype_rows = supertype_statement.query_map(
-        params![obj_type_oid], 
-        |row| {
-            let inheritor_type_oid: i64 = row.get("INHERITOR_TYPE_OID")?;
-            let type_oid: i64 = row.get("TYPE_OID")?;
-            return Ok((inheritor_type_oid, type_oid));
-        }
-    )?;
-    for supertype_row in supertype_rows {
-        let (inheritor_type_oid, master_type_oid) = supertype_row.unwrap();
-        if !supertypes.contains_key(&master_type_oid) && supertypes.contains_key(&inheritor_type_oid) {
-            let inheritor_row_oid: i64 = supertypes[&inheritor_type_oid];
-            let select_from_type_table_cmd: String = format!("SELECT MASTER{master_type_oid}_OID FROM TABLE{inheritor_type_oid} WHERE OID = ?1");
-            let master_row_oid: i64 = trans.query_one(&select_from_type_table_cmd, params![inheritor_row_oid], |row| row.get(0))?;
-
-            supertypes.insert(master_type_oid, master_row_oid);
-        }
-    }
-
-    // Get all columns for the final type and any of the supertypes
-    let mut select_cols_cmd: String = 
-
+    // Send the columns and values of the row
+    table_data::send_table_row(final_obj_type_oid, final_obj_row_oid, obj_data_channel)?;
     return Ok(());
 }

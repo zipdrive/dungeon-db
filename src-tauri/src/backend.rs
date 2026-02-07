@@ -661,6 +661,13 @@ pub fn get_object_type_list(object_type_channel: Channel<obj_type::BasicMetadata
 }
 
 #[tauri::command]
+pub fn get_subtype_list(table_oid: i64, object_type_channel: Channel<obj_type::BasicMetadata>) -> Result<(), error::Error> {
+    // Use channel to send BasicMetadata objects
+    obj_type::send_metadata_list(Some(table_oid), object_type_channel)?;
+    return Ok(());
+}
+
+#[tauri::command]
 /// Get the metadata for a particular column in a table.
 pub fn get_table_column(column_oid: i64) -> Result<Option<table_column::Metadata>, error::Error> {
     return table_column::get_metadata(column_oid);
@@ -704,6 +711,12 @@ pub fn get_table_data(table_oid: i64, parent_row_oid: Option<i64>, page_num: i64
 #[tauri::command]
 pub fn get_table_row(table_oid: i64, row_oid: i64, cell_channel: Channel<table_data::RowCell>) -> Result<(), error::Error> {
     table_data::send_table_row(table_oid, row_oid, cell_channel)?;
+    return Ok(());
+}
+
+#[tauri::command]
+pub fn get_object_data(obj_type_oid: i64, obj_row_oid: i64, obj_data_channel: Channel<table_data::RowCell>) -> Result<(), error::Error> {
+    obj_type::send_obj_data(obj_type_oid, obj_row_oid, obj_data_channel)?;
     return Ok(());
 }
 
