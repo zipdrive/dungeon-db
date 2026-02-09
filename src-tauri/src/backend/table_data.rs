@@ -7,7 +7,7 @@ use time::format_description::well_known;
 use time::macros::{time};
 use time::{Date, PrimitiveDateTime, UtcDateTime};
 use crate::backend::data_type::Primitive;
-use crate::backend::{table_column, data_type, db, table};
+use crate::backend::{data_type, db, obj_type, table, table_column};
 use crate::util::error;
 
 
@@ -22,6 +22,7 @@ pub enum Cell {
         table_oid: i64,
         row_oid: i64,
         column_oid: i64,
+        column_name: String,
         column_type: data_type::MetadataColumnType,
         true_value: Option<String>,
         display_value: Option<String>,
@@ -49,6 +50,259 @@ pub enum RowCell {
     }
 }
 
+
+/// Inserts a new row into the table.
+fn insert_inplace(trans: &Transaction, table_oid: i64, row_oid: Option<i64>) -> Result<i64, error::Error> {
+    let mut type_row_oids: Vec<(String, i64)>;
+    let mut select_supertype_statement = trans.prepare(match row_oid {
+        Some(o) => { 
+            type_row_oids = vec![(String::from(":t"), o)];
+            "
+            WITH RECURSIVE SUPERTYPE_QUERY (LEVEL, SUPERTYPE_OID, INHERITOR_TYPE_OID, COL_NAME, COL_VALUE_EXPRESSION) AS (
+                SELECT
+                    0 AS LEVEL,
+                    u.MASTER_TABLE_OID AS SUPERTYPE_OID,
+                    u.INHERITOR_TABLE_OID AS INHERITOR_TYPE_OID,
+                    'MASTER' || FORMAT('%d', u.MASTER_TABLE_OID) || '_OID' AS COL_NAME,
+                    ':m' || FORMAT('%d', u.MASTER_TABLE_OID) AS COL_VALUE_EXPRESSION
+                FROM METADATA_TABLE_INHERITANCE u ON 
+                WHERE u.TRASH = 0 AND u.INHERITOR_TABLE_OID = ?1
+                UNION
+                SELECT
+                    s.LEVEL + 1 AS LEVEL,
+                    u.MASTER_TABLE_OID AS SUPERTYPE_OID,
+                    u.INHERITOR_TABLE_OID AS INHERITOR_TYPE_OID,
+                    'MASTER' || FORMAT('%d', u.MASTER_TABLE_OID) || '_OID' AS COL_NAME,
+                    ':m' || FORMAT('%d', u.MASTER_TABLE_OID) AS COL_VALUE_EXPRESSION
+                FROM SUPERTYPE_QUERY s
+                LEFT JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.SUPERTYPE_OID
+                WHERE u.TRASH = 0
+            ),
+            TYPE_QUERY (TYPE_OID) AS (
+                SELECT ?1
+                UNION
+                SELECT
+                    u.MASTER_TABLE_OID
+                FROM TYPE_QUERY s
+                INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.TYPE_OID
+                WHERE u.TRASH = 0
+            )
+            SELECT
+                COALESCE(MAX(s.LEVEL), 9223372036854775807) AS MAX_LEVEL,
+                t.TYPE_OID AS TYPE_OID,
+                'INSERT INTO TABLE' || FORMAT('%d', t.TYPE_OID) || 
+                    CASE WHEN t.TYPE_OID = ?1 THEN 
+                        COALESCE(' (OID, ' ||
+                            GROUP_CONCAT(s.COL_NAME, ',' ORDER BY s.SUPERTYPE_OID) || 
+                            ') VALUES (:t, ' || 
+                            GROUP_CONCAT(s.COL_VALUE_EXPRESSION, ',' ORDER BY s.SUPERTYPE_OID) ||
+                            ')',
+                            ' (OID) VALUES (:t)'
+                        )
+                    ELSE 
+                        COALESCE(' (' ||
+                            GROUP_CONCAT(COL_NAME, ',' ORDER BY s.SUPERTYPE_OID) || 
+                            ') VALUES (' || 
+                            GROUP_CONCAT(COL_VALUE_EXPRESSION, ',' ORDER BY s.SUPERTYPE_OID) ||
+                            ')',
+                            ' DEFAULT VALUES'
+                        )
+                END AS INSERT_CMD
+            FROM TYPE_QUERY t
+            LEFT JOIN SUPERTYPE_QUERY s ON s.INHERITOR_TYPE_OID = t.TYPE_OID
+            GROUP BY t.TYPE_OID
+            ORDER BY 1 DESC
+            "
+        },
+        None => {
+            type_row_oids = Vec::new();
+            "
+            WITH RECURSIVE SUPERTYPE_QUERY (LEVEL, SUPERTYPE_OID, INHERITOR_TYPE_OID, COL_NAME, COL_VALUE_EXPRESSION) AS (
+                SELECT
+                    1 AS LEVEL,
+                    u.MASTER_TABLE_OID AS SUPERTYPE_OID,
+                    u.INHERITOR_TABLE_OID AS INHERITOR_TYPE_OID,
+                    'MASTER' || FORMAT('%d', u.MASTER_TABLE_OID) || '_OID' AS COL_NAME,
+                    ':m' || FORMAT('%d', u.MASTER_TABLE_OID) AS COL_VALUE_EXPRESSION
+                FROM METADATA_TABLE_INHERITANCE u 
+                WHERE u.TRASH = 0 AND u.INHERITOR_TABLE_OID = ?1
+                UNION
+                SELECT
+                    s.LEVEL + 1 AS LEVEL,
+                    u.MASTER_TABLE_OID AS SUPERTYPE_OID,
+                    u.INHERITOR_TABLE_OID AS INHERITOR_TYPE_OID,
+                    'MASTER' || FORMAT('%d', u.MASTER_TABLE_OID) || '_OID' AS COL_NAME,
+                    ':m' || FORMAT('%d', u.MASTER_TABLE_OID) AS COL_VALUE_EXPRESSION
+                FROM SUPERTYPE_QUERY s
+                LEFT JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.SUPERTYPE_OID
+                WHERE u.TRASH = 0
+            ),
+            TYPE_QUERY (TYPE_OID) AS (
+                SELECT ?1
+                UNION
+                SELECT
+                    u.MASTER_TABLE_OID
+                FROM TYPE_QUERY s
+                INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.TYPE_OID
+                WHERE u.TRASH = 0
+            )
+            SELECT
+                COALESCE(MAX(s.LEVEL), 9223372036854775807) AS MAX_LEVEL,
+                t.TYPE_OID AS TYPE_OID,
+                'INSERT INTO TABLE' || FORMAT('%d', t.TYPE_OID) || COALESCE(' (' ||
+                    GROUP_CONCAT(s.COL_NAME, ',' ORDER BY s.SUPERTYPE_OID) || 
+                    ') VALUES (' || 
+                    GROUP_CONCAT(s.COL_VALUE_EXPRESSION, ',' ORDER BY s.SUPERTYPE_OID) ||
+                    ')',
+                    ' DEFAULT VALUES'
+                ) AS INSERT_CMD
+            FROM TYPE_QUERY t
+            LEFT JOIN SUPERTYPE_QUERY s ON s.INHERITOR_TYPE_OID = t.TYPE_OID
+            GROUP BY t.TYPE_OID
+            ORDER BY 1 DESC
+            "
+        }
+    })?;
+    let supertype_rows = select_supertype_statement.query_map(params![table_oid], |row| {
+        Ok((row.get::<_, i64>("TYPE_OID")?, row.get::<_, String>("INSERT_CMD")?))
+    })?;
+
+    for supertype_row_result in supertype_rows {
+        let (type_oid, insert_cmd) = supertype_row_result.unwrap();
+
+        let params: Vec<(&str, i64)> = type_row_oids.iter()
+            .filter(|tup| insert_cmd.contains(&tup.0))
+            .map(|tup| (tup.0.as_str(), tup.1))
+            .collect();
+
+        trans.execute(&insert_cmd, &*params)?;
+        let type_row_oid: i64 = trans.last_insert_rowid();
+
+        type_row_oids.push((format!(":m{type_oid}"), type_row_oid));
+    }
+    return Ok(type_row_oids.last().unwrap().1);
+}
+
+/// Flags a row as being trash.
+fn trash_inplace(trans: &Transaction, table_oid: i64, row_oid: i64) -> Result<(), error::Error> {
+    let mut type_row_oids: Vec<(String, i64)> = vec![(format!(":m{table_oid}"), row_oid)];
+    let mut select_supertype_statement = trans.prepare(
+        "
+        WITH RECURSIVE TYPE_QUERY (LEVEL, TYPE_OID, SELECT_CMD, UPDATE_CMD) AS (
+            SELECT 
+                0 AS LEVEL,
+                ?1 AS TYPE_OID,
+                NULL AS SELECT_CMD
+            UNION
+            SELECT
+                s.LEVEL + 1 AS LEVEL,
+                u.MASTER_TABLE_OID AS TYPE_OID,
+                'SELECT MASTER' || FORMAT('%d', u.MASTER_TABLE_OID) || '_OID FROM TABLE' || FORMAT('%d', s.TYPE_OID) || ' WHERE OID = :m' || FORMAT('%d', s.TYPE_OID) AS SELECT_CMD
+            FROM TYPE_QUERY s
+            INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.TYPE_OID
+            WHERE u.TRASH = 0
+        )
+        SELECT
+            MAX(t.LEVEL) AS MAX_LEVEL,
+            t.TYPE_OID,
+            MAX(t.SELECT_CMD) AS SELECT_CMD,
+            'UPDATE TABLE' || FORMAT('%d', t.TYPE_OID) || ' SET TRASH = 1 WHERE OID = :m' || FORMAT('%d', t.TYPE_OID) AS UPDATE_CMD
+        FROM TYPE_QUERY t
+        GROUP BY t.TYPE_OID
+        ORDER BY 1 ASC
+        "
+    )?;
+    let supertype_rows = select_supertype_statement.query_map(params![table_oid], |row| {
+        Ok((row.get::<_, i64>("TYPE_OID")?, row.get::<_, Option<String>>("SELECT_CMD")?, row.get::<_, String>("UPDATE_CMD")?))
+    })?;
+
+    for supertype_row_result in supertype_rows {
+        let (type_oid, select_cmd, update_cmd) = supertype_row_result.unwrap();
+
+        // Get the row OID
+        match select_cmd {
+            Some(s) => {
+                let temp_params: Vec<(&str, i64)> = type_row_oids.iter()
+                    .filter(|tup| s.contains(&tup.0))
+                    .map(|tup| (tup.0.as_str(), tup.1))
+                    .collect();
+                let type_row_oid: i64 = trans.query_one(&s, &*temp_params, |row| row.get(0))?;
+                type_row_oids.push((format!(":m{type_oid}"), type_row_oid));
+            },
+            None => {}
+        }
+
+        // Flag the row as being trash
+        let params: Vec<(&str, i64)> = type_row_oids.iter()
+            .filter(|tup| update_cmd.contains(&tup.0))
+            .map(|tup| (tup.0.as_str(), tup.1))
+            .collect();
+        trans.execute(&update_cmd, &*params)?;
+    }
+    return Ok(());
+}
+
+/// Unflags a row as being trash.
+fn untrash_inplace(trans: &Transaction, table_oid: i64, row_oid: i64) -> Result<(), error::Error> {
+    let mut type_row_oids: Vec<(String, i64)> = vec![(format!(":m{table_oid}"), row_oid)];
+    let mut select_supertype_statement = trans.prepare(
+        "
+        WITH RECURSIVE TYPE_QUERY (LEVEL, TYPE_OID, SELECT_CMD, UPDATE_CMD) AS (
+            SELECT 
+                0 AS LEVEL,
+                ?1 AS TYPE_OID,
+                NULL AS SELECT_CMD
+            UNION
+            SELECT
+                s.LEVEL + 1 AS LEVEL,
+                u.MASTER_TABLE_OID AS TYPE_OID,
+                'SELECT MASTER' || FORMAT('%d', u.MASTER_TABLE_OID) || '_OID FROM TABLE' || FORMAT('%d', s.TYPE_OID) || ' WHERE OID = :m' || FORMAT('%d', s.TYPE_OID) AS SELECT_CMD
+            FROM TYPE_QUERY s
+            INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.TYPE_OID
+            WHERE u.TRASH = 0
+        )
+        SELECT
+            MAX(t.LEVEL) AS MAX_LEVEL,
+            t.TYPE_OID,
+            MAX(t.SELECT_CMD) AS SELECT_CMD,
+            'UPDATE TABLE' || FORMAT('%d', t.TYPE_OID) || ' SET TRASH = 0 WHERE OID = :m' || FORMAT('%d', t.TYPE_OID) AS UPDATE_CMD
+        FROM TYPE_QUERY t
+        GROUP BY t.TYPE_OID
+        ORDER BY 1 ASC
+        "
+    )?;
+    let supertype_rows = select_supertype_statement.query_map(params![table_oid], |row| {
+        Ok((row.get::<_, i64>("TYPE_OID")?, row.get::<_, Option<String>>("SELECT_CMD")?, row.get::<_, String>("UPDATE_CMD")?))
+    })?;
+
+    for supertype_row_result in supertype_rows {
+        let (type_oid, select_cmd, update_cmd) = supertype_row_result.unwrap();
+
+        // Get the row OID
+        match select_cmd {
+            Some(s) => {
+                let temp_params: Vec<(&str, i64)> = type_row_oids.iter()
+                    .filter(|tup| s.contains(&tup.0))
+                    .map(|tup| (tup.0.as_str(), tup.1))
+                    .collect();
+                let type_row_oid: i64 = trans.query_one(&s, &*temp_params, |row| row.get(0))?;
+                type_row_oids.push((format!(":m{type_oid}"), type_row_oid));
+            },
+            None => {}
+        }
+
+        // Unflag the row as being trash
+        let params: Vec<(&str, i64)> = type_row_oids.iter()
+            .filter(|tup| update_cmd.contains(&tup.0))
+            .map(|tup| (tup.0.as_str(), tup.1))
+            .collect();
+        trans.execute(&update_cmd, &*params)?;
+    }
+    return Ok(());
+}
+
+
+
 /// Insert a row into the data such that the OID places it before any existing rows with that OID.
 pub fn insert(table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
     let mut conn = db::open()?;
@@ -65,9 +319,7 @@ pub fn insert(table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
     match existing_row_oid {
         None => {
             // Insert with OID = row_oid
-            let insert_cmd = format!("INSERT INTO TABLE{table_oid} (OID) VALUES (?1);");
-            trans.execute(&insert_cmd, params![row_oid])?;
-            let row_oid = trans.last_insert_rowid();
+            let row_oid = insert_inplace(&trans, table_oid, Some(row_oid))?;
 
             // Return the row_oid
             trans.commit()?;
@@ -83,9 +335,7 @@ pub fn insert(table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
             match existing_prev_row_oid {
                 None => {
                     // Insert with OID = row_oid - 1
-                    let insert_cmd = format!("INSERT INTO TABLE{table_oid} (OID) VALUES (?1);");
-                    trans.execute(&insert_cmd, params![row_oid - 1])?;
-                    let row_oid = trans.last_insert_rowid();
+                    let row_oid = insert_inplace(&trans, table_oid, Some(row_oid - 1))?;
 
                     // Return the row_oid
                     trans.commit()?;
@@ -103,9 +353,7 @@ pub fn insert(table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
                     )?;
 
                     // Insert the row
-                    let insert_cmd = format!("INSERT INTO TABLE{table_oid} (OID) VALUES (?1);");
-                    trans.execute(&insert_cmd, params![row_oid])?;
-                    let row_oid = trans.last_insert_rowid();
+                    let row_oid = insert_inplace(&trans, table_oid, Some(row_oid))?;
 
                     // Return the row_oid
                     trans.commit()?;
@@ -122,9 +370,7 @@ pub fn push(table_oid: i64) -> Result<i64, error::Error> {
     let trans = conn.transaction()?;
 
     // Insert the row
-    let insert_cmd = format!("INSERT INTO TABLE{table_oid} DEFAULT VALUES;");
-    trans.execute(&insert_cmd, [])?;
-    let row_oid = trans.last_insert_rowid();
+    let row_oid = insert_inplace(&trans, table_oid, None)?;
 
     // Return the row OID
     trans.commit()?;
@@ -132,32 +378,32 @@ pub fn push(table_oid: i64) -> Result<i64, error::Error> {
 }
 
 /// Marks a row as trash.
-pub fn move_trash(table_oid: i64, row_oid: i64) -> Result<(), error::Error> {
+pub fn trash(table_oid: i64, row_oid: i64) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
     // Move the row to the trash bin
-    let update_cmd = format!("UPDATE TABLE{table_oid} SET TRASH = 1 WHERE OID = ?1;");
-    trans.execute(&update_cmd, params![row_oid])?;
+    trash_inplace(&trans, table_oid, row_oid)?;
 
-    // Return the row OID
+    // Commit the transaction
     trans.commit()?;
     return Ok(());
 }
 
 /// Unmarks a row as trash.
-pub fn unmove_trash(table_oid: i64, row_oid: i64) -> Result<(), error::Error> {
+pub fn untrash(table_oid: i64, row_oid: i64) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
-    // Move the row to the trash bin
-    let update_cmd = format!("UPDATE TABLE{table_oid} SET TRASH = 0 WHERE OID = ?1;");
-    trans.execute(&update_cmd, params![row_oid])?;
+    // Move the row from the trash bin
+    untrash_inplace(&trans, table_oid, row_oid)?;
 
-    // Return the row OID
+    // Commit the transaction
     trans.commit()?;
     return Ok(());
 }
+
+
 
 /// Delete the row with the given OID.
 pub fn delete(table_oid: i64, row_oid: i64) -> Result<(), error::Error> {
@@ -287,6 +533,74 @@ pub fn try_update_primitive_value(table_oid: i64, row_oid: i64, column_oid: i64,
     return Ok(prev_value);
 }
 
+/// Creates a row in the object table associated with a cell in the base table.
+pub fn set_table_object_value(table_oid: i64, row_oid: i64, column_oid: i64, obj_type_oid: Option<i64>, obj_row_oid: Option<i64>) -> Result<(i64, i64), error::Error> {
+    let mut conn = db::open()?;
+    let trans = conn.transaction()?;
+
+    if obj_type_oid == None || obj_row_oid == None {
+        // Verify that the column is an object
+        let column_type = trans.query_one(
+            "SELECT
+                c.TYPE_OID,
+                t.MODE
+            FROM METADATA_TABLE_COLUMN c
+            INNER JOIN METADATA_TYPE t ON t.OID = c.TYPE_OID
+            WHERE c.OID = ?1", 
+            params![column_oid], 
+            |row| {
+                Ok(data_type::MetadataColumnType::from_database(row.get("TYPE_OID")?, row.get("MODE")?))
+            }
+        )?;
+        match column_type {
+            data_type::MetadataColumnType::ChildObject(obj_type_oid) => {
+                // Insert a new row into the object table
+                let obj_row_oid = insert_inplace(&trans, obj_type_oid, None)?;
+
+                // Update the value in the base table
+                let update_cmd = format!("UPDATE TABLE{table_oid} SET COLUMN{column_oid} = ?1 WHERE OID = ?2;");
+                trans.execute(
+                    &update_cmd,
+                    params![obj_row_oid, row_oid]
+                )?;
+                
+                // Commit the transaction
+                trans.commit()?;
+                return Ok((obj_type_oid, obj_row_oid));
+            },
+            _ => {
+                return Err(error::Error::AdhocError("Column is not an object type."));
+            }
+        }
+    } else {
+        // Move the object from the trash
+        untrash_inplace(&trans, obj_type_oid.unwrap(), obj_row_oid.unwrap())?;
+        // Set the column in the table to the object's OID
+        let update_cmd: String = format!("UPDATE TABLE{table_oid} SET COLUMN{column_oid} = ?1 WHERE OID = ?2");
+        trans.execute(&update_cmd, params![obj_row_oid.unwrap(), row_oid])?;
+
+        // Commit the transaction
+        trans.commit()?;
+        return Ok((obj_type_oid.unwrap(), obj_row_oid.unwrap()));
+    }
+}
+
+/// Creates a row in the object table associated with a cell in the base table.
+pub fn unset_table_object_value(table_oid: i64, row_oid: i64, column_oid: i64, obj_type_oid: i64, obj_row_oid: i64) -> Result<(), error::Error> {
+    let mut conn = db::open()?;
+    let trans = conn.transaction()?;
+
+    // Move the object to the trash
+    trash_inplace(&trans, obj_type_oid, obj_row_oid)?;
+    // Set the column in the table to NULL
+    let update_cmd: String = format!("UPDATE TABLE{table_oid} SET COLUMN{column_oid} = NULL WHERE OID = ?1");
+    trans.execute(&update_cmd, params![row_oid])?;
+    
+    // Commit the transaction
+    trans.commit()?;
+    return Ok(());
+}
+
 
 struct Column {
     true_ord: Option<String>,
@@ -312,7 +626,7 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
                 u.INHERITOR_TABLE_OID AS FINAL_TYPE_OID,
                 u.MASTER_TABLE_OID AS SUPERTYPE_OID,
                 u.INHERITOR_TABLE_OID AS INHERITOR_TYPE_OID
-            FROM METADATA_TABLE_INHERITANCE u ON 
+            FROM METADATA_TABLE_INHERITANCE u
             WHERE u.TRASH = 0 AND u.INHERITOR_TABLE_OID = ?1
             UNION
             SELECT
@@ -324,12 +638,20 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
             INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.SUPERTYPE_OID
             WHERE u.TRASH = 0
         ),
-        CONDENSED_SUPERTYPE_QUERY (MAX_LEVEL, FINAL_TYPE_OID, SUPERTYPE_OID, JOIN_CLAUSE) AS (
+        CONDENSED_SUPERTYPE_QUERY (MAX_LEVEL, FINAL_TYPE_OID, SUPERTYPE_OID, COL_EXPRESSION, JOIN_CLAUSE) AS (
+            SELECT
+                0 AS MAX_LEVEL,
+                ?1 AS FINAL_TYPE_OID,
+                ?1 AS SUPERTYPE_OID,
+                't.OID AS t_OID' AS COL_EXPRESSION,
+                'FROM TABLE' || FORMAT('%d', ?1) || ' t' AS JOIN_CLAUSE
+            UNION
             SELECT
                 MAX(LEVEL) AS MAX_LEVEL,
                 FINAL_TYPE_OID,
                 SUPERTYPE_OID,
-                'INNER JOIN TABLE' || FORMAT('%d', SUPERTYPE_OID') || ' m' || FORMAT('%d', SUPERTYPE_OID) || ' ' || GROUP_CONCAT(
+                'm' || FORMAT('%d', SUPERTYPE_OID) || '.OID AS m' || FORMAT('%d', SUPERTYPE_OID) || '_OID' AS COL_EXPRESSION,
+                'INNER JOIN TABLE' || FORMAT('%d', SUPERTYPE_OID) || ' m' || FORMAT('%d', SUPERTYPE_OID) || ' ON ' || GROUP_CONCAT(
                     CASE WHEN INHERITOR_TYPE_OID = FINAL_TYPE_OID THEN 't'
                     ELSE 'm' || FORMAT('%d', INHERITOR_TYPE_OID)
                     END || '.MASTER' || FORMAT('%d', SUPERTYPE_OID) || '_OID = m' || FORMAT('%d', SUPERTYPE_OID) || '.OID',
@@ -341,8 +663,8 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
                 SUPERTYPE_OID
         )
         SELECT
-            'ROW_NUMBER() OVER (ORDER BY t.OID) AS ROW_INDEX, t.OID AS t_OID' || COALESCE(', ' || GROUP_CONCAT('m' || FORMAT('%d', SUPERTYPE_OID) || '.OID AS m' || FORMAT('%d', SUPERTYPE_OID) || '_OID', ', '), '') AS OID_CLAUSE,
-            'FROM TABLE' || FORMAT('%d', FINAL_TYPE_OID) || ' t ' || COALESCE(GROUP_CONCAT(JOIN_CLAUSE, ' ' ORDER BY MAX_LEVEL ASC), '') AS FROM_CLAUSE
+            'ROW_NUMBER() OVER (ORDER BY t.OID) AS ROW_INDEX, ' || GROUP_CONCAT(COL_EXPRESSION, ', ') AS OID_CLAUSE,
+            GROUP_CONCAT(JOIN_CLAUSE, ' ' ORDER BY MAX_LEVEL ASC) AS FROM_CLAUSE
         FROM CONDENSED_SUPERTYPE_QUERY
         GROUP BY FINAL_TYPE_OID", 
         params![table_oid], 
@@ -374,9 +696,10 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
             c.IS_PRIMARY_KEY,
             c.NAME,
             c.COLUMN_ORDERING
-        FROM METADATA_TABLE_COLUMN c
+        FROM SUPERTYPE_QUERY s
+        INNER JOIN METADATA_TABLE_COLUMN c ON s.TYPE_OID = c.TABLE_OID
         INNER JOIN METADATA_TYPE t ON t.OID = c.TYPE_OID
-        WHERE c.TABLE_OID IN (SELECT * FROM SUPERTYPE_QUERY) AND c.TRASH = 0
+        WHERE c.TRASH = 0
         ORDER BY c.COLUMN_ORDERING;",
         params![table_oid], 
         &mut |row| {
@@ -586,8 +909,6 @@ pub fn send_table_data(table_oid: i64, parent_row_oid: Option<i64>, page_num: i6
         None => params![page_size, page_size * (page_num - 1)]
     };
 
-    println!("{table_select_cmd}");
-
     // Iterate over the results, sending each cell to the frontend
     db::query_iterate(&trans, 
         &table_select_cmd, 
@@ -639,6 +960,7 @@ pub fn send_table_data(table_oid: i64, parent_row_oid: Option<i64>, page_num: i6
                     table_oid: column.table_oid,
                     row_oid: row_oid,
                     column_oid: column.column_oid, 
+                    column_name: column.column_name.clone(),
                     column_type: column.column_type.clone(), 
                     true_value: true_value,
                     display_value: display_value,

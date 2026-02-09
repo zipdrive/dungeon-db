@@ -4,6 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { message } from "@tauri-apps/plugin-dialog";
 import { TableCellChannelPacket, TableColumnMetadata, TableRowCellChannelPacket, executeAsync, openDialogAsync, queryAsync } from './backendutils';
 import { addTableColumnCellToRow } from "./tableutils";
+import { makeColumnsReorderable } from "./frontendutils";
 
 const urlParams = new URLSearchParams(window.location.search);
 const urlParamTableOid = urlParams.get('table_oid');
@@ -37,7 +38,6 @@ if (urlParamTableOid) {
     tableRowIndexNode.style.textAlign = 'center';
     tableRowIndexNode.style.padding = '2px 0';
     tableRowIndexNode.style.zIndex = '1';
-    tableRowIndexNode.colSpan = 2;
     tableRowIndexNode.innerText = rowIndex.toString();
     tableRowNode.insertAdjacentElement('beforeend', tableRowIndexNode);
     tableBodyNode?.insertAdjacentElement('beforeend', tableRowNode);
@@ -117,8 +117,7 @@ if (urlParamTableOid) {
     // Strip the former contents of the table
     let tableNode: HTMLTableElement | null = document.querySelector('#table-content');
     if (tableNode)
-      tableNode.innerHTML = '<colgroup><col span="1" style="width: 2em;"><col span="1"></colgroup><tbody></tbody><thead><tr><th colspan="2" style="position: sticky; left: 0px; z-index: 1;"></th></tr></thead><tfoot><tr></tr></tfoot>';
-    let tableColgroupNode: HTMLElement | null = document.querySelector('#table-content > colgroup');
+      tableNode.innerHTML = '<tbody></tbody><thead><tr><th style="position: sticky; left: 0px; z-index: 1; width: 3em;"></th></tr></thead><tfoot><tr></tr></tfoot>';
     let tableHeaderRowNode: HTMLTableRowElement | null = document.querySelector('#table-content > thead > tr');
     let tableBodyNode: HTMLElement | null = document.querySelector('#table-content > tbody');
 
@@ -137,14 +136,12 @@ if (urlParamTableOid) {
         // Create a style class for the column
         tableColStyleNode.insertAdjacentHTML('beforeend', `.table-content-column${columnOid} { ${column.columnStyle} } `);
 
-        // Apply the style class to cells in that column
-        let tableColNode: HTMLElement = document.createElement('col');
-        tableColNode.setAttribute('span', '1');
-        tableColNode.classList.add(`table-content-column${columnOid}`);
-        tableColgroupNode?.insertAdjacentElement('beforeend', tableColNode);
-
         // Add a label to the column header
         tableHeaderNode.innerText = column.name;
+        tableHeaderNode.classList.add(`table-content-column${columnOid}`);
+        tableHeaderNode.classList.add('reorderable-column');
+        tableHeaderNode.dataset.columnOid = columnOid.toString();
+        tableHeaderNode.dataset.columnOrdering = columnOrdering.toString();
         tableHeaderRowNode?.insertAdjacentElement('beforeend', tableHeaderNode);
 
         // Add listener to pull up context menu
@@ -211,6 +208,26 @@ if (urlParamTableOid) {
         columnChannel: onReceiveColumn 
       }
     });
+
+    // Allow columns to be reordered
+    if (tableHeaderRowNode) {
+      makeColumnsReorderable(tableHeaderRowNode, async (reorderedColumnHeader, columnHeaderToImmediateLeft) => {
+        // Readjust the column ordering
+        if (reorderedColumnHeader && reorderedColumnHeader.dataset.columnOid && reorderedColumnHeader.dataset.columnOrdering) {
+          const reorderedColumnOid: number = parseInt(reorderedColumnHeader.dataset.columnOid);
+          const oldColumnOrdering: number = parseInt(reorderedColumnHeader.dataset.columnOrdering);
+          const newColumnOrdering: number | null = columnHeaderToImmediateLeft && columnHeaderToImmediateLeft.dataset.columnOrdering ? parseInt(columnHeaderToImmediateLeft.dataset.columnOrdering) : null;
+          await executeAsync({
+            reorderTableColumn: {
+              tableOid: tableOid,
+              columnOid: reorderedColumnOid,
+              oldColumnOrdering: oldColumnOrdering,
+              newColumnOrdering: newColumnOrdering
+            }
+          });
+        }
+      });
+    }
 
     // Add a final column header that is a button to add a new column
     let tableAddColumnHeaderNode = document.createElement('th');

@@ -73,6 +73,12 @@ pub enum Action {
         column_oid: i64,
         prior_metadata_column_oid: i64
     },
+    ReorderTableColumn {
+        table_oid: i64,
+        column_oid: i64,
+        old_column_ordering: i64,
+        new_column_ordering: Option<i64>
+    },
     EditTableColumnDropdownValues {
         table_oid: i64,
         column_oid: i64,
@@ -106,6 +112,20 @@ pub enum Action {
         column_oid: i64,
         row_oid: i64,
         value: Option<String>
+    },
+    SetTableObjectCell {
+        table_oid: i64,
+        column_oid: i64,
+        row_oid: i64,
+        obj_type_oid: Option<i64>,
+        obj_row_oid: Option<i64>
+    },
+    UnsetTableObjectCell {
+        table_oid: i64,
+        column_oid: i64,
+        row_oid: i64,
+        obj_type_oid: i64,
+        obj_row_oid: i64
     }
 }
 
@@ -378,6 +398,28 @@ impl Action {
                     }
                 }
             },
+            Self::ReorderTableColumn { table_oid, column_oid, old_column_ordering, new_column_ordering } => {
+                match table_column::reorder(table_oid.clone(), column_oid.clone(), new_column_ordering.clone()) {
+                    Ok(new_column_ordering) => {
+                        let mut reverse_stack = if is_forward {
+                            REVERSE_STACK.lock().unwrap() 
+                        } else { 
+                            FORWARD_STACK.lock().unwrap() 
+                        };
+                        (*reverse_stack).push(Self::ReorderTableColumn {
+                            table_oid: table_oid.clone(),
+                            column_oid: column_oid.clone(),
+                            old_column_ordering: new_column_ordering,
+                            new_column_ordering: Some(old_column_ordering.clone())
+                        });
+                        msg_update_table_data(app, table_oid.clone());
+                    },
+                    Err(e) => {
+                        msg_update_table_data(app, table_oid.clone());
+                        return Err(e);
+                    }
+                }
+            },
             Self::DeleteTableColumn { table_oid, column_oid } => {
                 match table_column::move_trash(table_oid.clone(), column_oid.clone()) {
                     Ok(_) => {
@@ -455,7 +497,7 @@ impl Action {
                 }
             },
             Self::DeleteTableRow { table_oid, row_oid } => {
-                match table_data::move_trash(table_oid.clone(), row_oid.clone()) {
+                match table_data::trash(table_oid.clone(), row_oid.clone()) {
                     Ok(_) => {
                         let mut reverse_stack = if is_forward {
                             REVERSE_STACK.lock().unwrap() 
@@ -474,7 +516,7 @@ impl Action {
                 }
             },
             Self::RestoreDeletedTableRow { table_oid, row_oid } => {
-                match table_data::unmove_trash(table_oid.clone(), row_oid.clone()) {
+                match table_data::untrash(table_oid.clone(), row_oid.clone()) {
                     Ok(_) => {
                         let mut reverse_stack = if is_forward {
                             REVERSE_STACK.lock().unwrap() 
@@ -513,7 +555,53 @@ impl Action {
                         return Err(e);
                     }
                 }
-            }
+            },
+            Self::SetTableObjectCell { table_oid, column_oid, row_oid, obj_type_oid, obj_row_oid } => {
+                match table_data::set_table_object_value(table_oid.clone(), row_oid.clone(), column_oid.clone(), obj_type_oid.clone(), obj_row_oid.clone()) {
+                    Ok((obj_type_oid, obj_row_oid)) => {
+                        let mut reverse_stack = if is_forward {
+                            REVERSE_STACK.lock().unwrap() 
+                        } else { 
+                            FORWARD_STACK.lock().unwrap() 
+                        };
+                        (*reverse_stack).push(Self::UnsetTableObjectCell { 
+                            table_oid: table_oid.clone(),
+                            column_oid: column_oid.clone(),
+                            row_oid: row_oid.clone(),
+                            obj_type_oid,
+                            obj_row_oid
+                        });
+                        msg_update_table_row(app, table_oid.clone(), row_oid.clone());
+                    },
+                    Err(e) => {
+                        msg_update_table_row(app, table_oid.clone(), row_oid.clone());
+                        return Err(e);
+                    }
+                }
+            },
+            Self::UnsetTableObjectCell { table_oid, column_oid, row_oid, obj_type_oid, obj_row_oid } => {
+                match table_data::unset_table_object_value(table_oid.clone(), row_oid.clone(), column_oid.clone(), obj_type_oid.clone(), obj_row_oid.clone()) {
+                    Ok(_) => {
+                        let mut reverse_stack = if is_forward {
+                            REVERSE_STACK.lock().unwrap() 
+                        } else { 
+                            FORWARD_STACK.lock().unwrap() 
+                        };
+                        (*reverse_stack).push(Self::SetTableObjectCell { 
+                            table_oid: table_oid.clone(),
+                            column_oid: column_oid.clone(),
+                            row_oid: row_oid.clone(),
+                            obj_type_oid: Some(obj_type_oid.clone()),
+                            obj_row_oid: Some(obj_row_oid.clone())
+                        });
+                        msg_update_table_row(app, table_oid.clone(), row_oid.clone());
+                    },
+                    Err(e) => {
+                        msg_update_table_row(app, table_oid.clone(), row_oid.clone());
+                        return Err(e);
+                    }
+                }
+            },
             _ => {
                 return Err(error::Error::AdhocError("Action has not been implemented."));
             }
@@ -583,7 +671,7 @@ pub async fn dialog_create_table_column(app: AppHandle, table_oid: i64, column_o
             format!(
                 "/src/frontend/dialogTableColumnMetadata.html?table_oid={table_oid}{}", 
                 match column_ordering {
-                    Some(o) => format!("column_ordering={o}"),
+                    Some(o) => format!("&column_ordering={o}"),
                     None => String::from("")
                 }
             ).into()
@@ -631,6 +719,38 @@ pub async fn dialog_table_data(app: AppHandle, table_oid: i64, table_name: Strin
 }
 
 #[tauri::command]
+/// Open a separate window for the contents of a table.
+pub async fn dialog_child_table_data(app: AppHandle, table_oid: i64, parent_row_oid: i64, table_name: String) -> Result<(), error::Error> {
+    // Create the window
+    let window_idx = app.webview_windows().len();
+    WebviewWindowBuilder::new(
+        &app,
+        format!("childTableWindow-{window_idx}"),
+        WebviewUrl::App(format!("/src/frontend/table.html?table_oid={table_oid}&parent_row_oid={parent_row_oid}").into()),
+    )
+    .title(&table_name)
+    .inner_size(800.0, 600.0)
+    .build()?;
+    return Ok(());
+}
+
+#[tauri::command]
+/// Open a separate window for the contents of an object.
+pub async fn dialog_object_data(app: AppHandle, table_oid: i64, row_oid: i64, title: String) -> Result<(), error::Error> {
+    // Create the window
+    let window_idx = app.webview_windows().len();
+    WebviewWindowBuilder::new(
+        &app,
+        format!("tableObjectWindow-{window_idx}"),
+        WebviewUrl::App(format!("/src/frontend/table_object.html?table_oid={table_oid}&row_oid={row_oid}").into()),
+    )
+    .title(&title)
+    .inner_size(800.0, 600.0)
+    .build()?;
+    return Ok(());
+}
+
+#[tauri::command]
 /// Closes the current dialog window.
 pub fn dialog_close(window: tauri::Window) -> Result<(), error::Error> {
     match window.close() {
@@ -657,6 +777,12 @@ pub fn get_report_list(report_channel: Channel<table::BasicMetadata>) -> Result<
 pub fn get_object_type_list(object_type_channel: Channel<obj_type::BasicMetadata>) -> Result<(), error::Error> {
     // Use channel to send BasicMetadata objects
     obj_type::send_metadata_list(None, object_type_channel)?;
+    return Ok(());
+}
+
+#[tauri::command]
+pub fn get_master_list_option_dropdown_values(table_oid: Option<i64>, allow_inheritance_from_tables: bool, option_channel: Channel<table::MasterListOption>) -> Result<(), error::Error> {
+    table::send_master_list_options(table_oid, allow_inheritance_from_tables, option_channel)?;
     return Ok(());
 }
 

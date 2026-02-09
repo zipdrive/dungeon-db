@@ -1,0 +1,25 @@
+table {
+  position: absolute;
+  width: 100%;
+  padding: 8px;
+  table-layout: fixed;
+  gap: 8px;
+}
+
+td {
+  vertical-align: top;
+}
+
+td:first-child {
+  width: fit-content;
+  max-width: 50%;
+  text-wrap: nowrap;
+}
+td:last-child {
+
+}
+
+.input {
+  margin: 0 8px;
+  width: calc(100% - 16px);
+}

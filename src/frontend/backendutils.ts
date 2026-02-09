@@ -8,6 +8,9 @@ export type BasicMetadata = {
 export type BasicHierarchicalMetadata = BasicMetadata & {
     hierarchyLevel: number
 };
+export type ToggledHierarchicalMetadata = BasicHierarchicalMetadata & {
+    isDisabled: boolean
+};
 
 export type ColumnType = { primitive: 'Any' | 'Boolean' | 'Integer' | 'Number' | 'Date' | 'Timestamp' | 'Text' | 'JSON' | 'File' | 'Image' } 
     | { singleSelectDropdown: number }
@@ -36,6 +39,7 @@ export type TableColumnCell = {
     tableOid: number,
     rowOid: number,
     columnOid: number, 
+    columnName: string,
     columnType: ColumnType, 
     trueValue: string | null,
     displayValue: string | null,
@@ -50,7 +54,7 @@ export type TableCellChannelPacket = {
 export type TableRowCellChannelPacket = {
     rowExists: boolean,
     tableOid: number
-} | (TableColumnCell & { columnName: string, columnOrdering: number });
+} | (TableColumnCell & { columnOrdering: number });
 
 
 export type Query = {
@@ -67,6 +71,13 @@ export type Query = {
     invokeAction: 'get_object_type_list',
     invokeParams: {
         objectTypeChannel: Channel<BasicHierarchicalMetadata>
+    }
+} | {
+    invokeAction: 'get_master_list_option_dropdown_values',
+    invokeParams: {
+        tableOid: number | null,
+        allowInheritanceFromTables: boolean,
+        optionChannel: Channel<ToggledHierarchicalMetadata>
     }
 } | {
     invokeAction: 'get_subtype_list',
@@ -148,17 +159,41 @@ export type Dialog = {
         tableName: string
     }
 } | {
+    invokeAction: 'dialog_child_table_data',
+    invokeParams: {
+        tableOid: number,
+        parentRowOid: number,
+        tableName: string
+    }
+} | {
+    invokeAction: 'dialog_object_data',
+    invokeParams: {
+        tableOid: number,
+        rowOid: number,
+        title: string
+    }
+} | {
     invokeAction: 'dialog_close',
     invokeParams: {}
 };
 
 export type Action = {
     createTable: {
-        tableName: string
+        tableName: string,
+        masterTableOidList: number[]
     }
 } | {
     deleteTable: {
         tableOid: number
+    }
+} | {
+    createObjectType: {
+        objTypeName: string,
+        masterTableOidList: number[]
+    }
+} | {
+    deleteObjectType: {
+        objTypeOid: number
     }
 } | {
     createTableColumn: {
@@ -189,6 +224,13 @@ export type Action = {
         dropdownValues: DropdownValue[]
     }
 } | {
+    reorderTableColumn: {
+        tableOid: number,
+        columnOid: number,
+        oldColumnOrdering: number,
+        newColumnOrdering: number | null
+    }
+} | {
     deleteTableColumn: {
         tableOid: number,
         columnOid: number
@@ -213,6 +255,14 @@ export type Action = {
         rowOid: number,
         columnOid: number,
         value: string | null
+    }
+} | {
+    setTableObjectCell: {
+        tableOid: number,
+        rowOid: number,
+        columnOid: number,
+        objTypeOid: number | null,
+        objRowOid: number | null
     }
 };
 

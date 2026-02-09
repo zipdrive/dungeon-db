@@ -11,6 +11,10 @@ if (urlParamTableOid && urlParamObjOid) {
   const objOid: number = parseInt(urlParamObjOid);
 
   async function refreshObjectAsync() {
+
+    // Record the old scroll position
+    let pageNode: HTMLDivElement = document.getElementById('page') as HTMLDivElement;
+    const scrollPosition: number = pageNode.scrollTop;
     
     // Strip the former contents of the table
     let tableNode: HTMLTableElement | null = document.querySelector('#object-content');
@@ -80,6 +84,9 @@ if (urlParamTableOid && urlParamObjOid) {
         objDataChannel: onReceiveCell
       }
     });
+
+    // Set the scroll position back to what it was before
+    pageNode.scrollTop = scrollPosition;
   }
 
 }

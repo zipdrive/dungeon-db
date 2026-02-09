@@ -107,14 +107,17 @@ pub fn update_surrogate_view(trans: &Transaction, table_oid: i64) -> Result<(), 
 
 /// Drops the surrogate view for the specified table, as well as the surrogate views for any table referencing it in its primary key.
 fn drop_surrogate_view(trans: &Transaction, table_oid: i64, above_table_oid: &Vec<i64>) -> Result<HashMap<i64, i32>, error::Error> {
+    println!("Dropping surrogate view for table TABLE{table_oid}");
+
     let mut found_dependencies: HashMap<i64, i32> = HashMap::new();
     found_dependencies.insert(table_oid, 0);
     let mut above_table_oid = above_table_oid.clone();
     above_table_oid.push(table_oid);
 
     // Query to find all tables dependent on the one being dropped
-    for dependent_table_oid_result in trans.prepare("SELECT TABLE_OID FROM METADATA_TABLE_COLUMN WHERE TYPE_OID = ?1 AND IS_PRIMARY_KEY = 1")?
-        .query_and_then(
+    for dependent_table_oid_result in trans.prepare(
+        "SELECT TABLE_OID FROM METADATA_TABLE_COLUMN WHERE TYPE_OID = ?1 AND IS_PRIMARY_KEY = 1"
+        )?.query_and_then(
             params![table_oid], 
             |row| {
                 row.get::<_, i64>("TABLE_OID")
@@ -156,6 +159,8 @@ fn drop_surrogate_view(trans: &Transaction, table_oid: i64, above_table_oid: &Ve
 }
 
 fn create_surrogate_view(trans: &Transaction, table_oid: i64) -> Result<(), error::Error> {
+    println!("Creating surrogate view for table TABLE{table_oid}");
+
     let mut select_tbls_cmd: String = format!("FROM TABLE{table_oid} t");
     struct PrimaryKey {
         single_expr: String,
@@ -400,6 +405,7 @@ pub fn get_metadata(table_oid: &i64) -> Result<BasicMetadata, error::Error> {
         name: table_name
     });
 }
+
 /// Sends a list of tables through the provided channel.
 pub fn send_metadata_list(table_channel: Channel<BasicMetadata>) -> Result<(), error::Error> {
     let mut conn = db::open()?;
@@ -420,6 +426,81 @@ pub fn send_metadata_list(table_channel: Channel<BasicMetadata>) -> Result<(), e
             return Ok(());
         }
     )?;
+    return Ok(());
+}
+
+#[derive(Serialize)]
+#[serde(rename_all="camelCase")]
+pub struct MasterListOption {
+    oid: i64,
+    name: String,
+    hierarchy_level: i64,
+    is_disabled: bool 
+}
+
+/// Sends a set of possible options for a master list for a table.
+pub fn send_master_list_options(table_oid: Option<i64>, allow_inheritance_from_tables: bool, channel: Channel<MasterListOption>) -> Result<(), error::Error> {
+    let mut conn = db::open()?;
+    let trans = conn.transaction()?;
+
+    db::query_iterate(&trans, 
+        if allow_inheritance_from_tables {
+            "
+            WITH RECURSIVE EXCLUDED_TABLES (TYPE_OID) AS (
+                SELECT ?1 AS TYPE_OID
+                UNION
+                SELECT
+                    u.INHERITOR_TABLE_OID AS TYPE_OID
+                FROM EXCLUDED_TABLES s
+                INNER JOIN METADATA_TABLE_INHERITANCE u ON u.MASTER_TABLE_OID = s.TYPE_OID
+                WHERE TRASH = 0
+            )
+            SELECT
+                tbl.TYPE_OID,
+                tbl.NAME,
+                0 AS HIERARCHY_LEVEL,
+                CASE WHEN exc.TYPE_OID IS NOT NULL THEN 1 ELSE 0 END AS IS_DISABLED
+            FROM METADATA_TABLE tbl
+            INNER JOIN METADATA_TYPE typ ON typ.OID = tbl.TYPE_OID
+            LEFT JOIN EXCLUDED_TABLES exc ON exc.TYPE_OID = tbl.TYPE_OID
+            WHERE typ.MODE IN (3, 4)
+            ORDER BY tbl.NAME
+            "
+        } else {
+            "
+            WITH RECURSIVE EXCLUDED_TABLES (TYPE_OID) AS (
+                SELECT ?1 AS TYPE_OID
+                UNION
+                SELECT
+                    u.INHERITOR_TABLE_OID AS TYPE_OID
+                FROM EXCLUDED_TABLES s
+                INNER JOIN METADATA_TABLE_INHERITANCE u ON u.MASTER_TABLE_OID = s.TYPE_OID
+                WHERE TRASH = 0
+            )
+            SELECT
+                tbl.TYPE_OID,
+                tbl.NAME,
+                0 AS HIERARCHY_LEVEL,
+                CASE WHEN exc.TYPE_OID IS NOT NULL THEN 1 ELSE 0 END AS IS_DISABLED
+            FROM METADATA_TABLE tbl
+            INNER JOIN METADATA_TYPE typ ON typ.OID = tbl.TYPE_OID
+            LEFT JOIN EXCLUDED_TABLES exc ON exc.TYPE_OID = tbl.TYPE_OID
+            WHERE typ.MODE = 4
+            ORDER BY tbl.NAME
+            "
+        }, 
+        params![table_oid], 
+        &mut |row| {
+            channel.send(MasterListOption {
+                oid: row.get("TYPE_OID")?, 
+                name: row.get("NAME")?, 
+                hierarchy_level: row.get("HIERARCHY_LEVEL")?, 
+                is_disabled: row.get("IS_DISABLED")? 
+            })?;
+            return Ok(());
+        }
+    )?;
+
     return Ok(());
 }
 

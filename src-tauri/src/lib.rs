@@ -16,6 +16,7 @@ pub fn run() {
             backend::get_table_list,
             backend::get_report_list,
             backend::get_object_type_list,
+            backend::get_master_list_option_dropdown_values,
             backend::get_table_column,
             backend::get_table_column_list,
             backend::get_table_column_dropdown_values,

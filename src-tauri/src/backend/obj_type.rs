@@ -52,6 +52,7 @@ pub fn create(name: String, master_table_oid_list: &Vec<i64>) -> Result<i64, err
 
 
 #[derive(Serialize, Clone)]
+#[serde(rename_all="camelCase")]
 pub struct BasicMetadata {
     oid: i64,
     name: String,

@@ -44,8 +44,8 @@ pub fn create(table_oid: i64, column_name: &str, column_type: data_type::Metadat
         None => {
             // If no explicit ordering was given, insert at the back
             trans.query_one(
-                "SELECT COALESCE(MAX(COLUMN_ORDERING), 0) AS NEW_COLUMN_ORDERING FROM METADATA_TABLE_COLUMN", 
-                params![table_oid], 
+                "SELECT COALESCE(MAX(COLUMN_ORDERING) + 1, 0) AS NEW_COLUMN_ORDERING FROM METADATA_TABLE_COLUMN", 
+                [], 
                 |row| row.get::<_, i64>(0)
             )?
         }
@@ -335,6 +335,39 @@ pub fn edit(table_oid: i64, column_oid: i64, column_name: &str, column_type: dat
     };
 }
 
+/// Reorders a column.
+pub fn reorder(table_oid: i64, column_oid: i64, column_ordering: Option<i64>) -> Result<i64, error::Error> {
+    let mut conn = db::open()?;
+    let trans = conn.transaction()?;
+
+    // Determine the new ordering of the column
+    let column_ordering: i64 = match column_ordering {
+        Some(o) => {
+            // If an explicit ordering was given, shift every column to its right by 1 in order to make space
+            trans.execute(
+                "UPDATE METADATA_TABLE_COLUMN SET COLUMN_ORDERING = COLUMN_ORDERING + 1 WHERE COLUMN_ORDERING >= ?1;",
+                params![o]
+            )?;
+            o
+        },
+        None => {
+            // If no explicit ordering was given, insert at the back
+            trans.query_one(
+                "SELECT COALESCE(MAX(COLUMN_ORDERING) + 1, 0) AS NEW_COLUMN_ORDERING FROM METADATA_TABLE_COLUMN", 
+                [], 
+                |row| row.get::<_, i64>(0)
+            )?
+        }
+    };
+
+    // Update the ordering
+    trans.execute("UPDATE METADATA_TABLE_COLUMN SET COLUMN_ORDERING = ?1 WHERE OID = ?2", params![column_ordering, column_oid])?;
+
+    // Commit the transaction
+    trans.commit()?;
+    return Ok(column_ordering);
+}
+
 /// Flags a column as being trash.
 pub fn move_trash(table_oid: i64, column_oid: i64) -> Result<(), error::Error> {
     let mut conn = db::open()?;
@@ -529,7 +562,17 @@ pub fn send_metadata_list(table_oid: i64, column_channel: Channel<Metadata>) -> 
     let trans = conn.transaction()?;
 
     db::query_iterate(&trans,
-        "SELECT 
+        "WITH RECURSIVE SUPERTYPE_QUERY (TYPE_OID) AS (
+                SELECT
+                    ?1
+                UNION
+                SELECT
+                    u.MASTER_TABLE_OID AS TYPE_OID
+                FROM SUPERTYPE_QUERY s
+                INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.TYPE_OID
+                WHERE u.TRASH = 0
+            )
+            SELECT 
                 c.OID, 
                 c.NAME, 
                 c.COLUMN_ORDERING,
@@ -539,9 +582,10 @@ pub fn send_metadata_list(table_oid: i64, column_channel: Channel<Metadata>) -> 
                 c.IS_NULLABLE,
                 c.IS_UNIQUE,
                 c.IS_PRIMARY_KEY
-            FROM METADATA_TABLE_COLUMN c
+            FROM SUPERTYPE_QUERY s
+            INNER JOIN METADATA_TABLE_COLUMN c ON s.TYPE_OID = c.TABLE_OID
             INNER JOIN METADATA_TYPE t ON t.OID = c.TYPE_OID
-            WHERE c.TABLE_OID = ?1 AND c.TRASH = 0
+            WHERE c.TRASH = 0
             ORDER BY c.COLUMN_ORDERING ASC;",
          params![table_oid], 
         &mut |row| {

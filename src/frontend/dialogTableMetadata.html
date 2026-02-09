@@ -4,22 +4,33 @@
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="/src/styles.css" />
     <link rel="stylesheet" href="./dialog.css" />
-    <title>StaticDB</title>
+    <link rel="stylesheet" href="./form.css" />
+    <title>DungeonDB</title>
     <script type="module" src="./dialogTableMetadata.ts"></script>
   </head>
 
   <body>
-    <form class="dialog-form">
-        <table class="dialog-form-table">
-            <tr>
-                <td><label for="tableName">Table Name:</label></td>
-                <td><input name="tableName" id="tableName" type="text" /></td>
-            </tr>
-        </table>
-    </form>
+    <div class="page">
+      <table class="dialog-form-table">
+        <colgroup>
+          <col span="1">
+          <col span="1">
+        </colgroup>
+        <tbody>
+          <tr>
+            <td><label for="table-name">Table Name:</label></td>
+            <td><input id="table-name" class="input" type="text" /></td>
+          </tr>
+          <tr>
+            <td><label for="master-table-select">Master List(s):</label></td>
+            <td><select id="master-table-select" class="input" multiple size="5"></select></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
     <div class="dialog-buttons">
-        <button id="create-table-button">OK</button>
-        <button id="cancel-create-table-button">Cancel</button>
+      <button id="create-table-button">OK</button>
+      <button id="cancel-create-table-button">Cancel</button>
     </div>
   </body>
 </html>
