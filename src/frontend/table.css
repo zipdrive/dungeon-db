@@ -8,32 +8,32 @@
   border-collapse: separate;
   cursor: default;
 }
-#table-content > tbody > tr {
+tr {
   --row-background-color: var(--main-color-neutral);
 }
-#table-content > tbody > tr:nth-child(even), #table-content > thead > tr, #table-content > tfoot > tr {
+tr:nth-child(even), thead > tr, tfoot > tr {
   --row-background-color: var(--main-color-light);
 }
-#table-content th, #table-content td {
+th, td {
   background-color: var(--row-background-color);
   border: var(--main-color-dark) 1px solid;
 }
-#table-content td {
+td {
   position: relative;
   padding: 0;
 }
-#table-content th {
+th {
   position: sticky;
   top: 0;
   padding: 2px 6px;
 }
-#table-content > tfoot > tr > td {
+tfoot td {
   position: sticky;
   bottom: -1px;
   z-index: 1;
 }
 
-#table-content #add-new-column-button {
+#add-new-column-button {
   cursor: pointer;
   width: 8em;
   color: var(--text-color-link);
@@ -42,18 +42,18 @@
   white-space: nowrap;
   font-weight: normal;
 }
-#table-content #add-new-row-button {
+#add-new-row-button {
   cursor: pointer;
   color: var(--text-color-link);
   padding: 0;
   vertical-align: middle;
   text-align: center;
 }
-#table-content #add-new-column-button:hover, #table-content #add-new-row-button:hover {
+#add-new-column-button:hover, #add-new-row-button:hover {
   color: var(--text-color-link-hover);
 }
 
-#table-content [contenteditable] {
+[contenteditable] {
   padding: 2px 6px;
 
   &[placeholder]:empty::before {
@@ -73,7 +73,7 @@
   }
 }
 
-#table-content select {
+select {
   padding: 2px 6px;
   border: none;
   width: 100%;

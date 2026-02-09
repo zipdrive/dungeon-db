@@ -111,10 +111,13 @@ if (urlParamTableOid && urlParamObjOid) {
     });
 
     // Allow field name column to be resized
-    makeColumnsResizable((_, newColumnWidth) => {
-      let fieldNameWidthStylesheet: HTMLStyleElement = document.getElementById('field-name-width-stylesheet') as HTMLStyleElement;
-      fieldNameWidthStylesheet.innerHTML = `.field-name-cell { width: ${newColumnWidth}px; }`;
-    });
+    makeColumnsResizable(
+      (_, newColumnWidth) => {
+        let fieldNameWidthStylesheet: HTMLStyleElement = document.getElementById('field-name-width-stylesheet') as HTMLStyleElement;
+        fieldNameWidthStylesheet.innerHTML = `.field-name-cell { width: ${newColumnWidth}px; }`;
+      },
+      () => {}
+    );
 
     // Set the scroll position back to what it was before
     pageNode.scrollTop = scrollPosition;

@@ -34,6 +34,7 @@ if (urlParamTableOid) {
     tableRowNode.id = `table-content-row-${rowOid}`;
     tableRowNode.classList.add('reorderable-row');
     let tableRowIndexNode = document.createElement('td');
+    tableRowIndexNode.classList.add('resizable-column');
     tableRowIndexNode.style.position = 'sticky';
     tableRowIndexNode.style.left = '0';
     tableRowIndexNode.style.textAlign = 'center';
@@ -118,8 +119,6 @@ if (urlParamTableOid) {
    * @param tableOid The OID of the table.
    */
   async function refreshTableAsync() {
-    console.debug("Now refreshing the entire contents of the table.");
-
     // Record the old scroll position
     let pageNode: HTMLDivElement = document.getElementById('page') as HTMLDivElement;
     const scrollHorizontalPosition: number = pageNode.scrollLeft;
@@ -132,7 +131,7 @@ if (urlParamTableOid) {
     // Strip the former contents of the table
     let tableNode: HTMLTableElement | null = document.querySelector('#table-content');
     if (tableNode)
-      tableNode.innerHTML = '<tbody></tbody><thead><tr><th style="position: sticky; left: 0px; z-index: 1; width: 3em;"></th></tr></thead><tfoot><tr></tr></tfoot>';
+      tableNode.innerHTML = '<colgroup><col id="table-content-index-widthcontrol" span="1" style="width: 3em;"></colgroup><tbody></tbody><thead><tr><th class="resizable-column" style="position: sticky; left: 0px; z-index: 1;"></th></tr></thead><tfoot><tr></tr></tfoot>';
     let tableHeaderRowNode: HTMLTableRowElement | null = document.querySelector('#table-content > thead > tr');
     let tableBodyNode: HTMLElement | null = document.querySelector('#table-content > tbody');
 
@@ -150,6 +149,9 @@ if (urlParamTableOid) {
       if (tableHeaderNode != null) {
         // Create a style class for the column
         tableColStyleNode.insertAdjacentHTML('beforeend', `.table-content-column${columnOid} { ${column.columnStyle} } `);
+
+        // Add a col for the column, to control the width
+        tableNode?.querySelector('colgroup')?.insertAdjacentHTML('beforeend', `<col span="1" id="table-content-column${columnOid}-widthcontrol">`);
 
         // Add a label to the column header
         tableHeaderNode.innerText = column.name;
@@ -294,7 +296,7 @@ if (urlParamTableOid) {
     const onReceiveCell = new Channel<TableCellChannelPacket>();
     let currentRowNode: HTMLTableRowElement | null = null;
     let currentRowOid: number | null = null;
-    onReceiveCell.onmessage = (cell) => {
+    onReceiveCell.onmessage = async (cell) => {
       if ('rowIndex' in cell) {
         // New row
         const rowOid = cell.rowOid;
@@ -307,7 +309,7 @@ if (urlParamTableOid) {
         // Add cell to current row
         if (currentRowNode && currentRowOid) {
           // Get current row and column OID
-          addTableColumnCellToRow(currentRowNode, cell);
+          await addTableColumnCellToRow(currentRowNode, cell);
         }
       }
     };
@@ -327,7 +329,14 @@ if (urlParamTableOid) {
     // Make the columns of the table resizable
     makeColumnsResizable(
       (resizedCell, newColumnWidth) => {
-
+        console.debug(`columnOid: ${resizedCell.dataset.columnOid}`);
+        let widthcontrolCol: HTMLElement | null = document.querySelector(resizedCell.dataset.columnOid ? `#table-content-column${resizedCell.dataset.columnOid}-widthcontrol` : `#table-content-index-widthcontrol`);
+        if (widthcontrolCol) {
+          widthcontrolCol.style.width = `${newColumnWidth}px`;
+        }
+      },
+      (resizedCell, newColumnWidth) => {
+        // Update the column CSS style to incorporate the new width
       }
     );
 
@@ -396,6 +405,7 @@ if (urlParamTableOid) {
   });
 
   listen<number>("update-table-data", (e) => {
+    console.debug(`Received request to update Table ${e.payload}.`);
     navigator.locks.request('table-content', async () => {
       const updateTableOid = e.payload;
       if (updateTableOid == tableOid) {

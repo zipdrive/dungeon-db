@@ -12,14 +12,23 @@ Sortable.mount(new AutoScroll());
  * Makes the columns of a table resizable.
  * Applied only to columns with class "resizable-column".
  */
-export function makeColumnsResizable(onResizeCallbackFn: (resizedCell: Element, newColumnWidth: number) => void) {
+export function makeColumnsResizable(onResizeCallbackFn: (resizedCell: HTMLElement, newColumnWidth: number) => void, onFinalizeResizeCallbackFn: (resizedCell: HTMLElement, newColumnWidth: number) => void) {
     interact('.resizable-column').resizable({
         edges: { right: true },
         onmove(event: ResizeEvent) {
             const target = event.target as HTMLElement;
-            const width = target.offsetWidth;
-            onResizeCallbackFn(target, width + event.dx);
+            if (target) {
+                const width = event.rect.width;
+                onResizeCallbackFn(target, width);
+            } else {
+                console.debug(`Target is not an HTMLElement.`);
+            }
         },
+        onend(event: ResizeEvent) {
+            const target = event.target as HTMLElement;
+            const width = event.rect.width;
+            onFinalizeResizeCallbackFn(target, width);
+        }
     });
 }
 
