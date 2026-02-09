@@ -11,13 +11,18 @@ import { Channel } from "@tauri-apps/api/core";
  * @param rowOid The OID of the row of the table that the cell belongs to.
  * @param cell Information about the cell itself.
  */
-export async function addTableColumnCellToRow(rowNode: HTMLTableRowElement, cell: TableColumnCell): Promise<HTMLElement> {
+export async function addTableColumnCellToRow(rowNode: HTMLTableRowElement, cell: TableColumnCell, isTable: boolean = true): Promise<HTMLElement> {
   const tableOid = cell.tableOid;
   const rowOid = cell.rowOid;
   const columnOid = cell.columnOid;
 
   // Insert cell node
   let tableCellNode: HTMLTableCellElement = document.createElement('td');
+  tableCellNode.classList.add(`table-content-column${columnOid}`);
+  tableCellNode.classList.add('resizable-column');
+  tableCellNode.dataset.tableOid = tableOid.toString();
+  tableCellNode.dataset.rowOid = rowOid.toString();
+  tableCellNode.dataset.columnOid = columnOid.toString();
 
   // Add null class for CSS
   if (!cell.displayValue) {
@@ -89,35 +94,24 @@ export async function addTableColumnCellToRow(rowNode: HTMLTableRowElement, cell
       case 'Integer':
       case 'Date':
       case 'Timestamp': {
-        // Set cell to be editable
-        let editableDivNode: HTMLDivElement = document.createElement('div');
-        editableDivNode.contentEditable = 'true';
-        if (cell.displayValue) {
-          editableDivNode.innerText = cell.displayValue;
-        } else {
-          editableDivNode.setAttribute('placeholder', '— NULL —');
-        }
-
         const primitiveType = cell.columnType.primitive;
-
-        // Set up an event listener for when the value is changed
-        editableDivNode.addEventListener('focusout', async (_) => {
-          let newPrimitiveValue: string | null = editableDivNode.innerText.trimEnd();
-
+        async function setCellPrimitiveValueAsync(newPrimitiveValue: string | null) {
           // If necessary, convert value into a regularized format before uploading to database
-          switch (primitiveType) {
-            case 'Date':
-              let date: number = Date.parse(newPrimitiveValue);
-              if (!isNaN(date)) {
-                newPrimitiveValue = new Date(date).toISOString();
-              }
-              break;
-            case 'Timestamp':
-              let timestamp: number = Date.parse(newPrimitiveValue);
-              if (!isNaN(timestamp)) {
-                newPrimitiveValue = new Date(timestamp).toISOString();
-              }
-              break;
+          if (newPrimitiveValue) {
+            switch (primitiveType) {
+              case 'Date':
+                let date: number = Date.parse(newPrimitiveValue);
+                if (!isNaN(date)) {
+                  newPrimitiveValue = new Date(date).toISOString();
+                }
+                break;
+              case 'Timestamp':
+                let timestamp: number = Date.parse(newPrimitiveValue);
+                if (!isNaN(timestamp)) {
+                  newPrimitiveValue = new Date(timestamp).toISOString();
+                }
+                break;
+            }
           }
 
           await executeAsync({
@@ -134,11 +128,45 @@ export async function addTableColumnCellToRow(rowNode: HTMLTableRowElement, cell
               kind: 'warning'
             });
           });
-        });
+        }
 
-        // Add the div to the cell
-        tableCellNode.insertAdjacentElement('beforeend', editableDivNode);
-        return editableDivNode;
+        if (isTable) {
+          // Create an editable div
+          let cellInput: HTMLDivElement = document.createElement('div');
+          cellInput.contentEditable = 'true';
+          if (cell.displayValue) {
+            cellInput.innerText = cell.displayValue;
+          } else {
+            cellInput.setAttribute('placeholder', '— NULL —');
+          }
+
+          // Set up an event listener for when the value is changed
+          cellInput.addEventListener('focusout', async () => {
+            let newPrimitiveValue: string | null = cellInput.innerText.trimEnd();
+            await setCellPrimitiveValueAsync(newPrimitiveValue);
+          });
+          
+          // Add the div to the cell
+          tableCellNode.insertAdjacentElement('beforeend', cellInput);
+          return cellInput;
+        } else {
+          // Create a text input
+          let cellInput: HTMLInputElement = document.createElement('input');
+          cellInput.classList.add('input');
+          cellInput.inputMode = 'text';
+          cellInput.value = cell.displayValue ?? '';
+          cellInput.placeholder = '— NULL —';
+
+          // Set up an event listener for when the value is changed
+          cellInput.addEventListener('change', async () => {
+            let newPrimitiveValue: string | null = cellInput.value.trimEnd();
+            await setCellPrimitiveValueAsync(newPrimitiveValue);
+          });
+
+          // Add the input to the cell
+          tableCellNode.insertAdjacentElement('beforeend', cellInput);
+          return cellInput;
+        }
       }
       case 'Boolean': {
         let inputNode: HTMLInputElement = document.createElement('input');

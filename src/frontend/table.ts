@@ -4,7 +4,7 @@ import { listen } from '@tauri-apps/api/event';
 import { message } from "@tauri-apps/plugin-dialog";
 import { TableCellChannelPacket, TableColumnMetadata, TableRowCellChannelPacket, executeAsync, openDialogAsync, queryAsync } from './backendutils';
 import { addTableColumnCellToRow } from "./tableutils";
-import { makeColumnsReorderable } from "./frontendutils";
+import { makeColumnsReorderable, makeColumnsResizable } from "./frontendutils";
 
 const urlParams = new URLSearchParams(window.location.search);
 const urlParamTableOid = urlParams.get('table_oid');
@@ -32,6 +32,7 @@ if (urlParamTableOid) {
   function addRowToTable(tableBodyNode: HTMLElement, rowOid: number, rowIndex: number): HTMLTableRowElement {
     let tableRowNode: HTMLTableRowElement = document.createElement('tr');
     tableRowNode.id = `table-content-row-${rowOid}`;
+    tableRowNode.classList.add('reorderable-row');
     let tableRowIndexNode = document.createElement('td');
     tableRowIndexNode.style.position = 'sticky';
     tableRowIndexNode.style.left = '0';
@@ -48,6 +49,19 @@ if (urlParamTableOid) {
       e.returnValue = false;
 
       const contextMenuItems = await Promise.all([
+        MenuItem.new({
+          text: 'Edit Row',
+          action: async () => {
+            await openDialogAsync({
+              invokeAction: 'dialog_object_data',
+              invokeParams: {
+                tableOid: tableOid,
+                rowOid: rowOid,
+                title: 'Edit Row'
+              }
+            })
+          }
+        }),
         MenuItem.new({
           text: 'Insert New Row',
           action: async () => {
@@ -108,7 +122,8 @@ if (urlParamTableOid) {
 
     // Record the old scroll position
     let pageNode: HTMLDivElement = document.getElementById('page') as HTMLDivElement;
-    const scrollPosition: number = pageNode.scrollTop;
+    const scrollHorizontalPosition: number = pageNode.scrollLeft;
+    const scrollVerticalPosition: number = pageNode.scrollTop;
 
     // Set up a stylesheet
     let tableColStyleNode: HTMLStyleElement = document.getElementById('column-stylesheet') as HTMLStyleElement;
@@ -139,6 +154,7 @@ if (urlParamTableOid) {
         // Add a label to the column header
         tableHeaderNode.innerText = column.name;
         tableHeaderNode.classList.add(`table-content-column${columnOid}`);
+        tableHeaderNode.classList.add('resizable-column');
         tableHeaderNode.classList.add('reorderable-column');
         tableHeaderNode.dataset.columnOid = columnOid.toString();
         tableHeaderNode.dataset.columnOrdering = columnOrdering.toString();
@@ -211,22 +227,27 @@ if (urlParamTableOid) {
 
     // Allow columns to be reordered
     if (tableHeaderRowNode) {
-      makeColumnsReorderable(tableHeaderRowNode, async (reorderedColumnHeader, columnHeaderToImmediateLeft) => {
-        // Readjust the column ordering
-        if (reorderedColumnHeader && reorderedColumnHeader.dataset.columnOid && reorderedColumnHeader.dataset.columnOrdering) {
-          const reorderedColumnOid: number = parseInt(reorderedColumnHeader.dataset.columnOid);
-          const oldColumnOrdering: number = parseInt(reorderedColumnHeader.dataset.columnOrdering);
-          const newColumnOrdering: number | null = columnHeaderToImmediateLeft && columnHeaderToImmediateLeft.dataset.columnOrdering ? parseInt(columnHeaderToImmediateLeft.dataset.columnOrdering) : null;
-          await executeAsync({
-            reorderTableColumn: {
-              tableOid: tableOid,
-              columnOid: reorderedColumnOid,
-              oldColumnOrdering: oldColumnOrdering,
-              newColumnOrdering: newColumnOrdering
-            }
-          });
+      makeColumnsReorderable(tableHeaderRowNode, 
+        (reorderedColumnHeader, columnHeaderToImmediateLeft) => {
+          // Move the column's data in subsequent rows without refreshing
+        },
+        async (reorderedColumnHeader, columnHeaderToImmediateRight) => {
+          // Readjust the column ordering
+          if (reorderedColumnHeader && reorderedColumnHeader.dataset.columnOid && reorderedColumnHeader.dataset.columnOrdering) {
+            const reorderedColumnOid: number = parseInt(reorderedColumnHeader.dataset.columnOid);
+            const oldColumnOrdering: number = parseInt(reorderedColumnHeader.dataset.columnOrdering);
+            const newColumnOrdering: number | null = columnHeaderToImmediateRight && columnHeaderToImmediateRight.dataset.columnOrdering ? parseInt(columnHeaderToImmediateRight.dataset.columnOrdering) : null;
+            await executeAsync({
+              reorderTableColumn: {
+                tableOid: tableOid,
+                columnOid: reorderedColumnOid,
+                oldColumnOrdering: oldColumnOrdering,
+                newColumnOrdering: newColumnOrdering
+              }
+            });
+          }
         }
-      });
+      );
     }
 
     // Add a final column header that is a button to add a new column
@@ -303,8 +324,16 @@ if (urlParamTableOid) {
       }
     });
 
+    // Make the columns of the table resizable
+    makeColumnsResizable(
+      (resizedCell, newColumnWidth) => {
+
+      }
+    );
+
     // Set the scrolling position back to what it was previously
-    pageNode.scrollTop = scrollPosition;
+    pageNode.scrollLeft = scrollHorizontalPosition;
+    pageNode.scrollTop = scrollVerticalPosition;
   }
 
   /**

@@ -173,7 +173,7 @@ pub fn send_obj_data(obj_type_oid: i64, obj_row_oid: i64, obj_data_channel: Chan
                     1 AS LEVEL,
                     u.MASTER_TABLE_OID AS MASTER_TYPE_OID,
                     u.INHERITOR_TABLE_OID AS TYPE_OID
-                FROM METADATA_TABLE_INHERITANCE u ON 
+                FROM METADATA_TABLE_INHERITANCE u 
                 WHERE u.TRASH = 0 AND u.MASTER_TABLE_OID = ?1
                 UNION
                 SELECT

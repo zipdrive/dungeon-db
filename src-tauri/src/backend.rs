@@ -742,7 +742,7 @@ pub async fn dialog_object_data(app: AppHandle, table_oid: i64, row_oid: i64, ti
     WebviewWindowBuilder::new(
         &app,
         format!("tableObjectWindow-{window_idx}"),
-        WebviewUrl::App(format!("/src/frontend/table_object.html?table_oid={table_oid}&row_oid={row_oid}").into()),
+        WebviewUrl::App(format!("/src/frontend/table_object.html?table_oid={table_oid}&obj_oid={row_oid}").into()),
     )
     .title(&title)
     .inner_size(800.0, 600.0)
