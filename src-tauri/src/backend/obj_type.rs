@@ -51,6 +51,8 @@ pub fn create(name: String, master_table_oid_list: &Vec<i64>) -> Result<i64, err
 
 
 
+
+
 #[derive(Serialize, Clone)]
 #[serde(rename_all="camelCase")]
 pub struct BasicMetadata {
@@ -79,7 +81,7 @@ pub fn send_metadata_list(obj_type_oid: Option<i64>, obj_type_channel: Channel<B
                     tbl.NAME AS TYPE_NAME
                 FROM METADATA_TYPE typ
                 INNER JOIN METADATA_TABLE tbl ON tbl.TYPE_OID = typ.OID
-                WHERE tbl.TRASH = 0 AND typ.MODE = 4 AND typ.OID = ?1
+                WHERE tbl.TRASH = 0 AND typ.OID = ?1
                 UNION
                 SELECT
                     s.LEVEL + 1 AS LEVEL,
@@ -206,7 +208,7 @@ pub fn send_obj_data(obj_type_oid: i64, obj_row_oid: i64, obj_data_channel: Chan
         let (level, master_type_oid, inheritor_type_oid) = subtype_row_result.unwrap();
         if !subtypes.contains_key(&inheritor_type_oid) && subtypes.contains_key(&master_type_oid) {
             let master_row_oid: i64 = subtypes[&master_type_oid];
-            let select_from_type_table_cmd: String = format!("SELECT OID FROM TABLE{inheritor_type_oid} WHERE MASTER{master_type_oid}_OID = ?1");
+            let select_from_type_table_cmd: String = format!("SELECT OID FROM TABLE{inheritor_type_oid} WHERE MASTER{master_type_oid}_OID = ?1 AND TRASH = 0");
             match trans.query_one(&select_from_type_table_cmd, params![master_row_oid], |row| row.get(0)).optional()? {
                 Some(inheritor_row_oid) => {
                     subtypes.insert(inheritor_type_oid, inheritor_row_oid);

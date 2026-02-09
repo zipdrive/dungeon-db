@@ -99,6 +99,11 @@ pub enum Action {
         table_oid: i64,
         row_oid: i64 
     },
+    RetypeTableRow {
+        base_type_oid: i64,
+        base_row_oid: i64,
+        new_subtype_oid: i64
+    },
     DeleteTableRow {
         table_oid: i64,
         row_oid: i64
@@ -496,9 +501,29 @@ impl Action {
                     }
                 }
             },
+            Self::RetypeTableRow { base_type_oid, base_row_oid, new_subtype_oid } => {
+                match table_data::retype(base_type_oid.clone(), base_row_oid.clone(), new_subtype_oid.clone()) {
+                    Ok(old_subtype_oid) => {
+                        let mut reverse_stack = if is_forward {
+                            REVERSE_STACK.lock().unwrap() 
+                        } else { 
+                            FORWARD_STACK.lock().unwrap() 
+                        };
+                        (*reverse_stack).push(Self::RetypeTableRow { 
+                            base_type_oid: base_type_oid.clone(),
+                            base_row_oid: base_row_oid.clone(),
+                            new_subtype_oid: old_subtype_oid.clone()
+                        });
+                        msg_update_table_data(app, base_type_oid.clone());
+                    },
+                    Err(e) => {
+                        return Err(e);
+                    }
+                }
+            },
             Self::DeleteTableRow { table_oid, row_oid } => {
                 match table_data::trash(table_oid.clone(), row_oid.clone()) {
-                    Ok(_) => {
+                    Ok((table_oid, row_oid)) => {
                         let mut reverse_stack = if is_forward {
                             REVERSE_STACK.lock().unwrap() 
                         } else { 

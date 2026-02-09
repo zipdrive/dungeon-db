@@ -245,6 +245,12 @@ export type Action = {
         rowOid: number
     }
 } | {
+    retypeTableRow: {
+        baseTypeOid: number,
+        baseRowOid: number,
+        newSubtypeOid: number
+    }
+} | {
     deleteTableRow: {
         tableOid: number,
         rowOid: number

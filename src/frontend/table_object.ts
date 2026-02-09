@@ -1,8 +1,9 @@
 import { Channel } from "@tauri-apps/api/core";
-import { BasicHierarchicalMetadata, closeDialogAsync, queryAsync, TableRowCellChannelPacket } from "./backendutils";
+import { BasicHierarchicalMetadata, closeDialogAsync, executeAsync, queryAsync, TableRowCellChannelPacket } from "./backendutils";
 import { addTableColumnCellToRow } from "./tableutils";
 import { listen } from "@tauri-apps/api/event";
 import { makeColumnsResizable } from "./frontendutils";
+import { message } from "@tauri-apps/plugin-dialog";
 
 const urlParams = new URLSearchParams(window.location.search);
 const urlParamTableOid = urlParams.get('table_oid');
@@ -27,6 +28,7 @@ if (urlParamTableOid && urlParamObjOid) {
     let subtypeDropdownRow: HTMLTableRowElement = document.createElement('tr');
     subtypeDropdownRow.innerHTML = '<td class="resizable-column"><label for="object-content-subtype-dropdown">Object Type:</label></td><td><select id="object-content-subtype-dropdown"></select></td>';
     let subtypeDropdown: HTMLSelectElement = subtypeDropdownRow.querySelector('#object-content-subtype-dropdown') as HTMLSelectElement;
+    subtypeDropdown.classList.add('input');
 
     // Set up a channel to receive all possible subtypes
     const onReceiveSubtype: Channel<BasicHierarchicalMetadata> = new Channel<BasicHierarchicalMetadata>();
@@ -34,7 +36,7 @@ if (urlParamTableOid && urlParamObjOid) {
       console.debug(`Subtype received: ${JSON.stringify(subtype)}`);
       let subtypeOption: HTMLOptionElement = document.createElement('option');
       subtypeOption.value = subtype.oid.toString();
-      subtypeOption.innerText = (subtype.hierarchyLevel > 0 ? '--'.repeat(subtype.hierarchyLevel) + ' ' : '') + subtype.name;
+      subtypeOption.innerText = (subtype.hierarchyLevel > 0 ? ' '.repeat(subtype.hierarchyLevel) : '') + subtype.name;
       subtypeDropdown.appendChild(subtypeOption);
     };
 
@@ -50,17 +52,29 @@ if (urlParamTableOid && urlParamObjOid) {
     // Only add the subtype dropdown if there is at least one subtype
     if (subtypeDropdown.childElementCount > 1) {
       tableBodyNode?.appendChild(subtypeDropdownRow);
+      tableBodyNode?.insertAdjacentHTML('beforeend', '<tr><td colspan="2"><hr><hr></td></tr>')
 
       // Change the object's subtype and refresh when the dropdown value is changed
-      subtypeDropdown.addEventListener('change', (_) => {
-        // TODO
+      subtypeDropdown.addEventListener('change', async (_) => {
+        await executeAsync({
+          retypeTableRow: {
+            baseTypeOid: tableOid,
+            baseRowOid: objOid,
+            newSubtypeOid: parseInt(subtypeDropdown.value)
+          }
+        })
+        .catch(async (e) => {
+          await message(e, {
+            title: 'An error occurred while changing the type of the object.',
+            kind: 'error'
+          });
+        });
       });
     }
 
     // Set up a channel to create an input for each cell
     const onReceiveCell: Channel<TableRowCellChannelPacket> = new Channel<TableRowCellChannelPacket>();
     onReceiveCell.onmessage = (cell) => {
-      console.debug(`Cell received: ${JSON.stringify(cell)}`);
       if ('rowExists' in cell) {
         if (cell.rowExists) {
           subtypeDropdown.value = cell.tableOid.toString();
@@ -111,6 +125,12 @@ if (urlParamTableOid && urlParamObjOid) {
     navigator.locks.request('object-content', refreshObjectAsync);
   });
   
+  listen<number>("update-table-data", (e) => {
+    const updateTableOid = e.payload;
+    if (updateTableOid == tableOid) {
+      navigator.locks.request('object-content', refreshObjectAsync);
+    }
+  });
   listen<[number, number]>("update-table-row", (e) => {
     const updateTableOid = e.payload[0];
     const updateRowOid = e.payload[1];

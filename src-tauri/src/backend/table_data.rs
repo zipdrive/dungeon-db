@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet, LinkedList};
+use std::{collections::{HashMap, HashSet, LinkedList}};
 use serde_json::{Result as SerdeJsonResult, Value};
-use rusqlite::{Error as RusqliteError, OptionalExtension, Row, Transaction, params};
+use rusqlite::{Error as RusqliteError, OptionalExtension, Row, Transaction, params, vtab::array::Array};
 use serde::Serialize;
 use tauri::ipc::Channel;
 use time::format_description::well_known;
@@ -51,12 +51,25 @@ pub enum RowCell {
 }
 
 
+struct RowOidParamAlias {
+    type_oid: i64,
+    type_param_alias: String,
+    type_row_oid: i64,
+    level: i64
+}
+
 /// Inserts a new row into the table.
-fn insert_inplace(trans: &Transaction, table_oid: i64, row_oid: Option<i64>) -> Result<i64, error::Error> {
-    let mut type_row_oids: Vec<(String, i64)>;
+fn insert_inplace(trans: &Transaction, table_oid: i64, row_oid: Option<i64>, known_supertype_oids: Option<Vec<RowOidParamAlias>>) -> Result<i64, error::Error> {
+    rusqlite::vtab::array::load_module(trans)?;
+
+    let mut type_row_oids: Vec<(String, i64)> = match &known_supertype_oids { 
+        Some(o) => o.iter().map(|alias| (alias.type_param_alias.clone(), alias.type_row_oid)).collect(), 
+        None => Vec::new() 
+    };
+
     let mut select_supertype_statement = trans.prepare(match row_oid {
         Some(o) => { 
-            type_row_oids = vec![(String::from(":t"), o)];
+            type_row_oids.push((String::from(":t"), o));
             "
             WITH RECURSIVE SUPERTYPE_QUERY (LEVEL, SUPERTYPE_OID, INHERITOR_TYPE_OID, COL_NAME, COL_VALUE_EXPRESSION) AS (
                 SELECT
@@ -85,7 +98,7 @@ fn insert_inplace(trans: &Transaction, table_oid: i64, row_oid: Option<i64>) -> 
                     u.MASTER_TABLE_OID
                 FROM TYPE_QUERY s
                 INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.TYPE_OID
-                WHERE u.TRASH = 0
+                WHERE u.TRASH = 0 AND u.MASTER_TABLE_OID NOT IN rarray(?2)
             )
             SELECT
                 COALESCE(MAX(s.LEVEL), 9223372036854775807) AS MAX_LEVEL,
@@ -115,7 +128,6 @@ fn insert_inplace(trans: &Transaction, table_oid: i64, row_oid: Option<i64>) -> 
             "
         },
         None => {
-            type_row_oids = Vec::new();
             "
             WITH RECURSIVE SUPERTYPE_QUERY (LEVEL, SUPERTYPE_OID, INHERITOR_TYPE_OID, COL_NAME, COL_VALUE_EXPRESSION) AS (
                 SELECT
@@ -144,7 +156,7 @@ fn insert_inplace(trans: &Transaction, table_oid: i64, row_oid: Option<i64>) -> 
                     u.MASTER_TABLE_OID
                 FROM TYPE_QUERY s
                 INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.TYPE_OID
-                WHERE u.TRASH = 0
+                WHERE u.TRASH = 0 AND u.MASTER_TABLE_OID NOT IN rarray(?2)
             )
             SELECT
                 COALESCE(MAX(s.LEVEL), 9223372036854775807) AS MAX_LEVEL,
@@ -163,9 +175,16 @@ fn insert_inplace(trans: &Transaction, table_oid: i64, row_oid: Option<i64>) -> 
             "
         }
     })?;
-    let supertype_rows = select_supertype_statement.query_map(params![table_oid], |row| {
-        Ok((row.get::<_, i64>("TYPE_OID")?, row.get::<_, String>("INSERT_CMD")?))
-    })?;
+    let existing_supertype_oids: Array = Array::new(match known_supertype_oids {
+        Some(a) => a.iter().map(|alias| alias.type_oid.into()).collect(),
+        None => Vec::new()
+    });
+    let supertype_rows = select_supertype_statement.query_map(
+        params![table_oid, existing_supertype_oids], 
+        |row| {
+            Ok((row.get::<_, i64>("TYPE_OID")?, row.get::<_, String>("INSERT_CMD")?))
+        }
+    )?;
 
     for supertype_row_result in supertype_rows {
         let (type_oid, insert_cmd) = supertype_row_result.unwrap();
@@ -184,11 +203,33 @@ fn insert_inplace(trans: &Transaction, table_oid: i64, row_oid: Option<i64>) -> 
 }
 
 /// Flags a row as being trash.
-fn trash_inplace(trans: &Transaction, table_oid: i64, row_oid: i64) -> Result<(), error::Error> {
-    let mut type_row_oids: Vec<(String, i64)> = vec![(format!(":m{table_oid}"), row_oid)];
+fn trash_inplace(trans: &Transaction, table_oid: i64, row_oid: i64) -> Result<(i64, i64), error::Error> {
+    // Check if there is a deeper subtype level that would also need to be trashed
+    let mut select_immediate_subtype_statement = trans.prepare(
+        "SELECT
+        u.INHERITOR_TABLE_OID AS TYPE_OID
+        FROM METADATA_TABLE_INHERITANCE u
+        WHERE u.MASTER_TABLE_OID = ?1"
+    )?;
+    let immediate_subtype_rows = select_immediate_subtype_statement
+        .query_map(params![table_oid], |row| row.get::<_, i64>("TYPE_OID"))?;
+    for immediate_subtype_result in immediate_subtype_rows {
+        let subtype_oid = immediate_subtype_result?;
+        let select_subtype_row_cmd: String = format!("SELECT OID FROM TABLE{subtype_oid} WHERE MASTER{table_oid}_OID = ?1 AND TRASH = 0");
+        match trans.query_one(&select_subtype_row_cmd, params![row_oid], |row| row.get::<_, i64>("OID")).optional()? {
+            Some(subtype_row_oid) => {
+                // Stop iteration at the first located subtype OID with a non-trash row associated with this table
+                // Return the table OID and row OID of the deepest level that was trashed
+                return trash_inplace(trans, subtype_oid, subtype_row_oid);
+            },
+            None => {}
+        }
+    }
+
+    // Get every supertype
     let mut select_supertype_statement = trans.prepare(
         "
-        WITH RECURSIVE TYPE_QUERY (LEVEL, TYPE_OID, SELECT_CMD, UPDATE_CMD) AS (
+        WITH RECURSIVE TYPE_QUERY (LEVEL, TYPE_OID, SELECT_CMD) AS (
             SELECT 
                 0 AS LEVEL,
                 ?1 AS TYPE_OID,
@@ -216,6 +257,10 @@ fn trash_inplace(trans: &Transaction, table_oid: i64, row_oid: i64) -> Result<()
         Ok((row.get::<_, i64>("TYPE_OID")?, row.get::<_, Option<String>>("SELECT_CMD")?, row.get::<_, String>("UPDATE_CMD")?))
     })?;
 
+    // This Vec collects the parameters mapping a table OID to the corresponding row OID in that table
+    let mut type_row_oids: Vec<(String, i64)> = vec![(format!(":m{table_oid}"), row_oid)];
+
+    // Mark as trash every row in a master list that this row depends on
     for supertype_row_result in supertype_rows {
         let (type_oid, select_cmd, update_cmd) = supertype_row_result.unwrap();
 
@@ -239,7 +284,7 @@ fn trash_inplace(trans: &Transaction, table_oid: i64, row_oid: i64) -> Result<()
             .collect();
         trans.execute(&update_cmd, &*params)?;
     }
-    return Ok(());
+    return Ok((table_oid, row_oid));
 }
 
 /// Unflags a row as being trash.
@@ -247,7 +292,7 @@ fn untrash_inplace(trans: &Transaction, table_oid: i64, row_oid: i64) -> Result<
     let mut type_row_oids: Vec<(String, i64)> = vec![(format!(":m{table_oid}"), row_oid)];
     let mut select_supertype_statement = trans.prepare(
         "
-        WITH RECURSIVE TYPE_QUERY (LEVEL, TYPE_OID, SELECT_CMD, UPDATE_CMD) AS (
+        WITH RECURSIVE TYPE_QUERY (LEVEL, TYPE_OID, SELECT_CMD) AS (
             SELECT 
                 0 AS LEVEL,
                 ?1 AS TYPE_OID,
@@ -319,7 +364,7 @@ pub fn insert(table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
     match existing_row_oid {
         None => {
             // Insert with OID = row_oid
-            let row_oid = insert_inplace(&trans, table_oid, Some(row_oid))?;
+            let row_oid = insert_inplace(&trans, table_oid, Some(row_oid), None)?;
 
             // Return the row_oid
             trans.commit()?;
@@ -335,7 +380,7 @@ pub fn insert(table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
             match existing_prev_row_oid {
                 None => {
                     // Insert with OID = row_oid - 1
-                    let row_oid = insert_inplace(&trans, table_oid, Some(row_oid - 1))?;
+                    let row_oid = insert_inplace(&trans, table_oid, Some(row_oid - 1), None)?;
 
                     // Return the row_oid
                     trans.commit()?;
@@ -353,7 +398,7 @@ pub fn insert(table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
                     )?;
 
                     // Insert the row
-                    let row_oid = insert_inplace(&trans, table_oid, Some(row_oid))?;
+                    let row_oid = insert_inplace(&trans, table_oid, Some(row_oid), None)?;
 
                     // Return the row_oid
                     trans.commit()?;
@@ -370,24 +415,142 @@ pub fn push(table_oid: i64) -> Result<i64, error::Error> {
     let trans = conn.transaction()?;
 
     // Insert the row
-    let row_oid = insert_inplace(&trans, table_oid, None)?;
+    let row_oid = insert_inplace(&trans, table_oid, None, None)?;
 
     // Return the row OID
     trans.commit()?;
     return Ok(row_oid);
 }
 
+/// Retypes the subtype of an row.
+/// Returns the old subtype of the row.
+pub fn retype(base_obj_type_oid: i64, base_obj_row_oid: i64, new_obj_type_oid: i64) -> Result<i64, error::Error> {
+    let mut conn = db::open()?;
+    let trans = conn.transaction()?;
+
+    // Move any existing subtype rows to the trash
+    let (old_obj_type_oid, _) = trash_inplace(&trans, base_obj_type_oid.clone(), base_obj_row_oid.clone())?;
+    
+    println!("Changing {base_obj_type_oid}:{base_obj_row_oid} from {old_obj_type_oid} to {new_obj_type_oid}");
+
+    // This Vec collects the parameters mapping a table OID to the hierarchy level of that table and the corresponding row OID in that table
+    let mut type_row_oids: Vec<RowOidParamAlias> = vec![RowOidParamAlias {
+        type_oid: base_obj_type_oid,
+        type_param_alias: format!(":m{base_obj_type_oid}"), 
+        level: i64::MAX, 
+        type_row_oid: base_obj_row_oid
+    }];
+    // This Vec collects table parameter aliases where a row OID corresponding to the row in the base table does not exist, and thus any query dependent on that parameter will automatically fail
+    let mut nonexistent_type_row_oids: Vec<String> = Vec::new();
+    
+    {
+        // Get every supertype that is also a subtype of the base table
+        let mut select_supertype_statement = trans.prepare(
+            "
+            WITH RECURSIVE SUBTYPE_QUERY (TYPE_OID) AS (
+                SELECT
+                    ?1 AS TYPE_OID
+                UNION
+                SELECT
+                    u.INHERITOR_TABLE_OID AS TYPE_OID
+                FROM SUBTYPE_QUERY s
+                INNER JOIN METADATA_TABLE_INHERITANCE u ON u.MASTER_TABLE_OID = s.TYPE_OID
+                WHERE u.TRASH = 0
+            ),
+            SUPERTYPE_QUERY (LEVEL, TYPE_OID, SUPERTYPE_OID, WHERE_CLAUSE) AS (
+                SELECT 
+                    0 AS LEVEL,
+                    u.INHERITOR_TABLE_OID AS TYPE_OID,
+                    u.MASTER_TABLE_OID AS SUPERTYPE_OID,
+                    'MASTER' || FORMAT('%d', u.MASTER_TABLE_OID) || '_OID = :m' || FORMAT('%d', u.MASTER_TABLE_OID) AS WHERE_CLAUSE
+                FROM METADATA_TABLE_INHERITANCE u
+                WHERE u.TRASH = 0 AND u.INHERITOR_TABLE_OID = ?2
+                UNION
+                SELECT
+                    s.LEVEL + 1 AS LEVEL,
+                    u.INHERITOR_TABLE_OID AS TYPE_OID,
+                    u.MASTER_TABLE_OID AS SUPERTYPE_OID,
+                    'MASTER' || FORMAT('%d', u.MASTER_TABLE_OID) || '_OID = :m' || FORMAT('%d', u.MASTER_TABLE_OID) AS WHERE_CLAUSE
+                FROM SUPERTYPE_QUERY s
+                INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.SUPERTYPE_OID
+                WHERE u.TRASH = 0 AND u.MASTER_TABLE_OID IN (SELECT * FROM SUBTYPE_QUERY)
+            )
+            SELECT
+                MAX(t.LEVEL) AS MAX_LEVEL,
+                t.TYPE_OID,
+                'SELECT OID FROM TABLE' || FORMAT('%d', t.TYPE_OID) || ' WHERE ' || GROUP_CONCAT(t.WHERE_CLAUSE, ' AND ') AS SELECT_CMD
+            FROM SUPERTYPE_QUERY t
+            GROUP BY t.TYPE_OID
+            ORDER BY 1 DESC
+            "
+        )?;
+        let supertype_rows = select_supertype_statement.query_map(
+            params![base_obj_type_oid, new_obj_type_oid], 
+            |row| {
+                Ok((row.get::<_, i64>("MAX_LEVEL")?, row.get::<_, i64>("TYPE_OID")?, row.get::<_, String>("SELECT_CMD")?))
+            }
+        )?;
+
+
+        // Find all existent rows inheriting from the given row in the base table
+        for supertype_row_result in supertype_rows {
+            let (level, type_oid, select_cmd) = supertype_row_result.unwrap();
+
+            // Ensure that the select command does not depend on any nonexistent row OIDs
+            if nonexistent_type_row_oids.iter().any(|param_alias| select_cmd.contains(param_alias)) {
+                nonexistent_type_row_oids.push(format!(":m{type_oid}"));
+                continue;
+            }
+
+            // Attempt to find a row in the subtype table corresponding to the row in the base table
+            let params: Vec<(&str, i64)> = type_row_oids.iter()
+                .filter(|alias| select_cmd.contains(&alias.type_param_alias))
+                .map(|alias| (alias.type_param_alias.as_str(), alias.type_row_oid))
+                .collect();
+            match trans.query_one(&select_cmd, &*params, |row| row.get(0)).optional()? {
+                Some(type_row_oid) => {
+                    type_row_oids.push(RowOidParamAlias {
+                        type_oid,
+                        type_param_alias: format!(":m{type_oid}"), 
+                        level, 
+                        type_row_oid
+                    });
+                },
+                None => {
+                    nonexistent_type_row_oids.push(format!(":m{type_oid}"));
+                }
+            };
+        }
+    }
+
+    // Check if the new subtype already has an existing row
+    if type_row_oids.last().unwrap().level == 0 {
+        // If so, we unflag it as being trash, and we're done!
+        untrash_inplace(&trans, new_obj_type_oid, type_row_oids.last().unwrap().type_row_oid)?;
+    } else {
+        // If not, we create a new row 
+        let new_obj_row_oid: i64 = insert_inplace(&trans, new_obj_type_oid, None, Some(type_row_oids))?;
+
+        // Move every master of the new row from the trash
+        untrash_inplace(&trans, new_obj_type_oid, new_obj_row_oid)?;
+    }
+
+    // Commit the transaction
+    trans.commit()?;
+    return Ok(old_obj_type_oid);
+}
+
 /// Marks a row as trash.
-pub fn trash(table_oid: i64, row_oid: i64) -> Result<(), error::Error> {
+pub fn trash(table_oid: i64, row_oid: i64) -> Result<(i64, i64), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
     // Move the row to the trash bin
-    trash_inplace(&trans, table_oid, row_oid)?;
+    let (table_oid, row_oid) = trash_inplace(&trans, table_oid, row_oid)?;
 
     // Commit the transaction
     trans.commit()?;
-    return Ok(());
+    return Ok((table_oid, row_oid));
 }
 
 /// Unmarks a row as trash.
@@ -555,7 +718,7 @@ pub fn set_table_object_value(table_oid: i64, row_oid: i64, column_oid: i64, obj
         match column_type {
             data_type::MetadataColumnType::ChildObject(obj_type_oid) => {
                 // Insert a new row into the object table
-                let obj_row_oid = insert_inplace(&trans, obj_type_oid, None)?;
+                let obj_row_oid = insert_inplace(&trans, obj_type_oid, None, None)?;
 
                 // Update the value in the base table
                 let update_cmd = format!("UPDATE TABLE{table_oid} SET COLUMN{column_oid} = ?1 WHERE OID = ?2;");
