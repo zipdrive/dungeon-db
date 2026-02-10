@@ -1,26 +1,35 @@
-use std::any::Any;
-use std::path::{Path};
-use std::sync::{Mutex,MutexGuard};
-use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
-use rusqlite::{Connection, DropBehavior, Result, Transaction, TransactionBehavior, params, Params, Row};
 use crate::backend::table_data;
 use crate::util::error;
+use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
+use rusqlite::{
+    params, Connection, DropBehavior, Params, Result, Row, Transaction, TransactionBehavior,
+};
+use std::any::Any;
+use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
 
 static DATABASE_PATH: Mutex<Option<String>> = Mutex::new(None);
 
 /// Data structure locking access to the database while a function performs an action.
 pub struct DbAction<'a> {
     conn: Connection,
-    pub trans: Transaction<'a>
+    pub trans: Transaction<'a>,
 }
 
 impl DbAction<'_> {
     /// Convenience method to execute a query that returns multiple rows, then execute a function for each row.
-    pub fn query_iterate<P: Params, F: FnMut(&Row<'_>) -> Result<(), error::Error>>(&self, sql: &str, p: P, f: &mut F) -> Result<(), error::Error> {
+    pub fn query_iterate<P: Params, F: FnMut(&Row<'_>) -> Result<(), error::Error>>(
+        &self,
+        sql: &str,
+        p: P,
+        f: &mut F,
+    ) -> Result<(), error::Error> {
         // Prepare a statement
         let mut stmt = match self.trans.prepare(sql) {
             Ok(s) => s,
-            Err(e) => { return Err(error::Error::RusqliteError(e)); }
+            Err(e) => {
+                return Err(error::Error::RusqliteError(e));
+            }
         };
 
         // Execute the statement to query rows
@@ -28,7 +37,9 @@ impl DbAction<'_> {
         loop {
             let row = match rows.next()? {
                 Some(r) => r,
-                None => { break; }
+                None => {
+                    break;
+                }
             };
             f(row);
         }
@@ -232,12 +243,14 @@ pub fn open() -> Result<Connection, error::Error> {
     match *database_path {
         Some(ref path) => {
             let conn = Connection::open(path)?;
-            conn.execute_batch("
+            conn.execute_batch(
+                "
             PRAGMA foreign_keys = ON;
             PRAGMA journal_mode = WAL;
-            ")?;
+            ",
+            )?;
             return Ok(conn);
-        },
+        }
         None => {
             return Err(error::Error::AdhocError("No file is open!"));
         }
@@ -245,11 +258,18 @@ pub fn open() -> Result<Connection, error::Error> {
 }
 
 /// Convenience method to execute a query that returns multiple rows, then execute a function for each row.
-pub fn query_iterate<P: Params, F: FnMut(&Row<'_>) -> Result<(), error::Error>>(trans: &Transaction, sql: &str, p: P, f: &mut F) -> Result<(), error::Error> {
+pub fn query_iterate<P: Params, F: FnMut(&Row<'_>) -> Result<(), error::Error>>(
+    trans: &Transaction,
+    sql: &str,
+    p: P,
+    f: &mut F,
+) -> Result<(), error::Error> {
     // Prepare a statement
     let mut stmt = match trans.prepare(sql) {
         Ok(s) => s,
-        Err(e) => { return Err(error::Error::RusqliteError(e)); }
+        Err(e) => {
+            return Err(error::Error::RusqliteError(e));
+        }
     };
 
     // Execute the statement to query rows
@@ -257,7 +277,9 @@ pub fn query_iterate<P: Params, F: FnMut(&Row<'_>) -> Result<(), error::Error>>(
     loop {
         let row = match rows.next()? {
             Some(r) => r,
-            None => { break; }
+            None => {
+                break;
+            }
         };
         f(row);
     }

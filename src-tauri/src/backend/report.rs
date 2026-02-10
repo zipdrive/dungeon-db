@@ -1,12 +1,12 @@
+use crate::backend::{data_type, db, table};
+use crate::util::error;
+use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
+use rusqlite::{params, Error as RusqliteError, OptionalExtension, Row};
+use serde::{Deserialize, Serialize};
 use std::cell::Ref;
 use std::collections::HashMap;
 use std::sync::mpsc::channel;
-use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
-use rusqlite::{params, Row, Error as RusqliteError, OptionalExtension};
-use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
-use crate::backend::{data_type, db, table};
-use crate::util::error;
 
 /// Creates a report.
 pub fn create(report_name: &str, base_table_oid: i64) -> Result<i64, error::Error> {
@@ -14,14 +14,11 @@ pub fn create(report_name: &str, base_table_oid: i64) -> Result<i64, error::Erro
     let trans = conn.transaction()?;
 
     // Create the metadata for the subreport
-    trans.execute(
-        "INSERT INTO METADATA_RPT DEFAULT VALUES;",
-        []
-    )?;
+    trans.execute("INSERT INTO METADATA_RPT DEFAULT VALUES;", [])?;
     let report_oid: i64 = trans.last_insert_rowid();
     trans.execute(
         "INSERT INTO METADATA_RPT__REPORT (RPT_OID, BASE_TABLE_OID, NAME) VALUES (?1, ?2, ?3);",
-        params![report_oid, base_table_oid, report_name]
+        params![report_oid, base_table_oid, report_name],
     )?;
 
     return Ok(report_oid);
@@ -33,7 +30,10 @@ pub fn move_trash(report_oid: i64) -> Result<(), error::Error> {
     let trans = conn.transaction()?;
 
     // Flag the report as trash
-    trans.execute("UPDATE METADATA_RPT SET TRASH = 1 WHERE OID = ?1;", params![report_oid])?;
+    trans.execute(
+        "UPDATE METADATA_RPT SET TRASH = 1 WHERE OID = ?1;",
+        params![report_oid],
+    )?;
 
     // Commit and return
     trans.commit()?;
@@ -46,7 +46,10 @@ pub fn unmove_trash(report_oid: i64) -> Result<(), error::Error> {
     let trans = conn.transaction()?;
 
     // Flag the table as trash
-    trans.execute("UPDATE METADATA_RPT SET TRASH = 0 WHERE OID = ?1;", params![report_oid])?;
+    trans.execute(
+        "UPDATE METADATA_RPT SET TRASH = 0 WHERE OID = ?1;",
+        params![report_oid],
+    )?;
 
     // Commit and return
     trans.commit()?;

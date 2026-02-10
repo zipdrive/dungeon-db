@@ -1,7 +1,7 @@
 use rusqlite::Error as RusqliteError;
-use tauri::{Error as TauriError, ipc::Invoke};
 use serde::Serialize;
 use tauri::ipc::InvokeError;
+use tauri::{ipc::Invoke, Error as TauriError};
 
 pub enum Error {
     AdhocError(&'static str),
@@ -32,26 +32,25 @@ impl From<TauriError> for Error {
 impl Into<String> for Error {
     fn into(self) -> String {
         match self {
-            Self::AdhocError(s) => { 
-                return s.into(); 
-            },
+            Self::AdhocError(s) => {
+                return s.into();
+            }
             Self::SaveInitializationError(e) => {
                 return format!("An SQLite error occurred while attempting to save the state of the database: {}", e);
-            },
-            Self::RusqliteError(e) => { 
+            }
+            Self::RusqliteError(e) => {
                 return format!("SQLite error occurred: {}", e);
-            },
-            Self::TauriError(e) => { 
-                return format!("Tauri error occurred: {}", e); 
+            }
+            Self::TauriError(e) => {
+                return format!("Tauri error occurred: {}", e);
             }
         }
     }
 }
 
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 /// A flag for a validation check that was not passed.
 pub struct FailedValidation {
-    pub description: String 
+    pub description: String,
 }

@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 
-use rusqlite::{OptionalExtension, Statement, ToSql, Transaction, params};
-use tauri::ipc::Channel;
-use serde::{Serialize, Deserialize};
 use crate::backend::{data_type, db, table, table_data};
 use crate::util::error;
-
+use rusqlite::{params, OptionalExtension, Statement, ToSql, Transaction};
+use serde::{Deserialize, Serialize};
+use tauri::ipc::Channel;
 
 /// Creates a new table.
 pub fn create(name: String, master_table_oid_list: &Vec<i64>) -> Result<i64, error::Error> {
@@ -17,15 +16,17 @@ pub fn create(name: String, master_table_oid_list: &Vec<i64>) -> Result<i64, err
     let table_oid: i64 = trans.last_insert_rowid();
     trans.execute(
         "INSERT INTO METADATA_TABLE (TYPE_OID, NAME) VALUES (?1, ?2);",
-        params![table_oid, &name]
+        params![table_oid, &name],
     )?;
 
     // Create the table
-    let create_table_cmd: String = format!("
+    let create_table_cmd: String = format!(
+        "
     CREATE TABLE TABLE{table_oid} (
         OID INTEGER PRIMARY KEY, 
         TRASH INTEGER NOT NULL DEFAULT 0
-    ) STRICT;");
+    ) STRICT;"
+    );
     trans.execute(&create_table_cmd, [])?;
 
     // Add inheritance from each master table
@@ -40,7 +41,7 @@ pub fn create(name: String, master_table_oid_list: &Vec<i64>) -> Result<i64, err
         let alter_table_cmd: String = format!("ALTER TABLE TABLE{table_oid} ADD COLUMN MASTER{master_table_oid}_OID INTEGER NOT NULL REFERENCES TABLE{master_table_oid} (OID) ON UPDATE CASCADE ON DELETE CASCADE;");
         trans.execute(&alter_table_cmd, [])?;
     }
-    
+
     // Update the surrogate view
     table::update_surrogate_view(&trans, table_oid.clone())?;
 
@@ -49,20 +50,19 @@ pub fn create(name: String, master_table_oid_list: &Vec<i64>) -> Result<i64, err
     return Ok(table_oid);
 }
 
-
-
-
-
 #[derive(Serialize, Clone)]
-#[serde(rename_all="camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct BasicMetadata {
     oid: i64,
     name: String,
-    hierarchy_level: i64
+    hierarchy_level: i64,
 }
 
 /// Sends all object types through the given channel.
-pub fn send_metadata_list(obj_type_oid: Option<i64>, obj_type_channel: Channel<BasicMetadata>) -> Result<(), error::Error> {
+pub fn send_metadata_list(
+    obj_type_oid: Option<i64>,
+    obj_type_channel: Channel<BasicMetadata>,
+) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
@@ -100,7 +100,7 @@ pub fn send_metadata_list(obj_type_oid: Option<i64>, obj_type_channel: Channel<B
                 TYPE_NAME
             FROM SUBTYPE_QUERY";
             params![o.clone()]
-        },
+        }
         None => {
             // If retrieving all object types, only filter the topmost level of the recursion query by
             // object types that have no master type.
@@ -137,29 +137,27 @@ pub fn send_metadata_list(obj_type_oid: Option<i64>, obj_type_channel: Channel<B
     };
 
     // Send each queried object type to the frontend
-    db::query_iterate(&trans, 
-        select_statement, 
-        select_params, 
-        &mut |row| {
-            let level: i64 = row.get("LEVEL")?;
-            let type_oid: i64 = row.get("TYPE_OID")?;
-            let type_name: String = row.get("TYPE_NAME")?;
+    db::query_iterate(&trans, select_statement, select_params, &mut |row| {
+        let level: i64 = row.get("LEVEL")?;
+        let type_oid: i64 = row.get("TYPE_OID")?;
+        let type_name: String = row.get("TYPE_NAME")?;
 
-            obj_type_channel.send(BasicMetadata { 
-                oid: type_oid, 
-                name: type_name, 
-                hierarchy_level: level 
-            })?;
+        obj_type_channel.send(BasicMetadata {
+            oid: type_oid,
+            name: type_name,
+            hierarchy_level: level,
+        })?;
 
-            return Ok(());
-        }
-    )?;
+        return Ok(());
+    })?;
     return Ok(());
 }
 
-
-
-pub fn send_obj_data(obj_type_oid: i64, obj_row_oid: i64, obj_data_channel: Channel<table_data::RowCell>) -> Result<(), error::Error> {
+pub fn send_obj_data(
+    obj_type_oid: i64,
+    obj_row_oid: i64,
+    obj_data_channel: Channel<table_data::RowCell>,
+) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
@@ -191,17 +189,14 @@ pub fn send_obj_data(obj_type_oid: i64, obj_row_oid: i64, obj_data_channel: Chan
                 LEVEL,
                 MASTER_TYPE_OID,
                 TYPE_OID
-            FROM SUBTYPE_QUERY"
+            FROM SUBTYPE_QUERY",
     )?;
-    let subtype_rows = subtype_statement.query_map(
-        params![obj_type_oid], 
-        |row| {
-            let level: i64 = row.get("LEVEL")?;
-            let master_type_oid: i64 = row.get("MASTER_TYPE_OID")?;
-            let type_oid: i64 = row.get("TYPE_OID")?;
-            return Ok((level, master_type_oid, type_oid));
-        }
-    )?;
+    let subtype_rows = subtype_statement.query_map(params![obj_type_oid], |row| {
+        let level: i64 = row.get("LEVEL")?;
+        let master_type_oid: i64 = row.get("MASTER_TYPE_OID")?;
+        let type_oid: i64 = row.get("TYPE_OID")?;
+        return Ok((level, master_type_oid, type_oid));
+    })?;
 
     // Find each table with a row associated with the obj_row_oid in the original object table
     for subtype_row_result in subtype_rows {
@@ -209,7 +204,14 @@ pub fn send_obj_data(obj_type_oid: i64, obj_row_oid: i64, obj_data_channel: Chan
         if !subtypes.contains_key(&inheritor_type_oid) && subtypes.contains_key(&master_type_oid) {
             let master_row_oid: i64 = subtypes[&master_type_oid];
             let select_from_type_table_cmd: String = format!("SELECT OID FROM TABLE{inheritor_type_oid} WHERE MASTER{master_type_oid}_OID = ?1 AND TRASH = 0");
-            match trans.query_one(&select_from_type_table_cmd, params![master_row_oid], |row| row.get(0)).optional()? {
+            match trans
+                .query_one(
+                    &select_from_type_table_cmd,
+                    params![master_row_oid],
+                    |row| row.get(0),
+                )
+                .optional()?
+            {
                 Some(inheritor_row_oid) => {
                     subtypes.insert(inheritor_type_oid, inheritor_row_oid);
 
@@ -219,7 +221,7 @@ pub fn send_obj_data(obj_type_oid: i64, obj_row_oid: i64, obj_data_channel: Chan
                     } else if level == max_level {
                         max_level_subtype.push(inheritor_type_oid);
                     }
-                },
+                }
                 None => {}
             }
         }

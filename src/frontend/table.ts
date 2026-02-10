@@ -3,7 +3,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { listen } from '@tauri-apps/api/event';
 import { message } from "@tauri-apps/plugin-dialog";
 import { TableCellChannelPacket, TableColumnMetadata, TableRowCellChannelPacket, executeAsync, openDialogAsync, queryAsync } from './backendutils';
-import { addTableColumnCellToRow } from "./tableutils";
+import { addTableColumnCellToRow, updateTableColumnCell } from "./tableutils";
 import { makeColumnsReorderable, makeColumnsResizable } from "./frontendutils";
 
 const urlParams = new URLSearchParams(window.location.search);
@@ -115,8 +115,49 @@ if (urlParamTableOid) {
   }
 
   /**
-   * Displays the data for a table.
-   * @param tableOid The OID of the table.
+   * Does a shallow refresh of all cells.
+   * Should be used when an action has been performed that may alter table validations.
+   */
+  async function refreshAllCellsAsync() {
+    // Record the old scroll position
+    let pageNode: HTMLDivElement = document.getElementById('page') as HTMLDivElement;
+    const scrollHorizontalPosition: number = pageNode.scrollLeft;
+    const scrollVerticalPosition: number = pageNode.scrollTop;
+
+    // Set up a channel to populate the rows of the table
+    const onReceiveCell = new Channel<TableCellChannelPacket>();
+    onReceiveCell.onmessage = async (cell) => {
+      if ('rowIndex' in cell) {
+        // Ignore
+      } else {
+        // Retrieve the cell
+        let tableCellElement: HTMLTableCellElement | null = document.getElementById(`table-content-column${cell.columnOid}-row${cell.rowOid}`) as HTMLTableCellElement;
+        if (tableCellElement) {
+          updateTableColumnCell(tableCellElement, cell, true);
+        }
+      }
+    };
+
+    // Send a command to Rust to get the list of rows from the database
+    await queryAsync({
+      invokeAction: "get_table_data",
+      invokeParams: {
+        tableOid: tableOid, 
+        parentRowOid: parentRowOid,
+        pageNum: pageNum,
+        pageSize: pageSize,
+        cellChannel: onReceiveCell 
+      }
+    });
+
+    // Set the scrolling position back to what it was previously
+    pageNode.scrollLeft = scrollHorizontalPosition;
+    pageNode.scrollTop = scrollVerticalPosition;
+  }
+
+  /**
+   * Does a full refresh of the table.
+   * Should be used when a row or column has been altered.
    */
   async function refreshTableAsync() {
     // Record the old scroll position
@@ -132,8 +173,8 @@ if (urlParamTableOid) {
     let tableNode: HTMLTableElement | null = document.querySelector('#table-content');
     if (tableNode)
       tableNode.innerHTML = '<colgroup><col id="table-content-index-widthcontrol" span="1" style="width: 3em;"></colgroup><tbody></tbody><thead><tr><th class="resizable-column" style="position: sticky; left: 0px; z-index: 1;"></th></tr></thead><tfoot><tr></tr></tfoot>';
-    let tableHeaderRowNode: HTMLTableRowElement | null = document.querySelector('#table-content > thead > tr');
-    let tableBodyNode: HTMLElement | null = document.querySelector('#table-content > tbody');
+    let tableHeaderRowNode: HTMLTableRowElement | null = tableNode?.querySelector('thead > tr') || null;
+    let tableBodyNode: HTMLElement | null = tableNode?.querySelector('tbody') || null;
 
     // Set up a channel to populate the list of user-defined columns
     let tableColumnList: TableColumnMetadata[] = []
@@ -275,7 +316,7 @@ if (urlParamTableOid) {
     tableFooterCellNode.id = 'add-new-row-button';
     tableFooterCellNode.innerHTML = '<div style="position: sticky; left: 0; right: 0;">Add New Row</div>';
     // Set the footer to span the entire row
-    tableFooterCellNode.setAttribute('colspan', (tableColumnList.length + 3).toString());
+    tableFooterCellNode.setAttribute('colspan', (tableColumnList.length + 2).toString());
     // Set what it should do on click
     tableFooterCellNode.addEventListener('click', async (_) => {
       await executeAsync({
@@ -295,21 +336,28 @@ if (urlParamTableOid) {
     // Set up a channel to populate the rows of the table
     const onReceiveCell = new Channel<TableCellChannelPacket>();
     let currentRowNode: HTMLTableRowElement | null = null;
-    let currentRowOid: number | null = null;
     onReceiveCell.onmessage = async (cell) => {
       if ('rowIndex' in cell) {
         // New row
         const rowOid = cell.rowOid;
         const rowIndex = cell.rowIndex;
-        currentRowOid = rowOid;
         if (tableBodyNode) {
           currentRowNode = addRowToTable(tableBodyNode, rowOid, rowIndex);
         }
       } else {
         // Add cell to current row
-        if (currentRowNode && currentRowOid) {
-          // Get current row and column OID
-          await addTableColumnCellToRow(currentRowNode, cell);
+        if (currentRowNode) {
+          let tableCellNode: HTMLTableCellElement = document.createElement('td');
+          tableCellNode.id = `table-content-column${cell.columnOid}-row${cell.rowOid}`;
+          tableCellNode.classList.add(`table-content-column${cell.columnOid}`);
+          tableCellNode.classList.add('resizable-column');
+          tableCellNode.dataset.tableOid = cell.tableOid.toString();
+          tableCellNode.dataset.columnOid = cell.columnOid.toString();
+          tableCellNode.dataset.rowOid = cell.rowOid.toString();
+          currentRowNode.appendChild(tableCellNode);
+
+          // Insert an input into the td element
+          updateTableColumnCell(tableCellNode, cell, true);
         }
       }
     };
@@ -330,13 +378,28 @@ if (urlParamTableOid) {
     makeColumnsResizable(
       (resizedCell, newColumnWidth) => {
         console.debug(`columnOid: ${resizedCell.dataset.columnOid}`);
-        let widthcontrolCol: HTMLElement | null = document.querySelector(resizedCell.dataset.columnOid ? `#table-content-column${resizedCell.dataset.columnOid}-widthcontrol` : `#table-content-index-widthcontrol`);
+        let widthcontrolCol: HTMLElement | null = document.getElementById(resizedCell.dataset.columnOid ? `table-content-column${resizedCell.dataset.columnOid}-widthcontrol` : `table-content-index-widthcontrol`);
         if (widthcontrolCol) {
           widthcontrolCol.style.width = `${newColumnWidth}px`;
         }
       },
-      (resizedCell, newColumnWidth) => {
+      async (resizedCell, newColumnWidth) => {
         // Update the column CSS style to incorporate the new width
+        if (resizedCell.dataset.columnOid) {
+          await executeAsync({
+            editTableColumnWidth: {
+              tableOid: tableOid,
+              columnOid: parseInt(resizedCell.dataset.columnOid),
+              columnWidth: Math.round(newColumnWidth)
+            }
+          })
+          .catch(async (e) => {
+            await message(e, {
+              title: 'An error occurred while adjusting column width.',
+              kind: 'error'
+            })
+          });
+        }
       }
     );
 
@@ -404,12 +467,19 @@ if (urlParamTableOid) {
     refreshTableAsync();
   });
 
-  listen<number>("update-table-data", (e) => {
-    console.debug(`Received request to update Table ${e.payload}.`);
+  listen<number>("update-table-data-deep", (e) => {
     navigator.locks.request('table-content', async () => {
       const updateTableOid = e.payload;
       if (updateTableOid == tableOid) {
         await refreshTableAsync();
+      }
+    });
+  });
+  listen<number>("update-table-data-shallow", (e) => {
+    navigator.locks.request('table-content', async () => {
+      const updateTableOid = e.payload;
+      if (updateTableOid == tableOid) {
+        await refreshAllCellsAsync();
       }
     });
   });

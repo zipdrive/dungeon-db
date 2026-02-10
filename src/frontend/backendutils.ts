@@ -218,6 +218,12 @@ export type Action = {
         isPrimaryKey: boolean
     }
 } | {
+    editTableColumnWidth: {
+        tableOid: number,
+        columnOid: number,
+        columnWidth: number
+    }
+} | {
     editTableColumnDropdownValues: {
         tableOid: number,
         columnOid: number,

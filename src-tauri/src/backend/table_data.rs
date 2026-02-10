@@ -1,22 +1,23 @@
-use std::{collections::{HashMap, HashSet, LinkedList}};
-use serde_json::{Result as SerdeJsonResult, Value};
-use rusqlite::{Error as RusqliteError, OptionalExtension, Row, Transaction, params, vtab::array::Array};
-use serde::Serialize;
-use tauri::ipc::Channel;
-use time::format_description::well_known;
-use time::macros::{time};
-use time::{Date, PrimitiveDateTime, UtcDateTime};
 use crate::backend::data_type::Primitive;
 use crate::backend::{data_type, db, obj_type, table, table_column};
 use crate::util::error;
-
+use rusqlite::{
+    params, vtab::array::Array, Error as RusqliteError, OptionalExtension, Row, Transaction,
+};
+use serde::Serialize;
+use serde_json::{Result as SerdeJsonResult, Value};
+use std::collections::{HashMap, HashSet, LinkedList};
+use tauri::ipc::Channel;
+use time::format_description::well_known;
+use time::macros::time;
+use time::{Date, PrimitiveDateTime, UtcDateTime};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", untagged)]
 pub enum Cell {
     RowStart {
         row_oid: i64,
-        row_index: i64
+        row_index: i64,
     },
     ColumnValue {
         table_oid: i64,
@@ -26,8 +27,8 @@ pub enum Cell {
         column_type: data_type::MetadataColumnType,
         true_value: Option<String>,
         display_value: Option<String>,
-        failed_validations: Vec<error::FailedValidation>
-    }
+        failed_validations: Vec<error::FailedValidation>,
+    },
 }
 
 #[derive(Serialize)]
@@ -35,7 +36,7 @@ pub enum Cell {
 pub enum RowCell {
     RowExists {
         row_exists: bool,
-        table_oid: i64
+        table_oid: i64,
     },
     ColumnValue {
         table_oid: i64,
@@ -46,25 +47,32 @@ pub enum RowCell {
         column_ordering: i64,
         true_value: Option<String>,
         display_value: Option<String>,
-        failed_validations: Vec<error::FailedValidation>
-    }
+        failed_validations: Vec<error::FailedValidation>,
+    },
 }
-
 
 struct RowOidParamAlias {
     type_oid: i64,
     type_param_alias: String,
     type_row_oid: i64,
-    level: i64
+    level: i64,
 }
 
 /// Inserts a new row into the table.
-fn insert_inplace(trans: &Transaction, table_oid: i64, row_oid: Option<i64>, known_supertype_oids: Option<Vec<RowOidParamAlias>>) -> Result<i64, error::Error> {
+fn insert_inplace(
+    trans: &Transaction,
+    table_oid: i64,
+    row_oid: Option<i64>,
+    known_supertype_oids: Option<Vec<RowOidParamAlias>>,
+) -> Result<i64, error::Error> {
     rusqlite::vtab::array::load_module(trans)?;
 
-    let mut type_row_oids: Vec<(String, i64)> = match &known_supertype_oids { 
-        Some(o) => o.iter().map(|alias| (alias.type_param_alias.clone(), alias.type_row_oid)).collect(), 
-        None => Vec::new() 
+    let mut type_row_oids: Vec<(String, i64)> = match &known_supertype_oids {
+        Some(o) => o
+            .iter()
+            .map(|alias| (alias.type_param_alias.clone(), alias.type_row_oid))
+            .collect(),
+        None => Vec::new(),
     };
 
     let mut select_supertype_statement = trans.prepare(match row_oid {
@@ -177,19 +185,23 @@ fn insert_inplace(trans: &Transaction, table_oid: i64, row_oid: Option<i64>, kno
     })?;
     let existing_supertype_oids: Array = Array::new(match known_supertype_oids {
         Some(a) => a.iter().map(|alias| alias.type_oid.into()).collect(),
-        None => Vec::new()
+        None => Vec::new(),
     });
     let supertype_rows = select_supertype_statement.query_map(
-        params![table_oid, existing_supertype_oids], 
+        params![table_oid, existing_supertype_oids],
         |row| {
-            Ok((row.get::<_, i64>("TYPE_OID")?, row.get::<_, String>("INSERT_CMD")?))
-        }
+            Ok((
+                row.get::<_, i64>("TYPE_OID")?,
+                row.get::<_, String>("INSERT_CMD")?,
+            ))
+        },
     )?;
 
     for supertype_row_result in supertype_rows {
         let (type_oid, insert_cmd) = supertype_row_result.unwrap();
 
-        let params: Vec<(&str, i64)> = type_row_oids.iter()
+        let params: Vec<(&str, i64)> = type_row_oids
+            .iter()
             .filter(|tup| insert_cmd.contains(&tup.0))
             .map(|tup| (tup.0.as_str(), tup.1))
             .collect();
@@ -203,25 +215,36 @@ fn insert_inplace(trans: &Transaction, table_oid: i64, row_oid: Option<i64>, kno
 }
 
 /// Flags a row as being trash.
-fn trash_inplace(trans: &Transaction, table_oid: i64, row_oid: i64) -> Result<(i64, i64), error::Error> {
+fn trash_inplace(
+    trans: &Transaction,
+    table_oid: i64,
+    row_oid: i64,
+) -> Result<(i64, i64), error::Error> {
     // Check if there is a deeper subtype level that would also need to be trashed
     let mut select_immediate_subtype_statement = trans.prepare(
         "SELECT
         u.INHERITOR_TABLE_OID AS TYPE_OID
         FROM METADATA_TABLE_INHERITANCE u
-        WHERE u.MASTER_TABLE_OID = ?1"
+        WHERE u.MASTER_TABLE_OID = ?1",
     )?;
     let immediate_subtype_rows = select_immediate_subtype_statement
         .query_map(params![table_oid], |row| row.get::<_, i64>("TYPE_OID"))?;
     for immediate_subtype_result in immediate_subtype_rows {
         let subtype_oid = immediate_subtype_result?;
-        let select_subtype_row_cmd: String = format!("SELECT OID FROM TABLE{subtype_oid} WHERE MASTER{table_oid}_OID = ?1 AND TRASH = 0");
-        match trans.query_one(&select_subtype_row_cmd, params![row_oid], |row| row.get::<_, i64>("OID")).optional()? {
+        let select_subtype_row_cmd: String = format!(
+            "SELECT OID FROM TABLE{subtype_oid} WHERE MASTER{table_oid}_OID = ?1 AND TRASH = 0"
+        );
+        match trans
+            .query_one(&select_subtype_row_cmd, params![row_oid], |row| {
+                row.get::<_, i64>("OID")
+            })
+            .optional()?
+        {
             Some(subtype_row_oid) => {
                 // Stop iteration at the first located subtype OID with a non-trash row associated with this table
                 // Return the table OID and row OID of the deepest level that was trashed
                 return trash_inplace(trans, subtype_oid, subtype_row_oid);
-            },
+            }
             None => {}
         }
     }
@@ -254,7 +277,11 @@ fn trash_inplace(trans: &Transaction, table_oid: i64, row_oid: i64) -> Result<(i
         "
     )?;
     let supertype_rows = select_supertype_statement.query_map(params![table_oid], |row| {
-        Ok((row.get::<_, i64>("TYPE_OID")?, row.get::<_, Option<String>>("SELECT_CMD")?, row.get::<_, String>("UPDATE_CMD")?))
+        Ok((
+            row.get::<_, i64>("TYPE_OID")?,
+            row.get::<_, Option<String>>("SELECT_CMD")?,
+            row.get::<_, String>("UPDATE_CMD")?,
+        ))
     })?;
 
     // This Vec collects the parameters mapping a table OID to the corresponding row OID in that table
@@ -267,18 +294,20 @@ fn trash_inplace(trans: &Transaction, table_oid: i64, row_oid: i64) -> Result<(i
         // Get the row OID
         match select_cmd {
             Some(s) => {
-                let temp_params: Vec<(&str, i64)> = type_row_oids.iter()
+                let temp_params: Vec<(&str, i64)> = type_row_oids
+                    .iter()
                     .filter(|tup| s.contains(&tup.0))
                     .map(|tup| (tup.0.as_str(), tup.1))
                     .collect();
                 let type_row_oid: i64 = trans.query_one(&s, &*temp_params, |row| row.get(0))?;
                 type_row_oids.push((format!(":m{type_oid}"), type_row_oid));
-            },
+            }
             None => {}
         }
 
         // Flag the row as being trash
-        let params: Vec<(&str, i64)> = type_row_oids.iter()
+        let params: Vec<(&str, i64)> = type_row_oids
+            .iter()
             .filter(|tup| update_cmd.contains(&tup.0))
             .map(|tup| (tup.0.as_str(), tup.1))
             .collect();
@@ -317,7 +346,11 @@ fn untrash_inplace(trans: &Transaction, table_oid: i64, row_oid: i64) -> Result<
         "
     )?;
     let supertype_rows = select_supertype_statement.query_map(params![table_oid], |row| {
-        Ok((row.get::<_, i64>("TYPE_OID")?, row.get::<_, Option<String>>("SELECT_CMD")?, row.get::<_, String>("UPDATE_CMD")?))
+        Ok((
+            row.get::<_, i64>("TYPE_OID")?,
+            row.get::<_, Option<String>>("SELECT_CMD")?,
+            row.get::<_, String>("UPDATE_CMD")?,
+        ))
     })?;
 
     for supertype_row_result in supertype_rows {
@@ -326,18 +359,20 @@ fn untrash_inplace(trans: &Transaction, table_oid: i64, row_oid: i64) -> Result<
         // Get the row OID
         match select_cmd {
             Some(s) => {
-                let temp_params: Vec<(&str, i64)> = type_row_oids.iter()
+                let temp_params: Vec<(&str, i64)> = type_row_oids
+                    .iter()
                     .filter(|tup| s.contains(&tup.0))
                     .map(|tup| (tup.0.as_str(), tup.1))
                     .collect();
                 let type_row_oid: i64 = trans.query_one(&s, &*temp_params, |row| row.get(0))?;
                 type_row_oids.push((format!(":m{type_oid}"), type_row_oid));
-            },
+            }
             None => {}
         }
 
         // Unflag the row as being trash
-        let params: Vec<(&str, i64)> = type_row_oids.iter()
+        let params: Vec<(&str, i64)> = type_row_oids
+            .iter()
             .filter(|tup| update_cmd.contains(&tup.0))
             .map(|tup| (tup.0.as_str(), tup.1))
             .collect();
@@ -346,8 +381,6 @@ fn untrash_inplace(trans: &Transaction, table_oid: i64, row_oid: i64) -> Result<
     return Ok(());
 }
 
-
-
 /// Insert a row into the data such that the OID places it before any existing rows with that OID.
 pub fn insert(table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
     let mut conn = db::open()?;
@@ -355,11 +388,11 @@ pub fn insert(table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
 
     // If OID is already in database, shift every row with OID >= row_oid up by 1
     let select_cmd = format!("SELECT OID FROM TABLE{table_oid} WHERE OID = ?1;");
-    let existing_row_oid = trans.query_one(&select_cmd, params![row_oid], 
-        |row| {
+    let existing_row_oid = trans
+        .query_one(&select_cmd, params![row_oid], |row| {
             return Ok(row.get::<_, i64>(0)?);
-        }
-    ).optional()?;
+        })
+        .optional()?;
 
     match existing_row_oid {
         None => {
@@ -369,14 +402,14 @@ pub fn insert(table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
             // Return the row_oid
             trans.commit()?;
             return Ok(row_oid);
-        },
+        }
         Some(_) => {
-            let existing_prev_row_oid = trans.query_one(&select_cmd, params![row_oid - 1], 
-                |row| {
+            let existing_prev_row_oid = trans
+                .query_one(&select_cmd, params![row_oid - 1], |row| {
                     return Ok(row.get::<_, i64>(0)?);
-                }
-            ).optional()?;
-            
+                })
+                .optional()?;
+
             match existing_prev_row_oid {
                 None => {
                     // Insert with OID = row_oid - 1
@@ -385,17 +418,18 @@ pub fn insert(table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
                     // Return the row_oid
                     trans.commit()?;
                     return Ok(row_oid);
-                },
+                }
                 Some(_) => {
                     // Increment every OID >= row_oid up by 1 to make room for the new row
-                    let select_all_cmd = format!("SELECT OID FROM TABLE{table_oid} WHERE OID >= ?1 ORDER BY OID DESC;");
-                    db::query_iterate(&trans, &select_all_cmd, params![row_oid], 
-                        &mut |row| {
-                            let update_cmd = format!("UPDATE TABLE{table_oid} SET OID = OID + 1 WHERE OID = ?1;");
-                            trans.execute(&update_cmd, params![row.get::<_, i64>(0)?])?;
-                            return Ok(());
-                        }
-                    )?;
+                    let select_all_cmd = format!(
+                        "SELECT OID FROM TABLE{table_oid} WHERE OID >= ?1 ORDER BY OID DESC;"
+                    );
+                    db::query_iterate(&trans, &select_all_cmd, params![row_oid], &mut |row| {
+                        let update_cmd =
+                            format!("UPDATE TABLE{table_oid} SET OID = OID + 1 WHERE OID = ?1;");
+                        trans.execute(&update_cmd, params![row.get::<_, i64>(0)?])?;
+                        return Ok(());
+                    })?;
 
                     // Insert the row
                     let row_oid = insert_inplace(&trans, table_oid, Some(row_oid), None)?;
@@ -424,25 +458,30 @@ pub fn push(table_oid: i64) -> Result<i64, error::Error> {
 
 /// Retypes the subtype of an row.
 /// Returns the old subtype of the row.
-pub fn retype(base_obj_type_oid: i64, base_obj_row_oid: i64, new_obj_type_oid: i64) -> Result<i64, error::Error> {
+pub fn retype(
+    base_obj_type_oid: i64,
+    base_obj_row_oid: i64,
+    new_obj_type_oid: i64,
+) -> Result<i64, error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
     // Move any existing subtype rows to the trash
-    let (old_obj_type_oid, _) = trash_inplace(&trans, base_obj_type_oid.clone(), base_obj_row_oid.clone())?;
-    
+    let (old_obj_type_oid, _) =
+        trash_inplace(&trans, base_obj_type_oid.clone(), base_obj_row_oid.clone())?;
+
     println!("Changing {base_obj_type_oid}:{base_obj_row_oid} from {old_obj_type_oid} to {new_obj_type_oid}");
 
     // This Vec collects the parameters mapping a table OID to the hierarchy level of that table and the corresponding row OID in that table
     let mut type_row_oids: Vec<RowOidParamAlias> = vec![RowOidParamAlias {
         type_oid: base_obj_type_oid,
-        type_param_alias: format!(":m{base_obj_type_oid}"), 
-        level: i64::MAX, 
-        type_row_oid: base_obj_row_oid
+        type_param_alias: format!(":m{base_obj_type_oid}"),
+        level: i64::MAX,
+        type_row_oid: base_obj_row_oid,
     }];
     // This Vec collects table parameter aliases where a row OID corresponding to the row in the base table does not exist, and thus any query dependent on that parameter will automatically fail
     let mut nonexistent_type_row_oids: Vec<String> = Vec::new();
-    
+
     {
         // Get every supertype that is also a subtype of the base table
         let mut select_supertype_statement = trans.prepare(
@@ -485,37 +524,47 @@ pub fn retype(base_obj_type_oid: i64, base_obj_row_oid: i64, new_obj_type_oid: i
             "
         )?;
         let supertype_rows = select_supertype_statement.query_map(
-            params![base_obj_type_oid, new_obj_type_oid], 
+            params![base_obj_type_oid, new_obj_type_oid],
             |row| {
-                Ok((row.get::<_, i64>("MAX_LEVEL")?, row.get::<_, i64>("TYPE_OID")?, row.get::<_, String>("SELECT_CMD")?))
-            }
+                Ok((
+                    row.get::<_, i64>("MAX_LEVEL")?,
+                    row.get::<_, i64>("TYPE_OID")?,
+                    row.get::<_, String>("SELECT_CMD")?,
+                ))
+            },
         )?;
-
 
         // Find all existent rows inheriting from the given row in the base table
         for supertype_row_result in supertype_rows {
             let (level, type_oid, select_cmd) = supertype_row_result.unwrap();
 
             // Ensure that the select command does not depend on any nonexistent row OIDs
-            if nonexistent_type_row_oids.iter().any(|param_alias| select_cmd.contains(param_alias)) {
+            if nonexistent_type_row_oids
+                .iter()
+                .any(|param_alias| select_cmd.contains(param_alias))
+            {
                 nonexistent_type_row_oids.push(format!(":m{type_oid}"));
                 continue;
             }
 
             // Attempt to find a row in the subtype table corresponding to the row in the base table
-            let params: Vec<(&str, i64)> = type_row_oids.iter()
+            let params: Vec<(&str, i64)> = type_row_oids
+                .iter()
                 .filter(|alias| select_cmd.contains(&alias.type_param_alias))
                 .map(|alias| (alias.type_param_alias.as_str(), alias.type_row_oid))
                 .collect();
-            match trans.query_one(&select_cmd, &*params, |row| row.get(0)).optional()? {
+            match trans
+                .query_one(&select_cmd, &*params, |row| row.get(0))
+                .optional()?
+            {
                 Some(type_row_oid) => {
                     type_row_oids.push(RowOidParamAlias {
                         type_oid,
-                        type_param_alias: format!(":m{type_oid}"), 
-                        level, 
-                        type_row_oid
+                        type_param_alias: format!(":m{type_oid}"),
+                        level,
+                        type_row_oid,
                     });
-                },
+                }
                 None => {
                     nonexistent_type_row_oids.push(format!(":m{type_oid}"));
                 }
@@ -526,10 +575,15 @@ pub fn retype(base_obj_type_oid: i64, base_obj_row_oid: i64, new_obj_type_oid: i
     // Check if the new subtype already has an existing row
     if type_row_oids.last().unwrap().level == 0 {
         // If so, we unflag it as being trash, and we're done!
-        untrash_inplace(&trans, new_obj_type_oid, type_row_oids.last().unwrap().type_row_oid)?;
+        untrash_inplace(
+            &trans,
+            new_obj_type_oid,
+            type_row_oids.last().unwrap().type_row_oid,
+        )?;
     } else {
-        // If not, we create a new row 
-        let new_obj_row_oid: i64 = insert_inplace(&trans, new_obj_type_oid, None, Some(type_row_oids))?;
+        // If not, we create a new row
+        let new_obj_row_oid: i64 =
+            insert_inplace(&trans, new_obj_type_oid, None, Some(type_row_oids))?;
 
         // Move every master of the new row from the trash
         untrash_inplace(&trans, new_obj_type_oid, new_obj_row_oid)?;
@@ -566,8 +620,6 @@ pub fn untrash(table_oid: i64, row_oid: i64) -> Result<(), error::Error> {
     return Ok(());
 }
 
-
-
 /// Delete the row with the given OID.
 pub fn delete(table_oid: i64, row_oid: i64) -> Result<(), error::Error> {
     let mut conn = db::open()?;
@@ -585,10 +637,15 @@ pub fn delete(table_oid: i64, row_oid: i64) -> Result<(), error::Error> {
 /// Attempts to update a value represented by a primitive in a table.
 /// This applies to primitive types, single-select dropdown types, reference types, and object types.
 /// Returns the previous value of the cell.
-pub fn try_update_primitive_value(table_oid: i64, row_oid: i64, column_oid: i64, mut new_value: Option<String>) -> Result<Option<String>, error::Error> {
+pub fn try_update_primitive_value(
+    table_oid: i64,
+    row_oid: i64,
+    column_oid: i64,
+    mut new_value: Option<String>,
+) -> Result<Option<String>, error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
-    
+
     // Verify that the column has a primitive type
     let column_type = trans.query_one(
         "SELECT
@@ -596,29 +653,32 @@ pub fn try_update_primitive_value(table_oid: i64, row_oid: i64, column_oid: i64,
             t.MODE
         FROM METADATA_TABLE_COLUMN c
         INNER JOIN METADATA_TYPE t ON t.OID = c.TYPE_OID
-        WHERE c.OID = ?1", 
-        params![column_oid], 
+        WHERE c.OID = ?1",
+        params![column_oid],
         |row| {
-            Ok(data_type::MetadataColumnType::from_database(row.get("TYPE_OID")?, row.get("MODE")?))
-        }
+            Ok(data_type::MetadataColumnType::from_database(
+                row.get("TYPE_OID")?,
+                row.get("MODE")?,
+            ))
+        },
     )?;
     match column_type {
         data_type::MetadataColumnType::Primitive(prim) => {
             match prim {
                 data_type::Primitive::JSON => {
-                    // If column has JSON type, validate the JSON 
+                    // If column has JSON type, validate the JSON
                     match new_value.clone() {
-                        Some(json_str) => {
-                            match serde_json::from_str::<&'_ str>(&*json_str) {
-                                Ok(_) => {},
-                                Err(_) => {
-                                    return Err(error::Error::AdhocError("The provided value is invalid JSON."));
-                                }
+                        Some(json_str) => match serde_json::from_str::<&'_ str>(&*json_str) {
+                            Ok(_) => {}
+                            Err(_) => {
+                                return Err(error::Error::AdhocError(
+                                    "The provided value is invalid JSON.",
+                                ));
                             }
                         },
                         None => {}
                     }
-                },
+                }
                 data_type::Primitive::Integer => {
                     match new_value.clone() {
                         Some(num_str) => {
@@ -626,53 +686,71 @@ pub fn try_update_primitive_value(table_oid: i64, row_oid: i64, column_oid: i64,
                             let num: f64 = match num_str.parse() {
                                 Ok(n) => n,
                                 Err(_) => {
-                                    return Err(error::Error::AdhocError("The provided value cannot be converted into an integer."));
+                                    return Err(error::Error::AdhocError(
+                                        "The provided value cannot be converted into an integer.",
+                                    ));
                                 }
                             };
                             new_value = Some(format!("{}", num as i64));
-                        },
+                        }
                         None => {}
                     }
+                }
+                data_type::Primitive::Date => match new_value.clone() {
+                    Some(date_str) => {
+                        let date: Date = match Date::parse(&date_str, &well_known::Iso8601::DATE) {
+                            Ok(d) => d,
+                            Err(_) => {
+                                return Err(error::Error::AdhocError(
+                                    "The provided value cannot be converted into a date.",
+                                ));
+                            }
+                        };
+                        new_value = Some(format!("{}", date.to_julian_day()));
+                    }
+                    None => {}
                 },
-                data_type::Primitive::Date => {
-                    match new_value.clone() {
-                        Some(date_str) => {
-                            let date: Date = match Date::parse(&date_str, &well_known::Iso8601::DATE) {
-                                Ok(d) => d,
-                                Err(_) => {
-                                    return Err(error::Error::AdhocError("The provided value cannot be converted into a date."));
-                                }
-                            };
-                            new_value = Some(format!("{}", date.to_julian_day()));
-                        },
-                        None => {}
+                data_type::Primitive::Timestamp => match new_value.clone() {
+                    Some(timestamp_str) => {
+                        let timestamp: UtcDateTime = match UtcDateTime::parse(
+                            &timestamp_str,
+                            &well_known::Iso8601::DATE_TIME,
+                        ) {
+                            Ok(d) => d,
+                            Err(_) => {
+                                return Err(error::Error::AdhocError(
+                                    "The provided value cannot be converted into a timestamp.",
+                                ));
+                            }
+                        };
+                        let julian_day: i32 = timestamp.to_julian_day();
+                        let dur_numerator = timestamp
+                            - UtcDateTime::new(
+                                Date::from_julian_day(julian_day).unwrap(),
+                                time!(12:00),
+                            );
+                        let dur_denominator = UtcDateTime::new(
+                            Date::from_julian_day(julian_day + 1).unwrap(),
+                            time!(12:00),
+                        ) - UtcDateTime::new(
+                            Date::from_julian_day(julian_day).unwrap(),
+                            time!(12:00),
+                        );
+                        let julian_fraction: f64 = (julian_day as f64)
+                            + (dur_numerator.as_seconds_f64() / dur_denominator.as_seconds_f64());
+                        new_value = Some(format!("{}", julian_fraction));
                     }
-                },
-                data_type::Primitive::Timestamp => {
-                    match new_value.clone() {
-                        Some(timestamp_str) => {
-                            let timestamp: UtcDateTime = match UtcDateTime::parse(&timestamp_str, &well_known::Iso8601::DATE_TIME) {
-                                Ok(d) => d,
-                                Err(_) => {
-                                    return Err(error::Error::AdhocError("The provided value cannot be converted into a timestamp."));
-                                }
-                            };
-                            let julian_day: i32 = timestamp.to_julian_day();
-                            let dur_numerator = timestamp - UtcDateTime::new(Date::from_julian_day(julian_day).unwrap(), time!(12:00));
-                            let dur_denominator = UtcDateTime::new(Date::from_julian_day(julian_day + 1).unwrap(), time!(12:00)) - UtcDateTime::new(Date::from_julian_day(julian_day).unwrap(), time!(12:00));
-                            let julian_fraction: f64 = (julian_day as f64) + (dur_numerator.as_seconds_f64() / dur_denominator.as_seconds_f64());
-                            new_value = Some(format!("{}", julian_fraction));
-                        },
-                        None => {}
-                    }
+                    None => {}
                 },
                 _ => {}
             }
             // Ignore other primitive types
-        },
+        }
         data_type::MetadataColumnType::MultiSelectDropdown(_)
         | data_type::MetadataColumnType::ChildTable(_) => {
-            return Err(error::Error::AdhocError("Value of column cannot be updated like a primitive value."));
+            return Err(error::Error::AdhocError(
+                "Value of column cannot be updated like a primitive value.",
+            ));
         }
         _ => {
             // Ignore the rest
@@ -681,15 +759,14 @@ pub fn try_update_primitive_value(table_oid: i64, row_oid: i64, column_oid: i64,
 
     // Retrieve the previous value
     let select_prev_value_cmd = format!("SELECT CAST(COLUMN{column_oid} AS TEXT) AS PRIOR_VALUE FROM TABLE{table_oid} WHERE OID = ?1;");
-    let prev_value: Option<String> = trans.query_one(&select_prev_value_cmd, params![row_oid],
-        |row| { return Ok(row.get::<_, Option<String>>(0)?); })?;
+    let prev_value: Option<String> =
+        trans.query_one(&select_prev_value_cmd, params![row_oid], |row| {
+            return Ok(row.get::<_, Option<String>>(0)?);
+        })?;
 
     // Update the value
     let update_cmd = format!("UPDATE TABLE{table_oid} SET COLUMN{column_oid} = ?1 WHERE OID = ?2;");
-    trans.execute(
-        &update_cmd,
-        params![new_value, row_oid]
-    )?;
+    trans.execute(&update_cmd, params![new_value, row_oid])?;
 
     // Return OK
     trans.commit()?;
@@ -697,7 +774,13 @@ pub fn try_update_primitive_value(table_oid: i64, row_oid: i64, column_oid: i64,
 }
 
 /// Creates a row in the object table associated with a cell in the base table.
-pub fn set_table_object_value(table_oid: i64, row_oid: i64, column_oid: i64, obj_type_oid: Option<i64>, obj_row_oid: Option<i64>) -> Result<(i64, i64), error::Error> {
+pub fn set_table_object_value(
+    table_oid: i64,
+    row_oid: i64,
+    column_oid: i64,
+    obj_type_oid: Option<i64>,
+    obj_row_oid: Option<i64>,
+) -> Result<(i64, i64), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
@@ -709,11 +792,14 @@ pub fn set_table_object_value(table_oid: i64, row_oid: i64, column_oid: i64, obj
                 t.MODE
             FROM METADATA_TABLE_COLUMN c
             INNER JOIN METADATA_TYPE t ON t.OID = c.TYPE_OID
-            WHERE c.OID = ?1", 
-            params![column_oid], 
+            WHERE c.OID = ?1",
+            params![column_oid],
             |row| {
-                Ok(data_type::MetadataColumnType::from_database(row.get("TYPE_OID")?, row.get("MODE")?))
-            }
+                Ok(data_type::MetadataColumnType::from_database(
+                    row.get("TYPE_OID")?,
+                    row.get("MODE")?,
+                ))
+            },
         )?;
         match column_type {
             data_type::MetadataColumnType::ChildObject(obj_type_oid) => {
@@ -721,16 +807,14 @@ pub fn set_table_object_value(table_oid: i64, row_oid: i64, column_oid: i64, obj
                 let obj_row_oid = insert_inplace(&trans, obj_type_oid, None, None)?;
 
                 // Update the value in the base table
-                let update_cmd = format!("UPDATE TABLE{table_oid} SET COLUMN{column_oid} = ?1 WHERE OID = ?2;");
-                trans.execute(
-                    &update_cmd,
-                    params![obj_row_oid, row_oid]
-                )?;
-                
+                let update_cmd =
+                    format!("UPDATE TABLE{table_oid} SET COLUMN{column_oid} = ?1 WHERE OID = ?2;");
+                trans.execute(&update_cmd, params![obj_row_oid, row_oid])?;
+
                 // Commit the transaction
                 trans.commit()?;
                 return Ok((obj_type_oid, obj_row_oid));
-            },
+            }
             _ => {
                 return Err(error::Error::AdhocError("Column is not an object type."));
             }
@@ -739,7 +823,8 @@ pub fn set_table_object_value(table_oid: i64, row_oid: i64, column_oid: i64, obj
         // Move the object from the trash
         untrash_inplace(&trans, obj_type_oid.unwrap(), obj_row_oid.unwrap())?;
         // Set the column in the table to the object's OID
-        let update_cmd: String = format!("UPDATE TABLE{table_oid} SET COLUMN{column_oid} = ?1 WHERE OID = ?2");
+        let update_cmd: String =
+            format!("UPDATE TABLE{table_oid} SET COLUMN{column_oid} = ?1 WHERE OID = ?2");
         trans.execute(&update_cmd, params![obj_row_oid.unwrap(), row_oid])?;
 
         // Commit the transaction
@@ -749,21 +834,27 @@ pub fn set_table_object_value(table_oid: i64, row_oid: i64, column_oid: i64, obj
 }
 
 /// Creates a row in the object table associated with a cell in the base table.
-pub fn unset_table_object_value(table_oid: i64, row_oid: i64, column_oid: i64, obj_type_oid: i64, obj_row_oid: i64) -> Result<(), error::Error> {
+pub fn unset_table_object_value(
+    table_oid: i64,
+    row_oid: i64,
+    column_oid: i64,
+    obj_type_oid: i64,
+    obj_row_oid: i64,
+) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
     // Move the object to the trash
     trash_inplace(&trans, obj_type_oid, obj_row_oid)?;
     // Set the column in the table to NULL
-    let update_cmd: String = format!("UPDATE TABLE{table_oid} SET COLUMN{column_oid} = NULL WHERE OID = ?1");
+    let update_cmd: String =
+        format!("UPDATE TABLE{table_oid} SET COLUMN{column_oid} = NULL WHERE OID = ?1");
     trans.execute(&update_cmd, params![row_oid])?;
-    
+
     // Commit the transaction
     trans.commit()?;
     return Ok(());
 }
-
 
 struct Column {
     true_ord: Option<String>,
@@ -776,11 +867,16 @@ struct Column {
     column_ordering: i64,
     is_nullable: bool,
     is_primary_key: bool,
-    invalid_nonunique_oid: HashSet<i64>
+    invalid_nonunique_oid: HashSet<i64>,
 }
 
 /// Construct a SELECT query to get data from a table
-fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_clause: bool, include_parent_row_oid_clause: bool) -> Result<(String, LinkedList<Column>), error::Error> {
+fn construct_data_query(
+    trans: &Transaction,
+    table_oid: i64,
+    include_row_oid_clause: bool,
+    include_parent_row_oid_clause: bool,
+) -> Result<(String, LinkedList<Column>), error::Error> {
     // Build the SELECT query
     let (mut select_cols_cmd, mut select_tbls_cmd) = trans.query_one(
         "WITH RECURSIVE SUPERTYPE_QUERY (LEVEL, FINAL_TYPE_OID, SUPERTYPE_OID, INHERITOR_TYPE_OID) AS (
@@ -838,7 +934,8 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
     let mut columns = LinkedList::<Column>::new();
     let mut tbl_count: usize = 1;
 
-    db::query_iterate(trans,
+    db::query_iterate(
+        trans,
         "WITH RECURSIVE SUPERTYPE_QUERY (TYPE_OID) AS (
             SELECT
                 ?1
@@ -864,15 +961,23 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
         INNER JOIN METADATA_TYPE t ON t.OID = c.TYPE_OID
         WHERE c.TRASH = 0
         ORDER BY c.COLUMN_ORDERING;",
-        params![table_oid], 
+        params![table_oid],
         &mut |row| {
             let column_oid: i64 = row.get("OID")?;
-            let column_type: data_type::MetadataColumnType = data_type::MetadataColumnType::from_database(row.get("TYPE_OID")?, row.get("MODE")?);
+            let column_type: data_type::MetadataColumnType =
+                data_type::MetadataColumnType::from_database(
+                    row.get("TYPE_OID")?,
+                    row.get("MODE")?,
+                );
             let column_ordering: i64 = row.get("COLUMN_ORDERING")?;
 
             let column_source_table_oid: i64 = row.get("TABLE_OID")?;
-            let source_alias: String = if column_source_table_oid == table_oid { String::from("t") } else { format!("m{column_source_table_oid}") };
-            
+            let source_alias: String = if column_source_table_oid == table_oid {
+                String::from("t")
+            } else {
+                format!("m{column_source_table_oid}")
+            };
+
             let enforce_uniqueness: bool = row.get("IS_UNIQUE")?;
             let mut invalid_nonunique_oid: HashSet<i64> = HashSet::<i64>::new();
 
@@ -882,20 +987,20 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
                 data_type::MetadataColumnType::Primitive(prim) => {
                     // Primitive type
                     match prim {
-                        data_type::Primitive::Any 
+                        data_type::Primitive::Any
                         | data_type::Primitive::Boolean
                         | data_type::Primitive::Integer
                         | data_type::Primitive::Number
                         | data_type::Primitive::Text
                         | data_type::Primitive::JSON => {
                             select_cols_cmd = format!("{select_cols_cmd}, CAST({source_alias}.COLUMN{column_oid} AS TEXT) AS COLUMN{column_oid}");
-                        },
+                        }
                         data_type::Primitive::Date => {
                             select_cols_cmd = format!("{select_cols_cmd}, DATE({source_alias}.COLUMN{column_oid}, 'julianday') AS COLUMN{column_oid}");
-                        },
+                        }
                         data_type::Primitive::Timestamp => {
                             select_cols_cmd = format!("{select_cols_cmd}, STRFTIME('%FT%TZ', {source_alias}.COLUMN{column_oid}, 'julianday') AS COLUMN{column_oid}");
-                        },
+                        }
                         data_type::Primitive::File => {
                             select_cols_cmd = format!("{select_cols_cmd}, CASE 
                             WHEN {source_alias}.COLUMN{column_oid} IS NULL THEN NULL 
@@ -906,16 +1011,17 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
                                     ELSE FORMAT('%.1f KB', LENGTH({source_alias}.COLUMN{column_oid}) * 0.001)
                                 END
                             END AS COLUMN{column_oid}");
-                        },
+                        }
                         data_type::Primitive::Image => {
                             select_cols_cmd = format!("{select_cols_cmd}, CASE WHEN {source_alias}.COLUMN{column_oid} IS NULL THEN NULL ELSE 'Thumbnail' END AS COLUMN{column_oid}");
                         }
                     }
                     true_ord = Some(display_ord.clone());
-                    
+
                     // Check for invalid nonunique rows
                     if enforce_uniqueness {
-                        let check_nonunique_cmd = format!("
+                        let check_nonunique_cmd = format!(
+                            "
                             SELECT t.OID FROM TABLE{column_source_table_oid} t
                             INNER JOIN (
                                 SELECT COLUMN{column_oid}, COUNT(OID) AS ROW_COUNT
@@ -923,24 +1029,24 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
                                 GROUP BY COLUMN{column_oid} 
                                 HAVING COUNT(OID) > 1
                             ) a ON a.COLUMN{column_oid} = t.COLUMN{column_oid}
-                        ");
-                        db::query_iterate(trans, &check_nonunique_cmd, [], 
-                            &mut |row| {
-                                invalid_nonunique_oid.insert(row.get(0)?);
-                                return Ok(());
-                            }
-                        )?;
+                        "
+                        );
+                        db::query_iterate(trans, &check_nonunique_cmd, [], &mut |row| {
+                            invalid_nonunique_oid.insert(row.get(0)?);
+                            return Ok(());
+                        })?;
                     }
-                },
+                }
                 data_type::MetadataColumnType::SingleSelectDropdown(column_type_oid) => {
                     select_cols_cmd = format!("{select_cols_cmd}, t{tbl_count}.VALUE AS COLUMN{column_oid}, CAST(t{tbl_count}.OID AS TEXT) AS _COLUMN{column_oid}");
                     select_tbls_cmd = format!("{select_tbls_cmd} LEFT JOIN TABLE{column_type_oid} t{tbl_count} ON t{tbl_count}.OID = {source_alias}.COLUMN{column_oid}");
                     tbl_count += 1;
                     true_ord = Some(format!("_COLUMN{column_oid}"));
-                    
+
                     // Check for invalid nonunique rows
                     if enforce_uniqueness {
-                        let check_nonunique_cmd = format!("
+                        let check_nonunique_cmd = format!(
+                            "
                             SELECT t.OID FROM TABLE{column_source_table_oid} t
                             INNER JOIN (
                                 SELECT COLUMN{column_oid}, COUNT(OID) AS ROW_COUNT
@@ -948,15 +1054,14 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
                                 GROUP BY COLUMN{column_oid} 
                                 HAVING COUNT(OID) > 1
                             ) a ON a.COLUMN{column_oid} = t.COLUMN{column_oid}
-                        ");
-                        db::query_iterate(trans, &check_nonunique_cmd, [], 
-                            &mut |row| {
-                                invalid_nonunique_oid.insert(row.get(0)?);
-                                return Ok(());
-                            }
-                        )?;
+                        "
+                        );
+                        db::query_iterate(trans, &check_nonunique_cmd, [], &mut |row| {
+                            invalid_nonunique_oid.insert(row.get(0)?);
+                            return Ok(());
+                        })?;
                     }
-                },
+                }
                 data_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
                     select_cols_cmd = format!("{select_cols_cmd}, 
                         (SELECT 
@@ -974,7 +1079,8 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
 
                     // Check for invalid nonunique rows
                     if enforce_uniqueness {
-                        let check_nonunique_cmd = format!("
+                        let check_nonunique_cmd = format!(
+                            "
                             WITH TABLE_SURROGATE AS (
                                 SELECT 
                                     ROW_OID,
@@ -989,25 +1095,25 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
                                 GROUP BY COLUMN{column_oid} 
                                 HAVING COUNT(OID) > 1
                             ) a ON a.COLUMN{column_oid} = t.COLUMN{column_oid}
-                        ");
-                        db::query_iterate(trans, &check_nonunique_cmd, [], 
-                            &mut |row| {
-                                invalid_nonunique_oid.insert(row.get(0)?);
-                                return Ok(());
-                            }
-                        )?;
+                        "
+                        );
+                        db::query_iterate(trans, &check_nonunique_cmd, [], &mut |row| {
+                            invalid_nonunique_oid.insert(row.get(0)?);
+                            return Ok(());
+                        })?;
                     }
-                },
-                data_type::MetadataColumnType::Reference(referenced_table_oid) 
+                }
+                data_type::MetadataColumnType::Reference(referenced_table_oid)
                 | data_type::MetadataColumnType::ChildObject(referenced_table_oid) => {
                     select_cols_cmd = format!("{select_cols_cmd}, COALESCE(t{tbl_count}.DISPLAY_VALUE, CASE WHEN {source_alias}.COLUMN{column_oid} IS NOT NULL THEN '— DELETED —' ELSE NULL END) AS COLUMN{column_oid}, CAST({source_alias}.COLUMN{column_oid} AS TEXT) AS _COLUMN{column_oid}");
                     select_tbls_cmd = format!("{select_tbls_cmd} LEFT JOIN TABLE{referenced_table_oid}_SURROGATE t{tbl_count} ON t{tbl_count}.OID = {source_alias}.COLUMN{column_oid}");
                     tbl_count += 1;
                     true_ord = Some(format!("_COLUMN{column_oid}"));
-                    
+
                     // Check for invalid nonunique rows
                     if enforce_uniqueness {
-                        let check_nonunique_cmd = format!("
+                        let check_nonunique_cmd = format!(
+                            "
                             SELECT t.OID FROM TABLE{column_source_table_oid} t
                             INNER JOIN (
                                 SELECT COLUMN{column_oid}, COUNT(OID) AS ROW_COUNT
@@ -1015,15 +1121,14 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
                                 GROUP BY COLUMN{column_oid} 
                                 HAVING COUNT(OID) > 1
                             ) a ON a.COLUMN{column_oid} = t.COLUMN{column_oid}
-                        ");
-                        db::query_iterate(trans, &check_nonunique_cmd, [], 
-                            &mut |row| {
-                                invalid_nonunique_oid.insert(row.get(0)?);
-                                return Ok(());
-                            }
-                        )?;
+                        "
+                        );
+                        db::query_iterate(trans, &check_nonunique_cmd, [], &mut |row| {
+                            invalid_nonunique_oid.insert(row.get(0)?);
+                            return Ok(());
+                        })?;
                     }
-                },
+                }
                 data_type::MetadataColumnType::ChildTable(column_type_oid) => {
                     select_cols_cmd = format!("{select_cols_cmd}, (SELECT '[' || GROUP_CONCAT(a.DISPLAY_VALUE) || ']' FROM TABLE{column_type_oid}_SURROGATE a WHERE a.PARENT_OID = {source_alias}.OID GROUP BY a.PARENT_OID) AS COLUMN{column_oid}");
                     true_ord = None;
@@ -1032,7 +1137,7 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
 
             // Push the column information
             columns.push_back(Column {
-                true_ord: true_ord, 
+                true_ord: true_ord,
                 display_ord: display_ord,
                 table_oid: column_source_table_oid,
                 row_ord: format!("{source_alias}_OID"),
@@ -1042,46 +1147,61 @@ fn construct_data_query(trans: &Transaction, table_oid: i64, include_row_oid_cla
                 column_ordering,
                 is_nullable: row.get("IS_NULLABLE")?,
                 invalid_nonunique_oid: invalid_nonunique_oid,
-                is_primary_key: row.get("IS_PRIMARY_KEY")?
+                is_primary_key: row.get("IS_PRIMARY_KEY")?,
             });
             return Ok(());
-        }
+        },
     )?;
     return Ok((
         format!(
             "SELECT {select_cols_cmd} {select_tbls_cmd} WHERE t.TRASH = 0 {}",
-            if include_row_oid_clause { 
+            if include_row_oid_clause {
                 "AND t.OID = ?1"
-            } else if include_parent_row_oid_clause { 
+            } else if include_parent_row_oid_clause {
                 "AND t.PARENT_OID = ?1 LIMIT ?1 OFFSET ?2"
             } else {
                 "LIMIT ?1 OFFSET ?2"
             }
-        ), 
-        columns
+        ),
+        columns,
     ));
 }
 
 /// Sends all cells for the table through a channel.
-pub fn send_table_data(table_oid: i64, parent_row_oid: Option<i64>, page_num: i64, page_size: i64, cell_channel: Channel<Cell>) -> Result<(), error::Error> {
+pub fn send_table_data(
+    table_oid: i64,
+    parent_row_oid: Option<i64>,
+    page_num: i64,
+    page_size: i64,
+    cell_channel: Channel<Cell>,
+) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
-    let (table_select_cmd, columns) = construct_data_query(&trans, table_oid, false, match parent_row_oid { Some(_) => true, None => false })?;
+    let (table_select_cmd, columns) = construct_data_query(
+        &trans,
+        table_oid,
+        false,
+        match parent_row_oid {
+            Some(_) => true,
+            None => false,
+        },
+    )?;
     let table_select_cmd_params = match parent_row_oid {
         Some(o) => params![o.clone(), page_size, page_size * (page_num - 1)],
-        None => params![page_size, page_size * (page_num - 1)]
+        None => params![page_size, page_size * (page_num - 1)],
     };
 
     // Iterate over the results, sending each cell to the frontend
-    db::query_iterate(&trans, 
-        &table_select_cmd, 
+    db::query_iterate(
+        &trans,
+        &table_select_cmd,
         table_select_cmd_params,
         &mut |row| {
             // Start by sending the index and OID, which are the first and second ordinal respectively
             let row_index: i64 = row.get("ROW_INDEX")?;
             cell_channel.send(Cell::RowStart {
                 row_oid: row.get("t_OID")?,
-                row_index: row_index
+                row_index: row_index,
             })?;
 
             let invalid_key: bool = false; // TODO
@@ -1092,29 +1212,30 @@ pub fn send_table_data(table_oid: i64, parent_row_oid: Option<i64>, page_num: i6
 
                 let true_value: Option<String> = match column.true_ord.clone() {
                     Some(ord) => row.get::<&str, Option<String>>(&*ord)?,
-                    None => None
+                    None => None,
                 };
                 let display_value: Option<String> = row.get(&*column.display_ord.clone())?;
-                let mut failed_validations: Vec<error::FailedValidation> = Vec::<error::FailedValidation>::new();
+                let mut failed_validations: Vec<error::FailedValidation> =
+                    Vec::<error::FailedValidation>::new();
 
                 // Nullability validation
                 if !column.is_nullable && display_value == None {
                     failed_validations.push(error::FailedValidation {
-                        description: format!("{} cannot be NULL!", column.column_name)
+                        description: format!("{} cannot be NULL!", column.column_name),
                     });
                 }
 
                 // Uniqueness validation
                 if column.invalid_nonunique_oid.contains(&row_oid) {
                     failed_validations.push(error::FailedValidation {
-                        description: format!("{} value is not unique!", column.column_name)
+                        description: format!("{} value is not unique!", column.column_name),
                     });
                 }
 
                 // Primary key validation
                 if column.is_primary_key && invalid_key {
                     failed_validations.push(error::FailedValidation {
-                        description: format!("Primary key for this row is not unique!")
+                        description: format!("Primary key for this row is not unique!"),
                     });
                 }
 
@@ -1122,35 +1243,42 @@ pub fn send_table_data(table_oid: i64, parent_row_oid: Option<i64>, page_num: i6
                 cell_channel.send(Cell::ColumnValue {
                     table_oid: column.table_oid,
                     row_oid: row_oid,
-                    column_oid: column.column_oid, 
+                    column_oid: column.column_oid,
                     column_name: column.column_name.clone(),
-                    column_type: column.column_type.clone(), 
+                    column_type: column.column_type.clone(),
                     true_value: true_value,
                     display_value: display_value,
-                    failed_validations: failed_validations
+                    failed_validations: failed_validations,
                 })?;
             }
 
             // Conclude the row's iteration
             return Ok(());
-        }
+        },
     )?;
     return Ok(());
 }
 
 /// Sends all cells for a row in the table through a channel.
-pub fn send_table_row(table_oid: i64, row_oid: i64, cell_channel: Channel<RowCell>) -> Result<(), error::Error> {
+pub fn send_table_row(
+    table_oid: i64,
+    row_oid: i64,
+    cell_channel: Channel<RowCell>,
+) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
     let (table_select_cmd, columns) = construct_data_query(&trans, table_oid, true, false)?;
 
     // Query for the specified row
     match trans.query_row_and_then(
-        &table_select_cmd, 
-        params![row_oid], 
+        &table_select_cmd,
+        params![row_oid],
         |row| -> Result<(), error::Error> {
             // Start by sending message that confirms the row exists
-            cell_channel.send(RowCell::RowExists { row_exists: true, table_oid })?;
+            cell_channel.send(RowCell::RowExists {
+                row_exists: true,
+                table_oid,
+            })?;
 
             let invalid_key = false;
 
@@ -1160,29 +1288,30 @@ pub fn send_table_row(table_oid: i64, row_oid: i64, cell_channel: Channel<RowCel
 
                 let true_value: Option<String> = match column.true_ord.clone() {
                     Some(ord) => row.get::<&str, Option<String>>(&*ord)?,
-                    None => None
+                    None => None,
                 };
                 let display_value: Option<String> = row.get(&*column.display_ord.clone())?;
-                let mut failed_validations: Vec<error::FailedValidation> = Vec::<error::FailedValidation>::new();
+                let mut failed_validations: Vec<error::FailedValidation> =
+                    Vec::<error::FailedValidation>::new();
 
                 // Nullability validation
                 if !column.is_nullable && display_value == None {
                     failed_validations.push(error::FailedValidation {
-                        description: format!("{} cannot be NULL!", column.column_name)
+                        description: format!("{} cannot be NULL!", column.column_name),
                     });
                 }
 
                 // Uniqueness validation
                 if column.invalid_nonunique_oid.contains(&row_oid) {
                     failed_validations.push(error::FailedValidation {
-                        description: format!("{} value is not unique!", column.column_name)
+                        description: format!("{} value is not unique!", column.column_name),
                     });
                 }
 
                 // Primary key validation
                 if column.is_primary_key && invalid_key {
                     failed_validations.push(error::FailedValidation {
-                        description: format!("Primary key for this row is not unique!")
+                        description: format!("Primary key for this row is not unique!"),
                     });
                 }
 
@@ -1190,29 +1319,30 @@ pub fn send_table_row(table_oid: i64, row_oid: i64, cell_channel: Channel<RowCel
                 cell_channel.send(RowCell::ColumnValue {
                     table_oid: column.table_oid,
                     row_oid: row_oid,
-                    column_oid: column.column_oid, 
+                    column_oid: column.column_oid,
                     column_name: column.column_name.clone(),
-                    column_type: column.column_type.clone(), 
+                    column_type: column.column_type.clone(),
                     column_ordering: column.column_ordering,
                     true_value: true_value,
                     display_value: display_value,
-                    failed_validations: failed_validations
+                    failed_validations: failed_validations,
                 })?;
             }
 
-            // 
+            //
             return Ok(());
-        }
+        },
     ) {
-        Err(error::Error::RusqliteError(e)) => {
-            match e {
-                RusqliteError::QueryReturnedNoRows => {
-                    cell_channel.send(RowCell::RowExists { row_exists: false, table_oid })?;
-                    return Ok(());
-                },
-                _ => {
-                    return Err(error::Error::from(e));
-                }
+        Err(error::Error::RusqliteError(e)) => match e {
+            RusqliteError::QueryReturnedNoRows => {
+                cell_channel.send(RowCell::RowExists {
+                    row_exists: false,
+                    table_oid,
+                })?;
+                return Ok(());
+            }
+            _ => {
+                return Err(error::Error::from(e));
             }
         },
         Err(e) => {
