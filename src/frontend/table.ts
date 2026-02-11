@@ -3,7 +3,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { listen } from '@tauri-apps/api/event';
 import { message } from "@tauri-apps/plugin-dialog";
 import { TableCellChannelPacket, TableColumnMetadata, TableRowCellChannelPacket, executeAsync, openDialogAsync, queryAsync } from './backendutils';
-import { addTableColumnCellToRow, updateTableColumnCell } from "./tableutils";
+import { attachColumnContextMenu, updateTableColumnCell } from "./tableutils";
 import { makeColumnsReorderable, makeColumnsResizable } from "./frontendutils";
 
 const urlParams = new URLSearchParams(window.location.search);
@@ -204,58 +204,7 @@ if (urlParamTableOid) {
         tableHeaderRowNode?.insertAdjacentElement('beforeend', tableHeaderNode);
 
         // Add listener to pull up context menu
-        tableHeaderNode.addEventListener('contextmenu', async (e) => {
-          e.preventDefault();
-          e.returnValue = false;
-
-          const contextMenuItems = await Promise.all([
-            MenuItem.new({
-              text: 'Insert New Column',
-              action: async () => {
-                await openDialogAsync({
-                  invokeAction: 'dialog_create_table_column',
-                  invokeParams: {
-                    tableOid: tableOid,
-                    columnOrdering: columnOrdering
-                  }
-                });
-              }
-            }),
-            MenuItem.new({
-              text: 'Edit Column',
-              action: async () => {
-                await openDialogAsync({
-                  invokeAction: 'dialog_edit_table_column',
-                  invokeParams: {
-                    tableOid: tableOid,
-                    columnOid: columnOid
-                  }
-                });
-              }
-            }),
-            MenuItem.new({
-              text: 'Delete Column',
-              action: async () => {
-                await executeAsync({
-                  deleteTableColumn: {
-                    tableOid: tableOid,
-                    columnOid: columnOid
-                  }
-                });
-              }
-            })
-          ]);
-          const contextMenu = await Menu.new({
-            items: contextMenuItems
-          });
-          await contextMenu.popup()
-            .catch(async e => {
-              await message(e, {
-                title: 'Error while displaying context menu for table column.',
-                kind: 'error'
-              });
-            });
-        });
+        attachColumnContextMenu(tableHeaderNode, tableOid, columnOid, columnOrdering);
       }
     };
 
@@ -421,31 +370,16 @@ if (urlParamTableOid) {
     const onReceiveCell = new Channel<TableRowCellChannelPacket>();
     onReceiveCell.onmessage = (cell) => {
       if ('rowExists' in cell) {
-        if (cell.rowExists) {
-          if (tableRowNode) {
-            // Clear all columns from row, other than Index
-            while (tableRowNode.lastElementChild && tableRowNode.childElementCount > 1) {
-              tableRowNode.removeChild(tableRowNode.lastElementChild);
-            }
-          } else {
-            let tableBodyNode: HTMLElement | null = document.querySelector('#table-content > tbody');
-            if (tableBodyNode) {
-              // Insert new row at end of table
-              tableRowNode = addRowToTable(tableBodyNode, rowOid, Infinity);
-
-              // Rearrange rows so that it is in the correct position
-              // TODO
-            }
-          }
-        } else {
+        if (!cell.rowExists) {
           // Delete row
           tableRowNode?.remove();
           tableRowNode = null;
         }
       } else {
-        // Add cell to current row
-        if (tableRowNode) {
-          addTableColumnCellToRow(tableRowNode, cell);
+        // Do a shallow refresh of the contents of each cell
+        let tableCellElement: HTMLTableCellElement | null = document.getElementById(`table-content-column${cell.columnOid}-row${cell.rowOid}`) as HTMLTableCellElement;
+        if (tableCellElement) {
+          updateTableColumnCell(tableCellElement, cell, true);
         }
       }
     };

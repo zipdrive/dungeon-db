@@ -3,7 +3,6 @@ import { Channel } from "@tauri-apps/api/core";
 import { listen } from '@tauri-apps/api/event';
 import { message } from "@tauri-apps/plugin-dialog";
 import { BasicHierarchicalMetadata, BasicMetadata, TableCellChannelPacket, TableColumnMetadata, TableRowCellChannelPacket, executeAsync, openDialogAsync, queryAsync } from './backendutils';
-import { addTableColumnCellToRow } from "./tableutils";
 
 
 /**

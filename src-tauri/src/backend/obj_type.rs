@@ -21,11 +21,12 @@ pub fn create(name: String, master_table_oid_list: &Vec<i64>) -> Result<i64, err
 
     // Create the table
     let create_table_cmd: String = format!(
-        "
+    "
     CREATE TABLE TABLE{table_oid} (
         OID INTEGER PRIMARY KEY, 
         TRASH INTEGER NOT NULL DEFAULT 0
-    ) STRICT;"
+    ) STRICT;
+    "
     );
     trans.execute(&create_table_cmd, [])?;
 
@@ -171,28 +172,30 @@ pub fn send_obj_data(
 
     // Query a list of all subtypes of the given type
     let mut subtype_statement = trans.prepare(
-        "WITH RECURSIVE SUBTYPE_QUERY (LEVEL, MASTER_TYPE_OID, TYPE_OID) AS (
-                SELECT
-                    1 AS LEVEL,
-                    u.MASTER_TABLE_OID AS MASTER_TYPE_OID,
-                    u.INHERITOR_TABLE_OID AS TYPE_OID
-                FROM METADATA_TABLE_INHERITANCE u 
-                WHERE u.TRASH = 0 AND u.MASTER_TABLE_OID = ?1
-                UNION
-                SELECT
-                    s.LEVEL + 1 AS LEVEL,
-                    s.TYPE_OID AS MASTER_TYPE_OID,
-                    u.INHERITOR_TABLE_OID AS TYPE_OID
-                FROM SUBTYPE_QUERY s
-                INNER JOIN METADATA_TABLE_INHERITANCE u ON u.MASTER_TABLE_OID = s.TYPE_OID
-                WHERE u.TRASH = 0
-                ORDER BY 1 DESC
-            )
+        "
+        WITH RECURSIVE SUBTYPE_QUERY (LEVEL, MASTER_TYPE_OID, TYPE_OID) AS (
             SELECT
-                LEVEL,
-                MASTER_TYPE_OID,
-                TYPE_OID
-            FROM SUBTYPE_QUERY",
+                1 AS LEVEL,
+                u.MASTER_TABLE_OID AS MASTER_TYPE_OID,
+                u.INHERITOR_TABLE_OID AS TYPE_OID
+            FROM METADATA_TABLE_INHERITANCE u 
+            WHERE u.TRASH = 0 AND u.MASTER_TABLE_OID = ?1
+            UNION
+            SELECT
+                s.LEVEL + 1 AS LEVEL,
+                s.TYPE_OID AS MASTER_TYPE_OID,
+                u.INHERITOR_TABLE_OID AS TYPE_OID
+            FROM SUBTYPE_QUERY s
+            INNER JOIN METADATA_TABLE_INHERITANCE u ON u.MASTER_TABLE_OID = s.TYPE_OID
+            WHERE u.TRASH = 0
+            ORDER BY 1 DESC
+        )
+        SELECT
+            LEVEL,
+            MASTER_TYPE_OID,
+            TYPE_OID
+        FROM SUBTYPE_QUERY
+        "
     )?;
     let subtype_rows = subtype_statement.query_map(params![obj_type_oid], |row| {
         let level: i64 = row.get("LEVEL")?;

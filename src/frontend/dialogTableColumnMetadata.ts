@@ -85,9 +85,9 @@ async function loadMetadataFromFields(): Promise<TableColumnMetadata> {
             columnType = { reference: parseInt(referencedTableOid) };
             break;
         case 'Object':
-            const objTableOid = (document.getElementById('column-type-oid-reference') as HTMLInputElement)?.value;
+            const objTableOid = (document.getElementById('column-type-oid-object') as HTMLInputElement)?.value;
             if (!objTableOid) {
-                throw new Error("You must select a global data type for a column of type Global Data Type.");
+                throw new Error("You must select an object type for a column of type Object.");
             }
             columnType = { childObject: parseInt(objTableOid) };
             isUnique = false;
@@ -149,9 +149,10 @@ window.addEventListener("DOMContentLoaded", async () => {
         });
     }
 
-    // Fill in the dropdown of possible Global Data Type types
+    // Fill in the dropdown of possible Object Types
     let columnObjDataTypeInput: HTMLSelectElement | null = document.getElementById('column-type-oid-object') as HTMLSelectElement;
     if (columnObjDataTypeInput) {
+        console.debug('Here2');
         const objDataTypeChannel: Channel<BasicMetadata> = new Channel<BasicMetadata>();
         objDataTypeChannel.onmessage = (objDataType) => {
             let columnObjDataTypeOption: HTMLOptionElement = document.createElement('option');

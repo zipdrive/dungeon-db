@@ -9,12 +9,12 @@ use std::ops::Index;
 use tauri::ipc::Channel;
 
 /// Creates a new table.
-pub fn create(name: String, master_table_oid_list: &Vec<i64>) -> Result<i64, error::Error> {
+pub fn create(name: String, master_table_oid_list: &Vec<i64>, column_type: data_type::MetadataColumnType) -> Result<i64, error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
     // Add metadata for the table
-    trans.execute("INSERT INTO METADATA_TYPE (MODE) VALUES (3);", [])?;
+    trans.execute("INSERT INTO METADATA_TYPE (MODE) VALUES (?1);", [column_type.get_type_mode()])?;
     let table_oid: i64 = trans.last_insert_rowid();
     trans.execute(
         "INSERT INTO METADATA_TABLE (TYPE_OID, NAME) VALUES (?1, ?2);",
@@ -376,7 +376,7 @@ fn create_surrogate_view(trans: &Transaction, table_oid: i64) -> Result<(), erro
         SELECT
             t.OID,
             CASE
-                WHEN t.TRASH = 0 THEN {standard_display_value}
+                WHEN t.TRASH = 0 THEN COALESCE({standard_display_value}, '— NULL PRIMARY KEY —')
                 ELSE '— DELETED —'
             END AS DISPLAY_VALUE,
             CASE

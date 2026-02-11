@@ -909,17 +909,16 @@ pub fn send_type_metadata_list(
     db::query_iterate(
         &trans,
         "SELECT 
-            tbl.OID,
-            tbl.OID AS PARENT_OID,
+            tbl.TYPE_OID,
             tbl.NAME
         FROM METADATA_TABLE tbl
-        INNER JOIN METADATA_TYPE typ ON typ.OID = tbl.OID
-        WHERE typ.MODE = ?1
+        INNER JOIN METADATA_TYPE typ ON typ.OID = tbl.TYPE_OID
+        WHERE typ.MODE = ?1 AND tbl.TRASH = 0
         ORDER BY tbl.NAME;",
         [column_type.get_type_mode()],
         &mut |row| {
             type_channel.send(BasicTypeMetadata {
-                oid: row.get("OID")?,
+                oid: row.get("TYPE_OID")?,
                 name: row.get("NAME")?,
             })?;
             return Ok(());

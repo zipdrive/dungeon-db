@@ -158,20 +158,22 @@ impl Action {
             Self::CreateTable {
                 table_name,
                 master_table_oid_list,
-            } => match table::create(table_name.clone(), master_table_oid_list) {
-                Ok(table_oid) => {
-                    let mut reverse_stack = if is_forward {
-                        REVERSE_STACK.lock().unwrap()
-                    } else {
-                        FORWARD_STACK.lock().unwrap()
-                    };
-                    (*reverse_stack).push(Self::DeleteTable {
-                        table_oid: table_oid,
-                    });
-                    msg_update_table_list(app);
-                }
-                Err(e) => {
-                    return Err(e);
+            } => {
+                match table::create(table_name.clone(), master_table_oid_list, data_type::MetadataColumnType::Reference(0)) {
+                    Ok(table_oid) => {
+                        let mut reverse_stack = if is_forward {
+                            REVERSE_STACK.lock().unwrap()
+                        } else {
+                            FORWARD_STACK.lock().unwrap()
+                        };
+                        (*reverse_stack).push(Self::DeleteTable {
+                            table_oid: table_oid,
+                        });
+                        msg_update_table_list(app);
+                    }
+                    Err(e) => {
+                        return Err(e);
+                    }
                 }
             },
             Self::EditTableMetadata { table_oid, table_name, master_table_oid_list } => {
@@ -286,20 +288,22 @@ impl Action {
             Self::CreateObjectType {
                 obj_type_name,
                 master_table_oid_list,
-            } => match obj_type::create(obj_type_name.clone(), master_table_oid_list) {
-                Ok(obj_type_oid) => {
-                    let mut reverse_stack = if is_forward {
-                        REVERSE_STACK.lock().unwrap()
-                    } else {
-                        FORWARD_STACK.lock().unwrap()
-                    };
-                    (*reverse_stack).push(Self::DeleteObjectType {
-                        obj_type_oid: obj_type_oid,
-                    });
-                    msg_update_obj_type_list(app);
-                }
-                Err(e) => {
-                    return Err(e);
+            } => {
+                match table::create(obj_type_name.clone(), master_table_oid_list, data_type::MetadataColumnType::ChildObject(0)) {
+                    Ok(obj_type_oid) => {
+                        let mut reverse_stack = if is_forward {
+                            REVERSE_STACK.lock().unwrap()
+                        } else {
+                            FORWARD_STACK.lock().unwrap()
+                        };
+                        (*reverse_stack).push(Self::DeleteObjectType {
+                            obj_type_oid: obj_type_oid,
+                        });
+                        msg_update_obj_type_list(app);
+                    }
+                    Err(e) => {
+                        return Err(e);
+                    }
                 }
             },
             Self::EditObjectTypeMetadata { obj_type_oid, obj_type_name, master_table_oid_list } => {

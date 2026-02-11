@@ -1,6 +1,6 @@
 import { Channel } from "@tauri-apps/api/core";
 import { BasicHierarchicalMetadata, closeDialogAsync, executeAsync, queryAsync, TableRowCellChannelPacket } from "./backendutils";
-import { addTableColumnCellToRow } from "./tableutils";
+import { attachColumnContextMenu, updateTableColumnCell } from "./tableutils";
 import { listen } from "@tauri-apps/api/event";
 import { makeColumnsResizable } from "./frontendutils";
 import { message } from "@tauri-apps/plugin-dialog";
@@ -85,6 +85,7 @@ if (urlParamTableOid && urlParamObjOid) {
         let cellRow: HTMLTableRowElement = document.createElement('tr');
         let cellLabelContainer: HTMLTableCellElement = document.createElement('td');
         cellLabelContainer.classList.add('resizable-column');
+        attachColumnContextMenu(cellLabelContainer, tableOid, cell.columnOid, cell.columnOrdering);
         cellRow.appendChild(cellLabelContainer);
 
         // Create a label for the cell
@@ -94,7 +95,14 @@ if (urlParamTableOid && urlParamObjOid) {
         cellLabelContainer.appendChild(columnLabel);
 
         // Create an input for the cell
-        addTableColumnCellToRow(cellRow, cell, false);
+        let columnValueCell: HTMLTableCellElement = document.createElement('td');
+        columnValueCell.id = `table-content-column${cell.columnOid}-row${cell.rowOid}`;
+        columnValueCell.dataset.tableOid = cell.tableOid.toString();
+        columnValueCell.dataset.columnOid = cell.columnOid.toString();
+        columnValueCell.dataset.rowOid = cell.rowOid.toString();
+        cellRow.appendChild(columnValueCell);
+
+        updateTableColumnCell(columnValueCell, cell, false);
 
         // Add the row to the table
         tableBodyNode?.appendChild(cellRow);
@@ -128,7 +136,13 @@ if (urlParamTableOid && urlParamObjOid) {
     navigator.locks.request('object-content', refreshObjectAsync);
   });
   
-  listen<number>("update-table-data", (e) => {
+  listen<number>("update-table-data-deep", (e) => {
+    const updateTableOid = e.payload;
+    if (updateTableOid == tableOid) {
+      navigator.locks.request('object-content', refreshObjectAsync);
+    }
+  });
+  listen<number>("update-table-data-shallow", (e) => {
     const updateTableOid = e.payload;
     if (updateTableOid == tableOid) {
       navigator.locks.request('object-content', refreshObjectAsync);

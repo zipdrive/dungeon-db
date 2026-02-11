@@ -879,14 +879,16 @@ fn construct_data_query(
 ) -> Result<(String, LinkedList<Column>), error::Error> {
     // Build the SELECT query
     let (mut select_cols_cmd, mut select_tbls_cmd) = trans.query_one(
-        "WITH RECURSIVE SUPERTYPE_QUERY (LEVEL, FINAL_TYPE_OID, SUPERTYPE_OID, INHERITOR_TYPE_OID) AS (
+        "
+        WITH RECURSIVE SUPERTYPE_QUERY (LEVEL, FINAL_TYPE_OID, SUPERTYPE_OID, INHERITOR_TYPE_OID) AS (
             SELECT
                 1 AS LEVEL,
                 u.INHERITOR_TABLE_OID AS FINAL_TYPE_OID,
                 u.MASTER_TABLE_OID AS SUPERTYPE_OID,
                 u.INHERITOR_TABLE_OID AS INHERITOR_TYPE_OID
             FROM METADATA_TABLE_INHERITANCE u
-            WHERE u.TRASH = 0 AND u.INHERITOR_TABLE_OID = ?1
+            INNER JOIN METADATA_TABLE tbl ON tbl.TYPE_OID = u.MASTER_TABLE_OID
+            WHERE u.TRASH = 0 AND tbl.TRASH = 0 AND u.INHERITOR_TABLE_OID = ?1
             UNION
             SELECT
                 s.LEVEL + 1 AS LEVEL,
@@ -895,7 +897,8 @@ fn construct_data_query(
                 u.INHERITOR_TABLE_OID AS INHERITOR_TYPE_OID
             FROM SUPERTYPE_QUERY s
             INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.SUPERTYPE_OID
-            WHERE u.TRASH = 0
+            INNER JOIN METADATA_TABLE tbl ON tbl.TYPE_OID = u.MASTER_TABLE_OID
+            WHERE u.TRASH = 0 AND tbl.TRASH = 0
         ),
         CONDENSED_SUPERTYPE_QUERY (MAX_LEVEL, FINAL_TYPE_OID, SUPERTYPE_OID, COL_EXPRESSION, JOIN_CLAUSE) AS (
             SELECT
@@ -925,7 +928,8 @@ fn construct_data_query(
             'ROW_NUMBER() OVER (ORDER BY t.OID) AS ROW_INDEX, ' || GROUP_CONCAT(COL_EXPRESSION, ', ') AS OID_CLAUSE,
             GROUP_CONCAT(JOIN_CLAUSE, ' ' ORDER BY MAX_LEVEL ASC) AS FROM_CLAUSE
         FROM CONDENSED_SUPERTYPE_QUERY
-        GROUP BY FINAL_TYPE_OID", 
+        GROUP BY FINAL_TYPE_OID
+        ", 
         params![table_oid], 
         |row| { 
             Ok((row.get("OID_CLAUSE")?, row.get("FROM_CLAUSE")?))
@@ -1105,7 +1109,7 @@ fn construct_data_query(
                 }
                 data_type::MetadataColumnType::Reference(referenced_table_oid)
                 | data_type::MetadataColumnType::ChildObject(referenced_table_oid) => {
-                    select_cols_cmd = format!("{select_cols_cmd}, COALESCE(t{tbl_count}.DISPLAY_VALUE, CASE WHEN {source_alias}.COLUMN{column_oid} IS NOT NULL THEN '— DELETED —' ELSE NULL END) AS COLUMN{column_oid}, CAST({source_alias}.COLUMN{column_oid} AS TEXT) AS _COLUMN{column_oid}");
+                    select_cols_cmd = format!("{select_cols_cmd}, t{tbl_count}.DISPLAY_VALUE AS COLUMN{column_oid}, CAST({source_alias}.COLUMN{column_oid} AS TEXT) AS _COLUMN{column_oid}");
                     select_tbls_cmd = format!("{select_tbls_cmd} LEFT JOIN TABLE{referenced_table_oid}_SURROGATE t{tbl_count} ON t{tbl_count}.OID = {source_alias}.COLUMN{column_oid}");
                     tbl_count += 1;
                     true_ord = Some(format!("_COLUMN{column_oid}"));
@@ -1268,6 +1272,8 @@ pub fn send_table_row(
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
     let (table_select_cmd, columns) = construct_data_query(&trans, table_oid, true, false)?;
+
+    println!("{table_select_cmd}");
 
     // Query for the specified row
     match trans.query_row_and_then(

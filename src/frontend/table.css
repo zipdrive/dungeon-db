@@ -53,7 +53,7 @@ tfoot td {
   color: var(--text-color-link-hover);
 }
 
-[contenteditable] {
+[contenteditable], .clickable-text {
   padding: 2px 6px;
 
   &[placeholder]:empty::before {
