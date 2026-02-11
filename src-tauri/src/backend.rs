@@ -109,9 +109,11 @@ pub enum Action {
     },
     PushTableRow {
         table_oid: i64,
+        parent_row_oid: Option<i64>
     },
     InsertTableRow {
         table_oid: i64,
+        parent_row_oid: Option<i64>,
         row_oid: i64,
     },
     RetypeTableRow {
@@ -560,25 +562,27 @@ impl Action {
                     return Err(e);
                 }
             },
-            Self::PushTableRow { table_oid } => match table_data::push(table_oid.clone()) {
-                Ok(row_oid) => {
-                    let mut reverse_stack = if is_forward {
-                        REVERSE_STACK.lock().unwrap()
-                    } else {
-                        FORWARD_STACK.lock().unwrap()
-                    };
-                    (*reverse_stack).push(Self::DeleteTableRow {
-                        table_oid: table_oid.clone(),
-                        row_oid: row_oid.clone(),
-                    });
-                    msg_update_table_data_deep(app, table_oid.clone());
-                }
-                Err(e) => {
-                    return Err(e);
+            Self::PushTableRow { table_oid, parent_row_oid } => {
+                match table_data::push(table_oid.clone(), parent_row_oid.clone()) {
+                    Ok(row_oid) => {
+                        let mut reverse_stack = if is_forward {
+                            REVERSE_STACK.lock().unwrap()
+                        } else {
+                            FORWARD_STACK.lock().unwrap()
+                        };
+                        (*reverse_stack).push(Self::DeleteTableRow {
+                            table_oid: table_oid.clone(),
+                            row_oid: row_oid.clone(),
+                        });
+                        msg_update_table_data_deep(app, table_oid.clone());
+                    }
+                    Err(e) => {
+                        return Err(e);
+                    }
                 }
             },
-            Self::InsertTableRow { table_oid, row_oid } => {
-                match table_data::insert(table_oid.clone(), row_oid.clone()) {
+            Self::InsertTableRow { table_oid, parent_row_oid, row_oid } => {
+                match table_data::insert(table_oid.clone(), parent_row_oid.clone(), row_oid.clone()) {
                     Ok(row_oid) => {
                         let mut reverse_stack = if is_forward {
                             REVERSE_STACK.lock().unwrap()

@@ -273,11 +273,13 @@ export type Action = {
     }
 } | {
     pushTableRow: {
-        tableOid: number
+        tableOid: number,
+        parentRowOid: number | null 
     }
 } | {
     insertTableRow: {
         tableOid: number,
+        parentRowOid: number | null,
         rowOid: number
     }
 } | {

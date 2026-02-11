@@ -23,6 +23,10 @@
   font-size: 12px;
   line-height: 24px;
   font-weight: 400;
+  
+  -webkit-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
 
   color: var(--text-color-neutral);
   background-color: var(--background-A);
@@ -44,6 +48,14 @@
     --text-color-link: #3ee9d2;
     --text-color-link-hover: #24c8db;
   }
+}
+
+
+:focus-visible {
+  outline: none;
+}
+.focusable:focus {
+  border: var(--accent-color) 1px solid;
 }
 
 

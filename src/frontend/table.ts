@@ -17,7 +17,7 @@ console.debug(`table.html page loaded with table_oid=${urlParamTableOid ?? 'NULL
 if (urlParamTableOid) {
 
   const tableOid: number = parseInt(urlParamTableOid);
-  const urlParamParentRowOid = urlParams.get('parent_oid');
+  const urlParamParentRowOid = urlParams.get('parent_row_oid');
   const parentRowOid: number | null = urlParamParentRowOid ? parseInt(urlParamParentRowOid) : null;
   const urlParamTablePageNum = urlParams.get('page_num') ?? '1';
   const pageNum = parseInt(urlParamTablePageNum);
@@ -69,6 +69,7 @@ if (urlParamTableOid) {
             await executeAsync({
               insertTableRow: {
                 tableOid: tableOid,
+                parentRowOid: parentRowOid,
                 rowOid: rowOid
               }
             })
@@ -270,7 +271,8 @@ if (urlParamTableOid) {
     tableFooterCellNode.addEventListener('click', async (_) => {
       await executeAsync({
         pushTableRow: {
-          tableOid: tableOid 
+          tableOid: tableOid,
+          parentRowOid: parentRowOid 
         }
       })
       .catch(async (e) => {

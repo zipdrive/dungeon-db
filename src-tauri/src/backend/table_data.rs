@@ -62,6 +62,7 @@ struct RowOidParamAlias {
 fn insert_inplace(
     trans: &Transaction,
     table_oid: i64,
+    parent_row_oid: Option<i64>,
     row_oid: Option<i64>,
     known_supertype_oids: Option<Vec<RowOidParamAlias>>,
 ) -> Result<i64, error::Error> {
@@ -74,115 +75,105 @@ fn insert_inplace(
             .collect(),
         None => Vec::new(),
     };
+    match row_oid {
+        Some(o) => { type_row_oids.push((String::from(":t"), o)); },
+        None => {}
+    }
+    match parent_row_oid {
+        Some(o) => { type_row_oids.push((String::from(":p"), o)); },
+        None => {}
+    }
 
-    let mut select_supertype_statement = trans.prepare(match row_oid {
-        Some(o) => { 
-            type_row_oids.push((String::from(":t"), o));
-            "
-            WITH RECURSIVE SUPERTYPE_QUERY (LEVEL, SUPERTYPE_OID, INHERITOR_TYPE_OID, COL_NAME, COL_VALUE_EXPRESSION) AS (
-                SELECT
-                    0 AS LEVEL,
-                    u.MASTER_TABLE_OID AS SUPERTYPE_OID,
-                    u.INHERITOR_TABLE_OID AS INHERITOR_TYPE_OID,
-                    'MASTER' || FORMAT('%d', u.MASTER_TABLE_OID) || '_OID' AS COL_NAME,
-                    ':m' || FORMAT('%d', u.MASTER_TABLE_OID) AS COL_VALUE_EXPRESSION
-                FROM METADATA_TABLE_INHERITANCE u ON 
-                WHERE u.TRASH = 0 AND u.INHERITOR_TABLE_OID = ?1
-                UNION
-                SELECT
-                    s.LEVEL + 1 AS LEVEL,
-                    u.MASTER_TABLE_OID AS SUPERTYPE_OID,
-                    u.INHERITOR_TABLE_OID AS INHERITOR_TYPE_OID,
-                    'MASTER' || FORMAT('%d', u.MASTER_TABLE_OID) || '_OID' AS COL_NAME,
-                    ':m' || FORMAT('%d', u.MASTER_TABLE_OID) AS COL_VALUE_EXPRESSION
-                FROM SUPERTYPE_QUERY s
-                LEFT JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.SUPERTYPE_OID
-                WHERE u.TRASH = 0
-            ),
-            TYPE_QUERY (TYPE_OID) AS (
-                SELECT ?1
-                UNION
-                SELECT
-                    u.MASTER_TABLE_OID
-                FROM TYPE_QUERY s
-                INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.TYPE_OID
-                WHERE u.TRASH = 0 AND u.MASTER_TABLE_OID NOT IN rarray(?2)
-            )
+    let select_cmd: String = format!("
+        WITH RECURSIVE SUPERTYPE_QUERY (LEVEL, SUPERTYPE_OID, INHERITOR_TYPE_OID, COL_NAME, COL_VALUE_EXPRESSION) AS (
             SELECT
-                COALESCE(MAX(s.LEVEL), 9223372036854775807) AS MAX_LEVEL,
-                t.TYPE_OID AS TYPE_OID,
-                'INSERT INTO TABLE' || FORMAT('%d', t.TYPE_OID) || 
-                    CASE WHEN t.TYPE_OID = ?1 THEN 
-                        COALESCE(' (OID, ' ||
-                            GROUP_CONCAT(s.COL_NAME, ',' ORDER BY s.SUPERTYPE_OID) || 
-                            ') VALUES (:t, ' || 
-                            GROUP_CONCAT(s.COL_VALUE_EXPRESSION, ',' ORDER BY s.SUPERTYPE_OID) ||
-                            ')',
-                            ' (OID) VALUES (:t)'
-                        )
-                    ELSE 
-                        COALESCE(' (' ||
-                            GROUP_CONCAT(COL_NAME, ',' ORDER BY s.SUPERTYPE_OID) || 
-                            ') VALUES (' || 
-                            GROUP_CONCAT(COL_VALUE_EXPRESSION, ',' ORDER BY s.SUPERTYPE_OID) ||
-                            ')',
-                            ' DEFAULT VALUES'
-                        )
+                0 AS LEVEL,
+                u.MASTER_TABLE_OID AS SUPERTYPE_OID,
+                u.INHERITOR_TABLE_OID AS INHERITOR_TYPE_OID,
+                'MASTER' || FORMAT('%d', u.MASTER_TABLE_OID) || '_OID' AS COL_NAME,
+                ':m' || FORMAT('%d', u.MASTER_TABLE_OID) AS COL_VALUE_EXPRESSION
+            FROM METADATA_TABLE_INHERITANCE u
+            WHERE u.TRASH = 0 AND u.INHERITOR_TABLE_OID = ?1
+            UNION
+            SELECT
+                s.LEVEL + 1 AS LEVEL,
+                u.MASTER_TABLE_OID AS SUPERTYPE_OID,
+                u.INHERITOR_TABLE_OID AS INHERITOR_TYPE_OID,
+                'MASTER' || FORMAT('%d', u.MASTER_TABLE_OID) || '_OID' AS COL_NAME,
+                ':m' || FORMAT('%d', u.MASTER_TABLE_OID) AS COL_VALUE_EXPRESSION
+            FROM SUPERTYPE_QUERY s
+            LEFT JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.SUPERTYPE_OID
+            WHERE u.TRASH = 0
+        ),
+        TYPE_QUERY (TYPE_OID) AS (
+            SELECT ?1
+            UNION
+            SELECT
+                u.MASTER_TABLE_OID
+            FROM TYPE_QUERY s
+            INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.TYPE_OID
+            WHERE u.TRASH = 0 AND u.MASTER_TABLE_OID NOT IN rarray(?2)
+        )
+        SELECT
+            COALESCE(MAX(s.LEVEL), 9223372036854775807) AS MAX_LEVEL,
+            t.TYPE_OID AS TYPE_OID,
+            'INSERT INTO TABLE' || FORMAT('%d', t.TYPE_OID) || 
+                CASE 
+                WHEN t.TYPE_OID = ?1 THEN 
+                    COALESCE(' (' || {}{}
+                        GROUP_CONCAT(s.COL_NAME, ',' ORDER BY s.SUPERTYPE_OID) || 
+                        ') VALUES (' || {}{}
+                        GROUP_CONCAT(s.COL_VALUE_EXPRESSION, ',' ORDER BY s.SUPERTYPE_OID) ||
+                        ')',
+                        {}
+                    ) 
+                ELSE
+                    COALESCE(' (' ||
+                        GROUP_CONCAT(s.COL_NAME, ',' ORDER BY s.SUPERTYPE_OID) || 
+                        ') VALUES (' || 
+                        GROUP_CONCAT(s.COL_VALUE_EXPRESSION, ',' ORDER BY s.SUPERTYPE_OID) ||
+                        ')',
+                        ' DEFAULT VALUES'
+                    ) 
                 END AS INSERT_CMD
-            FROM TYPE_QUERY t
-            LEFT JOIN SUPERTYPE_QUERY s ON s.INHERITOR_TYPE_OID = t.TYPE_OID
-            GROUP BY t.TYPE_OID
-            ORDER BY 1 DESC
-            "
+        FROM TYPE_QUERY t
+        LEFT JOIN SUPERTYPE_QUERY s ON s.INHERITOR_TYPE_OID = t.TYPE_OID
+        GROUP BY t.TYPE_OID
+        ORDER BY 1 DESC
+        ",
+        match row_oid {
+            Some(_) => "'OID, ' || ",
+            None => ""
         },
-        None => {
-            "
-            WITH RECURSIVE SUPERTYPE_QUERY (LEVEL, SUPERTYPE_OID, INHERITOR_TYPE_OID, COL_NAME, COL_VALUE_EXPRESSION) AS (
-                SELECT
-                    1 AS LEVEL,
-                    u.MASTER_TABLE_OID AS SUPERTYPE_OID,
-                    u.INHERITOR_TABLE_OID AS INHERITOR_TYPE_OID,
-                    'MASTER' || FORMAT('%d', u.MASTER_TABLE_OID) || '_OID' AS COL_NAME,
-                    ':m' || FORMAT('%d', u.MASTER_TABLE_OID) AS COL_VALUE_EXPRESSION
-                FROM METADATA_TABLE_INHERITANCE u 
-                WHERE u.TRASH = 0 AND u.INHERITOR_TABLE_OID = ?1
-                UNION
-                SELECT
-                    s.LEVEL + 1 AS LEVEL,
-                    u.MASTER_TABLE_OID AS SUPERTYPE_OID,
-                    u.INHERITOR_TABLE_OID AS INHERITOR_TYPE_OID,
-                    'MASTER' || FORMAT('%d', u.MASTER_TABLE_OID) || '_OID' AS COL_NAME,
-                    ':m' || FORMAT('%d', u.MASTER_TABLE_OID) AS COL_VALUE_EXPRESSION
-                FROM SUPERTYPE_QUERY s
-                LEFT JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.SUPERTYPE_OID
-                WHERE u.TRASH = 0
-            ),
-            TYPE_QUERY (TYPE_OID) AS (
-                SELECT ?1
-                UNION
-                SELECT
-                    u.MASTER_TABLE_OID
-                FROM TYPE_QUERY s
-                INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.TYPE_OID
-                WHERE u.TRASH = 0 AND u.MASTER_TABLE_OID NOT IN rarray(?2)
-            )
-            SELECT
-                COALESCE(MAX(s.LEVEL), 9223372036854775807) AS MAX_LEVEL,
-                t.TYPE_OID AS TYPE_OID,
-                'INSERT INTO TABLE' || FORMAT('%d', t.TYPE_OID) || COALESCE(' (' ||
-                    GROUP_CONCAT(s.COL_NAME, ',' ORDER BY s.SUPERTYPE_OID) || 
-                    ') VALUES (' || 
-                    GROUP_CONCAT(s.COL_VALUE_EXPRESSION, ',' ORDER BY s.SUPERTYPE_OID) ||
-                    ')',
-                    ' DEFAULT VALUES'
-                ) AS INSERT_CMD
-            FROM TYPE_QUERY t
-            LEFT JOIN SUPERTYPE_QUERY s ON s.INHERITOR_TYPE_OID = t.TYPE_OID
-            GROUP BY t.TYPE_OID
-            ORDER BY 1 DESC
-            "
+        match parent_row_oid {
+            Some(_) => "'PARENT_OID, ' || ",
+            None => ""
+        },
+        match row_oid {
+            Some(_) => "':t, ' || ",
+            None => ""
+        },
+        match parent_row_oid {
+            Some(_) => "':p, ' || ",
+            None => ""
+        },
+        match row_oid {
+            Some(_) => {
+                match parent_row_oid {
+                    Some(_) => "' (OID, PARENT_OID) VALUES (:t, :p)'",
+                    None => "' (OID) VALUES (:t)'"
+                }
+            },
+            None => {
+                match parent_row_oid {
+                    Some(_) => "' (PARENT_OID) VALUES (:p)'",
+                    None => "' DEFAULT VALUES'"
+                }
+            }
         }
-    })?;
+    );
+
+    let mut select_supertype_statement = trans.prepare(&select_cmd)?;
     let existing_supertype_oids: Array = Array::new(match known_supertype_oids {
         Some(a) => a.iter().map(|alias| alias.type_oid.into()).collect(),
         None => Vec::new(),
@@ -382,7 +373,7 @@ fn untrash_inplace(trans: &Transaction, table_oid: i64, row_oid: i64) -> Result<
 }
 
 /// Insert a row into the data such that the OID places it before any existing rows with that OID.
-pub fn insert(table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
+pub fn insert(table_oid: i64, parent_row_oid: Option<i64>, row_oid: i64) -> Result<i64, error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
@@ -397,7 +388,7 @@ pub fn insert(table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
     match existing_row_oid {
         None => {
             // Insert with OID = row_oid
-            let row_oid = insert_inplace(&trans, table_oid, Some(row_oid), None)?;
+            let row_oid = insert_inplace(&trans, table_oid, parent_row_oid, Some(row_oid), None)?;
 
             // Return the row_oid
             trans.commit()?;
@@ -413,7 +404,7 @@ pub fn insert(table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
             match existing_prev_row_oid {
                 None => {
                     // Insert with OID = row_oid - 1
-                    let row_oid = insert_inplace(&trans, table_oid, Some(row_oid - 1), None)?;
+                    let row_oid = insert_inplace(&trans, table_oid, parent_row_oid, Some(row_oid - 1), None)?;
 
                     // Return the row_oid
                     trans.commit()?;
@@ -432,7 +423,7 @@ pub fn insert(table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
                     })?;
 
                     // Insert the row
-                    let row_oid = insert_inplace(&trans, table_oid, Some(row_oid), None)?;
+                    let row_oid = insert_inplace(&trans, table_oid, parent_row_oid, Some(row_oid), None)?;
 
                     // Return the row_oid
                     trans.commit()?;
@@ -444,12 +435,12 @@ pub fn insert(table_oid: i64, row_oid: i64) -> Result<i64, error::Error> {
 }
 
 /// Push a row into the table with a default OID.
-pub fn push(table_oid: i64) -> Result<i64, error::Error> {
+pub fn push(table_oid: i64, parent_row_oid: Option<i64>) -> Result<i64, error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
     // Insert the row
-    let row_oid = insert_inplace(&trans, table_oid, None, None)?;
+    let row_oid = insert_inplace(&trans, table_oid, parent_row_oid, None, None)?;
 
     // Return the row OID
     trans.commit()?;
@@ -583,7 +574,7 @@ pub fn retype(
     } else {
         // If not, we create a new row
         let new_obj_row_oid: i64 =
-            insert_inplace(&trans, new_obj_type_oid, None, Some(type_row_oids))?;
+            insert_inplace(&trans, new_obj_type_oid, None, None, Some(type_row_oids))?;
 
         // Move every master of the new row from the trash
         untrash_inplace(&trans, new_obj_type_oid, new_obj_row_oid)?;
@@ -804,7 +795,7 @@ pub fn set_table_object_value(
         match column_type {
             data_type::MetadataColumnType::ChildObject(obj_type_oid) => {
                 // Insert a new row into the object table
-                let obj_row_oid = insert_inplace(&trans, obj_type_oid, None, None)?;
+                let obj_row_oid = insert_inplace(&trans, obj_type_oid, None, None, None)?;
 
                 // Update the value in the base table
                 let update_cmd =
@@ -1134,7 +1125,7 @@ fn construct_data_query(
                     }
                 }
                 data_type::MetadataColumnType::ChildTable(column_type_oid) => {
-                    select_cols_cmd = format!("{select_cols_cmd}, (SELECT '[' || GROUP_CONCAT(a.DISPLAY_VALUE) || ']' FROM TABLE{column_type_oid}_SURROGATE a WHERE a.PARENT_OID = {source_alias}.OID GROUP BY a.PARENT_OID) AS COLUMN{column_oid}");
+                    select_cols_cmd = format!("{select_cols_cmd}, (SELECT '[' || GROUP_CONCAT(a.DISPLAY_VALUE) || ']' FROM TABLE{column_type_oid}_SURROGATE a INNER JOIN TABLE{column_type_oid} b ON b.OID = a.OID WHERE b.PARENT_OID = {source_alias}.OID GROUP BY b.PARENT_OID) AS COLUMN{column_oid}");
                     true_ord = None;
                 }
             }
@@ -1162,7 +1153,7 @@ fn construct_data_query(
             if include_row_oid_clause {
                 "AND t.OID = ?1"
             } else if include_parent_row_oid_clause {
-                "AND t.PARENT_OID = ?1 LIMIT ?1 OFFSET ?2"
+                "AND t.PARENT_OID = ?1 LIMIT ?2 OFFSET ?3"
             } else {
                 "LIMIT ?1 OFFSET ?2"
             }

@@ -4,9 +4,6 @@ import { DropdownValue, TableColumnCell, executeAsync, openDialogAsync, queryAsy
 import { Channel } from "@tauri-apps/api/core";
 
 
-let lastActiveElement: HTMLElement | null = null;
-
-
 export async function attachColumnContextMenu(tableHeaderNode: HTMLElement, tableOid: number, columnOid: number, columnOrdering: number) {
   tableHeaderNode.addEventListener('contextmenu', async (e) => {
     e.preventDefault();
@@ -69,8 +66,11 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
   const rowOid = cell.rowOid;
   const columnOid = cell.columnOid;
 
-  // Clear the contents of the node
-  node.innerHTML = '';
+  // Clear the contents and event listeners of the node
+  let clonedNode: HTMLTableCellElement = node.cloneNode() as HTMLTableCellElement;
+  clonedNode.innerHTML = '';
+  node.replaceWith(clonedNode);
+  node = clonedNode;
 
   // Add null class for CSS
   if (!cell.displayValue) {
@@ -195,10 +195,6 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
             let newPrimitiveValue: string | null = inputNode.innerText.trimEnd();
             await setCellPrimitiveValueAsync(newPrimitiveValue);
           });
-          
-          // Add the div to the cell
-          node.insertAdjacentElement('beforeend', inputNode);
-          return inputNode;
         } else {
           // Create a text input
           let cellInput: HTMLInputElement = document.createElement('input');
@@ -215,30 +211,34 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
 
           // Add the input to the cell
           node.insertAdjacentElement('beforeend', cellInput);
-          return cellInput;
+          inputNode = cellInput;
         }
+        break;
       }
       case 'Boolean': {
-        let inputNode: HTMLInputElement = document.createElement('input');
-        inputNode.type = 'checkbox';
-        inputNode.checked = cell.displayValue == '1';
-        node.insertAdjacentElement('beforeend', inputNode);
-        return inputNode;
+        let checkboxNode: HTMLInputElement = document.createElement('input');
+        checkboxNode.type = 'checkbox';
+        checkboxNode.checked = cell.displayValue == '1';
+        node.insertAdjacentElement('beforeend', checkboxNode);
+        inputNode = node;
+        break;
       }
       case 'File': {
         // Show primary key of object, cut off by ellipsis if too long
-        node.innerText = cell.displayValue ?? '';
-        node.tabIndex = 0;
-        return node;
+        inputNode = node;
+        inputNode.innerText = cell.displayValue ?? '';
+        inputNode.tabIndex = 0;
+        break;
       }
       case 'Image': {
         // TODO display image thumbnail
-        node.innerText = cell.displayValue ?? '';
-        node.tabIndex = 0;
-        return node;
+        inputNode = node;
+        inputNode.innerText = cell.displayValue ?? '';
+        inputNode.tabIndex = 0;
+        break;
       }
       default:
-        return node;
+        inputNode = node;
     }
   } else if ('singleSelectDropdown' in cell.columnType || 'reference' in cell.columnType) {
     console.debug(JSON.stringify(cell));
@@ -294,7 +294,7 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
 
     // Set the value of the dropdown
     selectNode.value = cell.trueValue ?? '';
-    return selectNode;
+    inputNode = selectNode;
   } else if ('multiSelectDropdown' in cell.columnType) {
     let selectNode: HTMLSelectElement = document.createElement('select');
     selectNode.multiple = true;
@@ -333,16 +333,17 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
 
     // Set the value of the dropdown
     selectNode.value = cell.trueValue ?? '';
-    return selectNode;
+    inputNode = selectNode;
   } else if ('childObject' in cell.columnType) {
     const objectTableOid: number = cell.columnType.childObject;
     const objectRowOid: number | null = cell.trueValue ? parseInt(cell.trueValue) : null;
 
     // Show primary key of object, cut off by ellipsis if too long
-    node.innerText = cell.displayValue ?? '';
-    node.setAttribute('placeholder', '— NULL —');
-    node.classList.add('clickable-text');
-    node.tabIndex = 0;
+    inputNode = node;
+    inputNode.innerText = cell.displayValue ?? '';
+    inputNode.setAttribute('placeholder', '— NULL —');
+    inputNode.classList.add('clickable-text');
+    inputNode.tabIndex = 0;
 
     // Add event listener to open the object when double-clicked
     function openObject() {
@@ -369,25 +370,19 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
         });
       }
     }
-    node.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.returnValue = false;
 
-      if (node == lastActiveElement) {
-        openObject();
-      } else {
-        lastActiveElement = node;
-      }
+    inputNode.addEventListener('click', (_) => {
+      openObject();
     });
-    return node;
   } else {
     const childTableOid: number = cell.columnType.childTable;
 
     // Show primary key of child table rows, cut off by ellipsis if too long
-    node.innerText = cell.displayValue ?? '';
-    node.setAttribute('placeholder', '— NULL —');
-    node.classList.add('clickable-text');
-    node.tabIndex = 0;
+    inputNode = node;
+    inputNode.innerText = cell.displayValue ?? '';
+    inputNode.setAttribute('placeholder', '— NULL —');
+    inputNode.classList.add('clickable-text');
+    inputNode.tabIndex = 0;
     
     // Add event listener to open the table when double-clicked
     function openChildTable() {
@@ -400,24 +395,12 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
         }
       });
     }
-    node.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.returnValue = false;
 
-      if (node == lastActiveElement) {
-        openChildTable();
-      } else {
-        lastActiveElement = node;
-      }
-    })
-    return node;
+    inputNode.addEventListener('click', (_) => {
+      openChildTable();
+    });
   }
+
+  inputNode.classList.add('focusable');
+  return inputNode;
 }
-
-
-// Add initial listeners
-window.addEventListener("DOMContentLoaded", async () => {
-  document.addEventListener('focusout', (e) => {
-    lastActiveElement = e.target as HTMLElement;
-  })
-});

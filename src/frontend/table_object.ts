@@ -84,6 +84,7 @@ if (urlParamTableOid && urlParamObjOid) {
       } else {
         let cellRow: HTMLTableRowElement = document.createElement('tr');
         let cellLabelContainer: HTMLTableCellElement = document.createElement('td');
+        cellLabelContainer.classList.add('field-name-cell');
         cellLabelContainer.classList.add('resizable-column');
         attachColumnContextMenu(cellLabelContainer, tableOid, cell.columnOid, cell.columnOrdering);
         cellRow.appendChild(cellLabelContainer);
@@ -97,6 +98,7 @@ if (urlParamTableOid && urlParamObjOid) {
         // Create an input for the cell
         let columnValueCell: HTMLTableCellElement = document.createElement('td');
         columnValueCell.id = `table-content-column${cell.columnOid}-row${cell.rowOid}`;
+        columnValueCell.classList.add('field-value-cell');
         columnValueCell.dataset.tableOid = cell.tableOid.toString();
         columnValueCell.dataset.columnOid = cell.columnOid.toString();
         columnValueCell.dataset.rowOid = cell.rowOid.toString();
