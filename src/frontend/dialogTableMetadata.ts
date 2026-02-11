@@ -9,10 +9,45 @@ const urlParamMode = urlParams.get('mode');
 const mode: number | null = urlParamMode ? parseInt(urlParamMode) : null;
 
 
+async function populateMetadataAsync() {
+    if (!tableOid) 
+        return;
+
+    // Query the database for previous metadata
+    const tableMetadata: {
+        oid: number,
+        name: string,
+        masterTableOidList: number[]
+    } = await queryAsync({
+        invokeAction: 'get_table_metadata',
+        invokeParams: {
+            tableOid: tableOid
+        }
+    })
+    .catch(async (e) => {
+        await message(e, {
+            title: `An error occurred while retrieving current metadata for ${(mode == 4 ? 'object type' : 'table')}}.`,
+            kind: 'error'
+        });
+    });
+
+    // Populate the table name
+    let tableNameInput: HTMLInputElement = document.getElementById('table-name') as HTMLInputElement;
+    tableNameInput.value = tableMetadata.name;
+
+    // Populate the table master list(s)
+    tableMetadata.masterTableOidList.forEach((masterTableOid) => {
+        console.debug(`${tableOid} inherits from ${masterTableOid}`);
+        let optionNode: HTMLOptionElement | null = document.querySelector(`#master-table-select option[value="${masterTableOid}"]`) as HTMLOptionElement;
+        if (optionNode)
+            optionNode.selected = true;
+    });
+}
+
 /**
  * Populate the possible options for a master list, ensuring that no table that would cause an infinite loop of inheritance can be selected.
  */
-async function refreshMasterList() {
+async function refreshMasterListAsync() {
     console.debug("Refreshing master list.");
     let masterListSelect: HTMLSelectElement = document.getElementById('master-table-select') as HTMLSelectElement;
     masterListSelect.innerHTML = '';
@@ -167,8 +202,12 @@ function cancel() {
 }
 
 // Add initial listeners
-window.addEventListener("DOMContentLoaded", () => {
-    refreshMasterList();
+window.addEventListener("DOMContentLoaded", async () => {
+    // Refresh the list of tables that the table can inherit from
+    await refreshMasterListAsync();
+
+    // Populate in the metadata from the table, if it already existed
+    await populateMetadataAsync();
 
     // Set up event listeners for OK and Cancel
     document.getElementById('confirm-button')?.addEventListener("click", async (e) => {

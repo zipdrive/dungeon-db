@@ -63,6 +63,11 @@ export type Query = {
         tableChannel: Channel<BasicMetadata>
     }
 } | {
+    invokeAction: 'get_table_metadata',
+    invokeParams: {
+        tableOid: number
+    }
+} | {
     invokeAction: 'get_report_list',
     invokeParams: {
         reportChannel: Channel<BasicMetadata>
@@ -141,6 +146,19 @@ export type Dialog = {
     invokeAction: 'dialog_create_table',
     invokeParams: {}
 } | {
+    invokeAction: 'dialog_edit_table',
+    invokeParams: {
+        tableOid: number
+    }
+} | {
+    invokeAction: 'dialog_create_object_type',
+    invokeParams: {}
+} | {
+    invokeAction: 'dialog_edit_object_type',
+    invokeParams: {
+        objTypeOid: number
+    }
+} | {
     invokeAction: 'dialog_create_table_column',
     invokeParams: {
         tableOid: number,
@@ -183,11 +201,23 @@ export type Action = {
         masterTableOidList: number[]
     }
 } | {
+    editTableMetadata: {
+        tableOid: number,
+        tableName: string,
+        masterTableOidList: number[]
+    }
+} | {
     deleteTable: {
         tableOid: number
     }
 } | {
     createObjectType: {
+        objTypeName: string,
+        masterTableOidList: number[]
+    }
+} | {
+    editObjectTypeMetadata: {
+        objTypeOid: number,
         objTypeName: string,
         masterTableOidList: number[]
     }

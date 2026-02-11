@@ -91,8 +91,8 @@ pub fn send_metadata_list(
                 FROM SUBTYPE_QUERY s
                 INNER JOIN METADATA_TABLE_INHERITANCE u ON u.MASTER_TABLE_OID = s.TYPE_OID
                 INNER JOIN METADATA_TABLE tbl ON tbl.TYPE_OID = u.INHERITOR_TABLE_OID
-                WHERE u.TRASH = 0
-                ORDER BY 1 DESC
+                WHERE u.TRASH = 0 AND tbl.TRASH = 0
+                ORDER BY 1 DESC, 4 ASC
             )
             SELECT
                 LEVEL,
@@ -114,7 +114,10 @@ pub fn send_metadata_list(
                     tbl.NAME AS TYPE_NAME
                 FROM METADATA_TYPE typ
                 INNER JOIN METADATA_TABLE tbl ON tbl.TYPE_OID = typ.OID
-                WHERE tbl.TRASH = 0 AND typ.MODE = 4 AND typ.OID NOT IN (SELECT DISTINCT INHERITOR_TABLE_OID FROM METADATA_TABLE_INHERITANCE)
+                WHERE tbl.TRASH = 0 
+                    AND tbl.TRASH = 0 
+                    AND typ.MODE = 4 
+                    AND typ.OID NOT IN (SELECT DISTINCT INHERITOR_TABLE_OID FROM METADATA_TABLE_INHERITANCE)
                 UNION
                 SELECT
                     s.LEVEL + 1 AS LEVEL,
@@ -124,8 +127,8 @@ pub fn send_metadata_list(
                 FROM SUBTYPE_QUERY s
                 INNER JOIN METADATA_TABLE_INHERITANCE u ON u.MASTER_TABLE_OID = s.TYPE_OID
                 INNER JOIN METADATA_TABLE tbl ON tbl.TYPE_OID = u.INHERITOR_TABLE_OID
-                WHERE u.TRASH = 0
-                ORDER BY 1 DESC
+                WHERE u.TRASH = 0 AND tbl.TRASH = 0
+                ORDER BY 1 DESC, 4 ASC
             )
             SELECT
                 LEVEL,

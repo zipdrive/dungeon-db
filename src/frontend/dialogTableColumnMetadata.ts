@@ -1,5 +1,5 @@
 import { message } from "@tauri-apps/plugin-dialog";
-import { BasicMetadata, closeDialogAsync, ColumnType, DropdownValue, executeAsync, queryAsync, TableColumnMetadata } from "./backendutils";
+import { BasicHierarchicalMetadata, BasicMetadata, closeDialogAsync, ColumnType, DropdownValue, executeAsync, queryAsync, TableColumnMetadata } from "./backendutils";
 import { Channel } from "@tauri-apps/api/core";
 
 
@@ -173,7 +173,10 @@ window.addEventListener("DOMContentLoaded", async () => {
         const tableOid = urlParams.get('table_oid');
         const columnOid = urlParams.get('column_oid');
         if (!tableOid || !columnOid) {
-            await message("Dialog window does not have expected GET parameters.", { title: "An error occurred while editing column.", kind: 'error' });
+            await message("Dialog window does not have expected GET parameters.", { 
+                title: "An error occurred while editing column.", 
+                kind: 'error' 
+            });
             return;
         }
 

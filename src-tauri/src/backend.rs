@@ -183,7 +183,7 @@ impl Action {
                             FORWARD_STACK.lock().unwrap()
                         };
                         (*reverse_stack).push(Self::EditTableMetadata {
-                            table_oid: table_oid,
+                            table_oid: table_oid.clone(),
                             table_name: old_table_name,
                             master_table_oid_list: old_master_table_oid_list
                         });
@@ -303,7 +303,7 @@ impl Action {
                 }
             },
             Self::EditObjectTypeMetadata { obj_type_oid, obj_type_name, master_table_oid_list } => {
-                match table::edit(table_oid.clone(), table_name.clone(), master_table_oid_list) {
+                match table::edit(obj_type_oid.clone(), obj_type_name.clone(), master_table_oid_list) {
                     Ok((old_obj_type_name, old_master_table_oid_list)) => {
                         let mut reverse_stack = if is_forward {
                             REVERSE_STACK.lock().unwrap()
@@ -311,7 +311,7 @@ impl Action {
                             FORWARD_STACK.lock().unwrap()
                         };
                         (*reverse_stack).push(Self::EditObjectTypeMetadata {
-                            obj_type_oid: obj_type_oid,
+                            obj_type_oid: obj_type_oid.clone(),
                             obj_type_name: old_obj_type_name,
                             master_table_oid_list: old_master_table_oid_list
                         });
@@ -394,7 +394,7 @@ impl Action {
                         return Err(e);
                     }
                 }
-            }
+            },
             Self::EditTableColumnMetadata {
                 table_oid,
                 column_oid,
@@ -811,10 +811,58 @@ pub async fn dialog_create_table(app: AppHandle) -> Result<(), error::Error> {
     WebviewWindowBuilder::new(
         &app,
         format!("tableMetadataWindow-{window_idx}"),
-        WebviewUrl::App("/src/frontend/dialogTableMetadata.html".into()),
+        WebviewUrl::App("/src/frontend/dialogTableMetadata.html?mode=3".into()),
     )
     .title("Create New Table")
-    .inner_size(400.0, 150.0)
+    .inner_size(400.0, 250.0)
+    .maximizable(false)
+    .build()?;
+    return Ok(());
+}
+
+#[tauri::command]
+/// Pull up a dialog window for creating a new table.
+pub async fn dialog_edit_table(app: AppHandle, table_oid: i64) -> Result<(), error::Error> {
+    let window_idx = app.webview_windows().len();
+    WebviewWindowBuilder::new(
+        &app,
+        format!("tableMetadataWindow-{window_idx}"),
+        WebviewUrl::App(format!("/src/frontend/dialogTableMetadata.html?table_oid={table_oid}&mode=3").into()),
+    )
+    .title("Edit Table")
+    .inner_size(400.0, 250.0)
+    .maximizable(false)
+    .build()?;
+    return Ok(());
+}
+
+#[tauri::command]
+/// Pull up a dialog window for creating a new object type.
+pub async fn dialog_create_object_type(app: AppHandle) -> Result<(), error::Error> {
+    let window_idx = app.webview_windows().len();
+    WebviewWindowBuilder::new(
+        &app,
+        format!("tableMetadataWindow-{window_idx}"),
+        WebviewUrl::App("/src/frontend/dialogTableMetadata.html?mode=4".into()),
+    )
+    .title("Create New Object Type")
+    .inner_size(400.0, 250.0)
+    .maximizable(false)
+    .build()?;
+    return Ok(());
+}
+
+#[tauri::command]
+/// Pull up a dialog window for creating a new object type.
+pub async fn dialog_edit_object_type(app: AppHandle, obj_type_oid: i64) -> Result<(), error::Error> {
+    let window_idx = app.webview_windows().len();
+    WebviewWindowBuilder::new(
+        &app,
+        format!("tableMetadataWindow-{window_idx}"),
+        WebviewUrl::App(format!("/src/frontend/dialogTableMetadata.html?table_oid={obj_type_oid}&mode=4").into()),
+    )
+    .title("Edit Object Type")
+    .inner_size(400.0, 250.0)
     .maximizable(false)
     .build()?;
     return Ok(());
@@ -959,6 +1007,12 @@ pub fn get_table_list(table_channel: Channel<table::BasicMetadata>) -> Result<()
     // Use channel to send BasicMetadata objects
     table::send_metadata_list(table_channel)?;
     return Ok(());
+}
+
+#[tauri::command]
+/// Gets the metadata for a table.
+pub fn get_table_metadata(table_oid: i64) -> Result<table::Metadata, error::Error> {
+    return table::get_metadata(&table_oid);
 }
 
 #[tauri::command]
