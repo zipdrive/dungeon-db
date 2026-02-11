@@ -22,6 +22,11 @@ pub enum Action {
         table_name: String,
         master_table_oid_list: Vec<i64>,
     },
+    EditTableMetadata {
+        table_oid: i64,
+        table_name: String,
+        master_table_oid_list: Vec<i64>
+    },
     DeleteTable {
         table_oid: i64,
     },
@@ -41,6 +46,11 @@ pub enum Action {
     CreateObjectType {
         obj_type_name: String,
         master_table_oid_list: Vec<i64>,
+    },
+    EditObjectTypeMetadata {
+        obj_type_oid: i64,
+        obj_type_name: String,
+        master_table_oid_list: Vec<i64>
     },
     DeleteObjectType {
         obj_type_oid: i64,
@@ -164,20 +174,42 @@ impl Action {
                     return Err(e);
                 }
             },
-            Self::DeleteTable { table_oid } => match table::move_trash(table_oid.clone()) {
-                Ok(_) => {
-                    let mut reverse_stack = if is_forward {
-                        REVERSE_STACK.lock().unwrap()
-                    } else {
-                        FORWARD_STACK.lock().unwrap()
-                    };
-                    (*reverse_stack).push(Self::RestoreDeletedTable {
-                        table_oid: table_oid.clone(),
-                    });
-                    msg_update_table_list(app);
+            Self::EditTableMetadata { table_oid, table_name, master_table_oid_list } => {
+                match table::edit(table_oid.clone(), table_name.clone(), master_table_oid_list) {
+                    Ok((old_table_name, old_master_table_oid_list)) => {
+                        let mut reverse_stack = if is_forward {
+                            REVERSE_STACK.lock().unwrap()
+                        } else {
+                            FORWARD_STACK.lock().unwrap()
+                        };
+                        (*reverse_stack).push(Self::EditTableMetadata {
+                            table_oid: table_oid,
+                            table_name: old_table_name,
+                            master_table_oid_list: old_master_table_oid_list
+                        });
+                        msg_update_table_list(app);
+                    },
+                    Err(e) => {
+                        return Err(e);
+                    }
                 }
-                Err(e) => {
-                    return Err(e);
+            },
+            Self::DeleteTable { table_oid } => {
+                match table::move_trash(table_oid.clone()) {
+                    Ok(_) => {
+                        let mut reverse_stack = if is_forward {
+                            REVERSE_STACK.lock().unwrap()
+                        } else {
+                            FORWARD_STACK.lock().unwrap()
+                        };
+                        (*reverse_stack).push(Self::RestoreDeletedTable {
+                            table_oid: table_oid.clone(),
+                        });
+                        msg_update_table_list(app);
+                    }
+                    Err(e) => {
+                        return Err(e);
+                    }
                 }
             },
             Self::RestoreDeletedTable { table_oid } => {
@@ -255,19 +287,39 @@ impl Action {
                 obj_type_name,
                 master_table_oid_list,
             } => match obj_type::create(obj_type_name.clone(), master_table_oid_list) {
-                Ok(table_oid) => {
+                Ok(obj_type_oid) => {
                     let mut reverse_stack = if is_forward {
                         REVERSE_STACK.lock().unwrap()
                     } else {
                         FORWARD_STACK.lock().unwrap()
                     };
-                    (*reverse_stack).push(Self::DeleteTable {
-                        table_oid: table_oid,
+                    (*reverse_stack).push(Self::DeleteObjectType {
+                        obj_type_oid: obj_type_oid,
                     });
                     msg_update_obj_type_list(app);
                 }
                 Err(e) => {
                     return Err(e);
+                }
+            },
+            Self::EditObjectTypeMetadata { obj_type_oid, obj_type_name, master_table_oid_list } => {
+                match table::edit(table_oid.clone(), table_name.clone(), master_table_oid_list) {
+                    Ok((old_obj_type_name, old_master_table_oid_list)) => {
+                        let mut reverse_stack = if is_forward {
+                            REVERSE_STACK.lock().unwrap()
+                        } else {
+                            FORWARD_STACK.lock().unwrap()
+                        };
+                        (*reverse_stack).push(Self::EditObjectTypeMetadata {
+                            obj_type_oid: obj_type_oid,
+                            obj_type_name: old_obj_type_name,
+                            master_table_oid_list: old_master_table_oid_list
+                        });
+                        msg_update_obj_type_list(app);
+                    },
+                    Err(e) => {
+                        return Err(e);
+                    }
                 }
             },
             Self::DeleteObjectType { obj_type_oid } => {

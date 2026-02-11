@@ -3,13 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="stylesheet" href="./dialog.css" />
+    <link rel="stylesheet" href="./form.css" />
     <title>Create New Column</title>
     <script type="module" src="dialogTableColumnMetadata.ts" defer></script>
   </head>
 
   <body>
-    <form class="dialog-form">
-        <table class="dialog-form-table">
+    <div id="page">
+        <table class="form">
+            <colgroup>
+                <col span="1" class="field-name-cell">
+                <col span="1" class="field-input-cell">
+            </colgroup>
             <tbody>
                 <tr class="parameter parameter-Text parameter-Boolean parameter-Integer parameter-Number parameter-Date parameter-Timestamp parameter-ChildTable parameter-Object parameter-Reference parameter-File parameter-Image parameter-JSON">
                     <td><label for="column-name">Column Name:</label></td>
@@ -28,7 +34,7 @@
                             <option value="Date">Date</option>
                             <option value="Timestamp">Timestamp</option>
                             <option value="ChildTable">Table</option>
-                            <option value="Object">Global Data Type</option>
+                            <option value="Object">Object Type</option>
                             <option value="Reference">Reference</option>
                             <option value="File">File</option>
                             <option value="Image">Image</option>
@@ -97,7 +103,7 @@
                 </tr>
             </tbody>
         </table>
-    </form>
+    </div>
     <div class="dialog-buttons">
         <button id="create-table-column-button">OK</button>
         <button id="cancel-create-table-column-button">Cancel</button>

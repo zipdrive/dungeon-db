@@ -52,6 +52,67 @@ pub fn create(name: String, master_table_oid_list: &Vec<i64>) -> Result<i64, err
     return Ok(table_oid);
 }
 
+/// Edits the metadata of a table.
+pub fn edit(table_oid: i64, name: String, master_table_oid_list: &Vec<i64>) -> Result<(String, Vec<i64>), error::Error> {
+    let mut conn = db::open()?;
+    let trans = conn.transaction()?;
+
+    // Record the old name of the table in metadata
+    let old_table_name: String = trans.query_one("SELECT NAME FROM METADATA_TABLE WHERE OID = ?1", params![table_oid], |row| row.get::<_, String>(0))?;
+
+    // Edit the name of the table in metadata
+    trans.execute(
+        "UPDATE METADATA_TABLE SET NAME = ?1 WHERE OID = ?2",
+        params![&name, table_oid],
+    )?;
+
+    // Record all prior metadata describing inheritance
+    let mut old_master_table_oid_statement = trans.prepare("SELECT MASTER_TABLE_OID FROM METADATA_TABLE_INHERITANCE WHERE INHERITOR_TABLE_OID = ?1")?;
+    let old_master_table_oid_rows = old_master_table_oid_statement.query_and_then(params![table_oid], |row| row.get::<_, i64>(0))?;
+    let mut old_master_table_oid_list: Vec<i64> = Vec::new();
+    for old_master_table_oid_result in old_master_table_oid_rows {
+        old_master_table_oid_list.push(old_master_table_oid_result?);
+    }
+
+    // Clear all metadata describing inheritance
+    trans.execute(
+        "UPDATE METADATA_TABLE_INHERITANCE SET TRASH = 1 WHERE INHERITOR_TABLE_OID = ?1",
+        params![table_oid]
+    )?;
+
+    // Add inheritance from each master table
+    for master_table_oid in master_table_oid_list.iter() {
+        // Check if a row in the inheritance table already exists
+        match trans.query_one("SELECT OID FROM METADATA_TABLE_INHERITANCE WHERE INHERITOR_TABLE_OID = ?1 AND MASTER_TABLE_OID = ?2", params![table_oid, master_table_oid], |row| row.get::<_, i64>(0)).optional()? {
+            Some(inheritance_row_oid) => {
+                // Update the inheritance table to indicate that the inheritance is not trash
+                trans.execute(
+                    "UPDATE METADATA_TABLE_INHERITANCE SET TRASH = 0 WHERE OID = ?1",
+                    params![inheritance_row_oid]
+                )?;
+            },
+            None => {
+                // Insert a new row into the inheritance table
+                trans.execute(
+                    "INSERT INTO METADATA_TABLE_INHERITANCE (INHERITOR_TABLE_OID, MASTER_TABLE_OID) VALUES (?1, ?2)",
+                    params![table_oid, master_table_oid]
+                )?;
+                
+                // Add a column to the table that references a row in the master list
+                let alter_table_cmd: String = format!("ALTER TABLE TABLE{table_oid} ADD COLUMN MASTER{master_table_oid}_OID INTEGER NOT NULL REFERENCES TABLE{master_table_oid} (OID) ON UPDATE CASCADE ON DELETE CASCADE;");
+                trans.execute(&alter_table_cmd, [])?;
+            }
+        }
+    }
+
+    // Update the surrogate view
+    update_surrogate_view(&trans, table_oid.clone())?;
+
+    // Commit the transaction
+    trans.commit()?;
+    return Ok((old_table_name, old_master_table_oid_list));
+}
+
 #[derive(PartialEq, Eq)]
 struct TableDependency {
     dependency_depth: i32,
