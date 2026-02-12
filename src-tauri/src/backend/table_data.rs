@@ -665,9 +665,10 @@ pub fn try_update_primitive_value(
                 data_type::Primitive::JSON => {
                     // If column has JSON type, validate the JSON
                     match new_value.clone() {
-                        Some(json_str) => match serde_json::from_str::<&'_ str>(&*json_str) {
+                        Some(json_str) => match serde_json::from_str::<serde_json::Value>(&*json_str) {
                             Ok(_) => {}
-                            Err(_) => {
+                            Err(e) => {
+                                println!("Unable to parse JSON: {e}");
                                 return Err(error::Error::AdhocError(
                                     "The provided value is invalid JSON.",
                                 ));
