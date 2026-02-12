@@ -140,6 +140,14 @@ export type Query = {
         objRowOid: number,
         objDataChannel: Channel<TableRowCellChannelPacket>
     }
+} | {
+    invokeAction: 'download_blob_value',
+    invokeParams: {
+        tableOid: number,
+        rowOid: number,
+        columnOid: number,
+        filePath: string
+    }
 };
 
 export type Dialog = {
@@ -299,6 +307,13 @@ export type Action = {
         rowOid: number,
         columnOid: number,
         value: string | null
+    }
+} | {
+    updateTableCellStoredAsBlob: {
+        tableOid: number,
+        rowOid: number,
+        columnOid: number,
+        filePath: string
     }
 } | {
     setTableObjectCell: {

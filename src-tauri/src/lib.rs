@@ -67,6 +67,7 @@ pub fn run() {
             backend::get_table_data,
             backend::get_table_row,
             backend::get_object_data,
+            backend::download_blob_value,
             backend::execute
         ])
         .on_window_event(|window, event| {

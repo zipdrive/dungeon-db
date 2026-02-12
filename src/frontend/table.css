@@ -132,6 +132,11 @@ select {
 }
 
 
+.clickable-text {
+  text-align: center;
+}
+
+
 body {
   display: grid;
   grid-template-rows: 1fr 2.5em;

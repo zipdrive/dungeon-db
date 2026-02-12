@@ -17,6 +17,7 @@
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-global-shortcut": "^2.3.1",
     "@tauri-apps/plugin-opener": "^2",
+    "file-type": "^21.3.0",
     "sortablejs": "^1.15.6"
   },
   "devDependencies": {

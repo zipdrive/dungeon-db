@@ -135,6 +135,12 @@ pub enum Action {
         row_oid: i64,
         value: Option<String>,
     },
+    UpdateTableCellStoredAsBlob {
+        table_oid: i64,
+        column_oid: i64,
+        row_oid: i64,
+        file_path: String
+    },
     SetTableObjectCell {
         table_oid: i64,
         column_oid: i64,
@@ -697,7 +703,21 @@ impl Action {
                         return Err(e);
                     }
                 }
-            }
+            },
+            Self::UpdateTableCellStoredAsBlob { table_oid, column_oid, row_oid, file_path } => {
+                match table_data::try_update_blob_value(table_oid.clone(), row_oid.clone(), column_oid.clone(), file_path.clone()) {
+                    Ok(_) => {
+                        // This action cannot be undone
+
+                        // Send message to update table display
+                        msg_update_table_data_shallow(app, table_oid.clone());
+                    },
+                    Err(e) => {
+                        msg_update_table_data_shallow(app, table_oid.clone());
+                        return Err(e);
+                    }
+                }
+            },
             Self::SetTableObjectCell {
                 table_oid,
                 column_oid,
@@ -1139,6 +1159,11 @@ pub fn get_object_data(
 ) -> Result<(), error::Error> {
     obj_type::send_obj_data(obj_type_oid, obj_row_oid, obj_data_channel)?;
     return Ok(());
+}
+
+#[tauri::command]
+pub fn download_blob_value(table_oid: i64, row_oid: i64, column_oid: i64, file_path: String) -> Result<(), error::Error> {
+    return table_data::download_blob_value(table_oid, row_oid, column_oid, file_path);
 }
 
 #[tauri::command]

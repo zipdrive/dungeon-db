@@ -1,16 +1,20 @@
 use crate::backend::data_type::Primitive;
 use crate::backend::{data_type, db, obj_type, table, table_column};
 use crate::util::error;
+use rusqlite::blob::ZeroBlob;
 use rusqlite::{
     params, vtab::array::Array, Error as RusqliteError, OptionalExtension, Row, Transaction,
 };
 use serde::Serialize;
 use serde_json::{Result as SerdeJsonResult, Value};
 use std::collections::{HashMap, HashSet, LinkedList};
+use std::path::Path;
 use tauri::ipc::Channel;
 use time::format_description::well_known;
 use time::macros::time;
 use time::{Date, PrimitiveDateTime, UtcDateTime};
+use std::fs::File;
+use std::io::{BufReader, BufWriter, Read, Write};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", untagged)]
@@ -764,6 +768,43 @@ pub fn try_update_primitive_value(
     return Ok(prev_value);
 }
 
+/// Updates a BLOB column with a BLOB value.
+pub fn try_update_blob_value(table_oid: i64, row_oid: i64, column_oid: i64, path: String) -> Result<(), error::Error> {
+    let mut conn = db::open()?;
+    let trans = conn.transaction()?;
+
+    // Load the file from the filesystem
+    let buf = match std::fs::read(path) {
+        Ok(read_buf) => read_buf,
+        Err(_) => {
+            return Err(error::Error::AdhocError("Unable to open file."));
+        }
+    };
+    let cropped_file_len: i64 = match i64::try_from(buf.len()) {
+        Ok(l) => l,
+        Err(_) => {
+            return Err(error::Error::AdhocError("File size is greater than 9,223,372,036,854,775,807 bytes."));
+        }
+    };
+
+    // Update the value with an empty blob
+    let update_cmd = format!("UPDATE TABLE{table_oid} SET COLUMN{column_oid} = ZEROBLOB(?1) WHERE OID = ?2;");
+    trans.execute(&update_cmd, params![cropped_file_len, row_oid])?;
+
+    // Fill the empty blob with the data from the file
+    let table_name: String = format!("TABLE{table_oid}");
+    let column_name: String = format!("COLUMN{column_oid}");
+    let mut blob = trans.blob_open("main", &*table_name, &*column_name, row_oid, false)?;
+    match blob.write_all(&buf) {
+        Ok(_) => {},
+        Err(_) => {
+            return Err(error::Error::AdhocError("Unable to upload file contents to database."));
+        }
+    }
+
+    return Ok(());
+}
+
 /// Creates a row in the object table associated with a cell in the base table.
 pub fn set_table_object_value(
     table_oid: i64,
@@ -1349,4 +1390,43 @@ pub fn send_table_row(
             return Ok(());
         }
     }
+}
+
+/// Download the contents of a BLOB to a file.
+pub fn download_blob_value(table_oid: i64, row_oid: i64, column_oid: i64, path: String) -> Result<(), error::Error> {
+    let mut conn = db::open()?;
+    let trans = conn.transaction()?;
+
+    // Load the file from the filesystem
+    let mut file = match File::open(path) {
+        Ok(f) => f,
+        Err(_) => {
+            return Err(error::Error::AdhocError("Unable to open file."));
+        }
+    };
+
+    // Fill the empty blob with the data from the file
+    let table_name: String = format!("TABLE{table_oid}");
+    let column_name: String = format!("COLUMN{column_oid}");
+    let blob = trans.blob_open("main", &*table_name, &*column_name, row_oid, true)?;
+
+    // Read the BLOB into a buffer
+    let mut buf_reader = BufReader::new(blob);
+    let mut buf: Vec<u8> = Vec::new();
+    match buf_reader.read_to_end(&mut buf) {
+        Ok(_) => {},
+        Err(_) => {
+            return Err(error::Error::AdhocError(""));
+        }
+    }
+
+    // Write the contents of the buffer into the file
+    match file.write_all(&buf) {
+        Ok(_) => {},
+        Err(_) => {
+            return Err(error::Error::AdhocError("Unable to write to file."));
+        }
+    }
+
+    return Ok(());
 }
