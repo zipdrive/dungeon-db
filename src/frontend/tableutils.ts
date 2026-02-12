@@ -267,9 +267,6 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
       case 'File': {
         // Show primary key of object, cut off by ellipsis if too long
         inputNode = node;
-        inputNode.style.display = 'grid';
-        inputNode.style.height = '100%';
-        inputNode.style.gridTemplateColumns = '1fr auto auto';
 
         /**
          * Uploads a file to the cell from the local filesystem.
@@ -323,10 +320,17 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
         }
 
         if (cell.displayValue) {
+          inputNode.classList.add('file-text');
+
+          let gridDiv: HTMLDivElement = document.createElement('div');
+          gridDiv.style.display = 'grid';
+          gridDiv.style.gridTemplateColumns = '1fr auto auto';
+          inputNode.appendChild(gridDiv);
+
           // Display the size of the file
           let fileDescNode: HTMLSpanElement = document.createElement('span');
           fileDescNode.innerText = cell.displayValue;
-          inputNode.appendChild(fileDescNode);
+          gridDiv.appendChild(fileDescNode);
 
           // Button for uploading a file
           let fileUploadNode: HTMLImageElement = document.createElement('img');
@@ -335,7 +339,7 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
           fileUploadNode.src = '/src-tauri/icons/upload.png';
           fileUploadNode.addEventListener('click', uploadFileAsync);
           fileUploadNode.tabIndex = 0;
-          inputNode.appendChild(fileUploadNode);
+          gridDiv.appendChild(fileUploadNode);
 
           // Button for downloading the file that's in the database
           let fileDownloadNode: HTMLImageElement = document.createElement('img');
@@ -344,7 +348,7 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
           fileDownloadNode.src = '/src-tauri/icons/download.png';
           fileDownloadNode.addEventListener('click', downloadFileAsync);
           fileDownloadNode.tabIndex = 0;
-          inputNode.appendChild(fileDownloadNode);
+          gridDiv.appendChild(fileDownloadNode);
         } else {
           // Set a placeholder
           inputNode.classList.add('clickable-text');
@@ -386,24 +390,42 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
         inputNode.tabIndex = 0;
         if (cell.displayValue) {
           // Acquire the image buffer from the database in base64
-          const imgBase64: string = '';
-          const imgBinary: string = atob(imgBase64);
-          const encoder = new TextEncoder();
-          const mimeType: FileTypeResult | undefined = await fileTypeFromBuffer(encoder.encode(imgBinary).buffer);
-          if (!mimeType || !mimeType.mime.startsWith('image/')) {
-            // Display a warning icon instead of a thumbnail
+          await queryAsync({
+            invokeAction: 'get_blob_value',
+            invokeParams: {
+              tableOid: tableOid,
+              rowOid: rowOid,
+              columnOid: columnOid
+            }
+          })
+          .then(async (imgBase64) => {
+            // Decode base64 back to binary for purposes of detecting MIME type
+            const imgBinary: Uint8Array = Uint8Array.fromBase64(imgBase64);
+            const mimeType: FileTypeResult | undefined = await fileTypeFromBuffer(imgBinary);
+            if (!mimeType || !mimeType.mime.startsWith('image/')) {
+              // Display a warning icon instead of a thumbnail
+              inputNode.innerText = '⚠';
+
+              // Add an error message
+              cell.failedValidations.push({
+                description: mimeType ? `Detected non-image MIME type "${mimeType.mime}"` : 'Unable to detect image type.'
+              });
+            } else {
+              // Display image thumbnail
+              let thumbnailNode: HTMLImageElement = document.createElement('img');
+              thumbnailNode.src = `data:${mimeType.mime};base64,${imgBase64}`;
+              inputNode.appendChild(thumbnailNode);
+            }
+          })
+          .catch(async (e) => {
+            // If image cannot be retrieved, display a warning icon
             inputNode.innerText = '⚠';
 
             // Add an error message
             cell.failedValidations.push({
-              description: 'Unable to detect image type.'
+              description: `Unable to retrieve stored image: ${e}`
             });
-          } else {
-            // Display image thumbnail
-            let thumbnailNode: HTMLImageElement = document.createElement('img');
-            thumbnailNode.src = `data:${mimeType.mime};base64 ${imgBase64}`;
-            inputNode.appendChild(thumbnailNode);
-          }
+          });
         } else {
           // Set a placeholder
           inputNode.classList.add('clickable-text');

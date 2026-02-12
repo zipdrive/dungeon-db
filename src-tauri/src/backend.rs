@@ -1162,6 +1162,11 @@ pub fn get_object_data(
 }
 
 #[tauri::command]
+pub fn get_blob_value(table_oid: i64, row_oid: i64, column_oid: i64) -> Result<String, error::Error> {
+    return table_data::get_blob_value(table_oid, row_oid, column_oid);
+}
+
+#[tauri::command]
 pub fn download_blob_value(table_oid: i64, row_oid: i64, column_oid: i64, file_path: String) -> Result<(), error::Error> {
     return table_data::download_blob_value(table_oid, row_oid, column_oid, file_path);
 }

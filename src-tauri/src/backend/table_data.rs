@@ -15,6 +15,8 @@ use time::macros::time;
 use time::{Date, PrimitiveDateTime, UtcDateTime};
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
+use base64::Engine;
+use base64::prelude::{BASE64_STANDARD as base64standard};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", untagged)]
@@ -773,6 +775,8 @@ pub fn try_update_blob_value(table_oid: i64, row_oid: i64, column_oid: i64, path
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
+    println!("Uploading file from {path} to TABLE{table_oid} COLUMN{column_oid} OID = {row_oid}");
+
     // Load the file from the filesystem
     let buf = match std::fs::read(path) {
         Ok(read_buf) => read_buf,
@@ -792,16 +796,20 @@ pub fn try_update_blob_value(table_oid: i64, row_oid: i64, column_oid: i64, path
     trans.execute(&update_cmd, params![cropped_file_len, row_oid])?;
 
     // Fill the empty blob with the data from the file
-    let table_name: String = format!("TABLE{table_oid}");
-    let column_name: String = format!("COLUMN{column_oid}");
-    let mut blob = trans.blob_open("main", &*table_name, &*column_name, row_oid, false)?;
-    match blob.write_all(&buf) {
-        Ok(_) => {},
-        Err(_) => {
-            return Err(error::Error::AdhocError("Unable to upload file contents to database."));
+    {
+        let table_name: String = format!("TABLE{table_oid}");
+        let column_name: String = format!("COLUMN{column_oid}");
+        let mut blob = trans.blob_open("main", &*table_name, &*column_name, row_oid, false)?;
+        match blob.write_all(&buf) {
+            Ok(_) => {},
+            Err(_) => {
+                return Err(error::Error::AdhocError("Unable to upload file contents to database."));
+            }
         }
     }
 
+    // Commit the transaction
+    trans.commit()?;
     return Ok(());
 }
 
@@ -1392,20 +1400,12 @@ pub fn send_table_row(
     }
 }
 
-/// Download the contents of a BLOB to a file.
-pub fn download_blob_value(table_oid: i64, row_oid: i64, column_oid: i64, path: String) -> Result<(), error::Error> {
+/// Extract the contents of a BLOB into a base64 string.
+pub fn get_blob_value(table_oid: i64, row_oid: i64, column_oid: i64) -> Result<String, error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
-    // Load the file from the filesystem
-    let mut file = match File::open(path) {
-        Ok(f) => f,
-        Err(_) => {
-            return Err(error::Error::AdhocError("Unable to open file."));
-        }
-    };
-
-    // Fill the empty blob with the data from the file
+    // Construct a BLOB IO object
     let table_name: String = format!("TABLE{table_oid}");
     let column_name: String = format!("COLUMN{column_oid}");
     let blob = trans.blob_open("main", &*table_name, &*column_name, row_oid, true)?;
@@ -1416,7 +1416,40 @@ pub fn download_blob_value(table_oid: i64, row_oid: i64, column_oid: i64, path: 
     match buf_reader.read_to_end(&mut buf) {
         Ok(_) => {},
         Err(_) => {
-            return Err(error::Error::AdhocError(""));
+            return Err(error::Error::AdhocError("Unable to read stored file."));
+        }
+    }
+
+    // Encode in base64
+    return Ok(base64standard.encode(&buf));
+}
+
+
+/// Download the contents of a BLOB to a file.
+pub fn download_blob_value(table_oid: i64, row_oid: i64, column_oid: i64, path: String) -> Result<(), error::Error> {
+    let mut conn = db::open()?;
+    let trans = conn.transaction()?;
+
+    // Load the file from the filesystem
+    let mut file = match File::create(path) {
+        Ok(f) => f,
+        Err(_) => {
+            return Err(error::Error::AdhocError("Unable to open file."));
+        }
+    };
+
+    // Construct a BLOB IO object
+    let table_name: String = format!("TABLE{table_oid}");
+    let column_name: String = format!("COLUMN{column_oid}");
+    let blob = trans.blob_open("main", &*table_name, &*column_name, row_oid, true)?;
+
+    // Read the BLOB into a buffer
+    let mut buf_reader = BufReader::new(blob);
+    let mut buf: Vec<u8> = Vec::new();
+    match buf_reader.read_to_end(&mut buf) {
+        Ok(_) => {},
+        Err(_) => {
+            return Err(error::Error::AdhocError("Unable to read stored file."));
         }
     }
 

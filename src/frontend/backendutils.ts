@@ -141,6 +141,13 @@ export type Query = {
         objDataChannel: Channel<TableRowCellChannelPacket>
     }
 } | {
+    invokeAction: 'get_blob_value',
+    invokeParams: {
+        tableOid: number,
+        rowOid: number,
+        columnOid: number
+    }
+} | {
     invokeAction: 'download_blob_value',
     invokeParams: {
         tableOid: number,
