@@ -117,7 +117,7 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
     -- METADATA_TABLE_COLUMN stores all columns of user-defined tables and data types
     CREATE TABLE METADATA_TABLE_COLUMN (
         OID INTEGER PRIMARY KEY,
-        RPT_PARAMETER_OID INTEGER,
+        RPT_PARAMETER_OID INTEGER NOT NULL,
         TRASH BOOLEAN NOT NULL DEFAULT 0,
         TABLE_OID INTEGER NOT NULL,
         NAME TEXT NOT NULL DEFAULT 'Column',

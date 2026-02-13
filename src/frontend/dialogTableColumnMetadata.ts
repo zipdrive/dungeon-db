@@ -125,8 +125,8 @@ window.addEventListener("DOMContentLoaded", async () => {
         columnDropdownValuesTbl?.insertAdjacentHTML('beforeend', 
             `<tr>
                 <td class="dropdown-value-oid"></td>
-                <td>${columnDropdownValuesTbl.childElementCount + 1}</td>
-                <td><div editablecontent class="dropdown-value-editor" /></td>
+                <td class="dropdown-value-index">${columnDropdownValuesTbl.childElementCount + 1}</td>
+                <td contenteditable class="dropdown-value-editor"></td>
             </tr>`)
     });
 
@@ -135,7 +135,6 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (columnReferenceInput) {
         const referenceTypeChannel: Channel<BasicMetadata> = new Channel<BasicMetadata>();
         referenceTypeChannel.onmessage = (referenceType) => {
-            console.debug(`Received ${referenceType}`);
             let columnReferenceOption: HTMLOptionElement = document.createElement('option');
             columnReferenceOption.innerText = referenceType.name;
             columnReferenceOption.value = referenceType.oid.toString();
@@ -152,7 +151,6 @@ window.addEventListener("DOMContentLoaded", async () => {
     // Fill in the dropdown of possible Object Types
     let columnObjDataTypeInput: HTMLSelectElement | null = document.getElementById('column-type-oid-object') as HTMLSelectElement;
     if (columnObjDataTypeInput) {
-        console.debug('Here2');
         const objDataTypeChannel: Channel<BasicMetadata> = new Channel<BasicMetadata>();
         objDataTypeChannel.onmessage = (objDataType) => {
             let columnObjDataTypeOption: HTMLOptionElement = document.createElement('option');
@@ -232,7 +230,7 @@ window.addEventListener("DOMContentLoaded", async () => {
                 isPrimaryKeyInput.checked = columnMetadata.isPrimaryKey;
 
             // Edit the column when OK is clicked
-            document.querySelector('#create-table-column-button')?.addEventListener("click", async (e) => {
+            document.querySelector('#confirm-button')?.addEventListener("click", async (e) => {
                 e.preventDefault();
                 e.returnValue = false;
 
@@ -297,7 +295,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         // This indicates that the column is being created for the first time, so leave the fields populated with the defaults
 
         // Create the column when OK is clicked
-        document.querySelector('#create-table-column-button')?.addEventListener("click", async (e) => {
+        document.querySelector('#confirm-button')?.addEventListener("click", async (e) => {
             e.preventDefault();
             e.returnValue = false;
 
@@ -322,7 +320,7 @@ window.addEventListener("DOMContentLoaded", async () => {
                     isPrimaryKey: metadata.isPrimaryKey
                 }
             }))
-            .then(async (_) => await closeDialogAsync())
+            .then(closeDialogAsync)
             .catch(async (e) => {
                 await message(e, {
                     title: "An error occurred while creating column in table.",
@@ -334,7 +332,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
 
     // Close the dialog when Cancel is clicked
-    document.querySelector('#cancel-create-table-column-button')?.addEventListener("click", async (e) => {
+    document.querySelector('#cancel-button')?.addEventListener("click", async (e) => {
         e.preventDefault();
         e.returnValue = false;
 

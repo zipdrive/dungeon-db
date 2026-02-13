@@ -8,6 +8,7 @@ table {
 
 td {
   vertical-align: top;
+  border: none;
 }
 
 .field-name-cell {
@@ -17,4 +18,30 @@ td {
 .input {
   margin: 0 8px;
   width: calc(100% - 16px - 2.4em);
+}
+
+:has(.table) {
+  position: relative;
+}
+.table {
+  position: relative;
+  table-layout: fixed;
+  border: none;
+  border-spacing: 0;
+  border-collapse: separate;
+  cursor: default;
+}
+.table tr {
+  --row-background-color: var(--main-color-neutral);
+}
+.table tr:nth-child(even), .table thead > tr, .table tfoot > tr {
+  --row-background-color: var(--main-color-light);
+}
+.table th, .table td {
+  background-color: var(--row-background-color);
+  border: var(--main-color-dark) 1px solid;
+}
+
+.table .clickable-text {
+  text-align: center;
 }

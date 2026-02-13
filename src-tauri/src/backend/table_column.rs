@@ -42,6 +42,11 @@ pub fn create(
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
+    // Create a report parameter
+    trans.execute("INSERT INTO METADATA_RPT_PARAMETER DEFAULT VALUES", [])?;
+    let rpt_parameter_oid: i64 = trans.last_insert_rowid();
+
+    // Adjust the ordering to fit this column
     let column_ordering: i64 = match column_ordering {
         Some(o) => {
             // If an explicit ordering was given, shift every column to its right by 1 in order to make space
@@ -61,13 +66,14 @@ pub fn create(
         }
     };
 
+    // Create the column
     let column_type = column_type.create_for_table(&trans, &table_oid)?;
     match &column_type {
         data_type::MetadataColumnType::Primitive(prim) => {
             // Add the column to the table's metadata
             trans.execute(
-                "INSERT INTO METADATA_TABLE_COLUMN (TABLE_OID, NAME,TYPE_OID, COLUMN_ORDERING, COLUMN_CSS_STYLE, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);",
-                params![table_oid, column_name, prim.get_type_oid(), column_ordering, column_style, is_nullable_bit, is_unique_bit, is_primary_key_bit]
+                "INSERT INTO METADATA_TABLE_COLUMN (RPT_PARAMETER_OID, TABLE_OID, NAME, TYPE_OID, COLUMN_ORDERING, COLUMN_CSS_STYLE, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
+                params![rpt_parameter_oid, table_oid, column_name, prim.get_type_oid(), column_ordering, column_style, is_nullable_bit, is_unique_bit, is_primary_key_bit]
             )?;
             let column_oid = trans.last_insert_rowid();
 
@@ -90,8 +96,8 @@ pub fn create(
         | data_type::MetadataColumnType::ChildObject(referenced_table_oid) => {
             // Add the column to the table's metadata
             trans.execute(
-                "INSERT INTO METADATA_TABLE_COLUMN (TABLE_OID, NAME,TYPE_OID, COLUMN_ORDERING, COLUMN_CSS_STYLE, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);",
-                params![table_oid, column_name, referenced_table_oid, column_ordering, column_style, is_nullable_bit, is_unique_bit, is_primary_key_bit]
+                "INSERT INTO METADATA_TABLE_COLUMN (RPT_PARAMETER_OID, TABLE_OID, NAME,TYPE_OID, COLUMN_ORDERING, COLUMN_CSS_STYLE, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
+                params![rpt_parameter_oid, table_oid, column_name, referenced_table_oid, column_ordering, column_style, is_nullable_bit, is_unique_bit, is_primary_key_bit]
             )?;
             let column_oid = trans.last_insert_rowid();
 
@@ -110,8 +116,8 @@ pub fn create(
         | data_type::MetadataColumnType::ChildTable(column_type_oid) => {
             // Add the column to the table's metadata
             trans.execute(
-                "INSERT INTO METADATA_TABLE_COLUMN (TABLE_OID, NAME,TYPE_OID, COLUMN_ORDERING, COLUMN_CSS_STYLE, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);",
-                params![table_oid, column_name, column_type_oid, column_ordering, column_style, is_nullable_bit, is_unique_bit, is_primary_key_bit]
+                "INSERT INTO METADATA_TABLE_COLUMN (RPT_PARAMETER_OID, TABLE_OID, NAME,TYPE_OID, COLUMN_ORDERING, COLUMN_CSS_STYLE, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
+                params![rpt_parameter_oid, table_oid, column_name, column_type_oid, column_ordering, column_style, is_nullable_bit, is_unique_bit, is_primary_key_bit]
             )?;
             let column_oid = trans.last_insert_rowid();
 
@@ -143,6 +149,7 @@ pub fn edit(
     trans.execute(
         "INSERT INTO METADATA_TABLE_COLUMN (
             TRASH, 
+            RPT_PARAMETER_OID,
             TABLE_OID, 
             NAME, 
             TYPE_OID, 
@@ -155,6 +162,7 @@ pub fn edit(
         )
         SELECT
             1 AS TRASH,
+            RPT_PARAMETER_OID,
             TABLE_OID,
             NAME,
             TYPE_OID,
@@ -383,6 +391,7 @@ pub fn edit_width(table_oid: i64, column_oid: i64, column_width: i64) -> Result<
     trans.execute(
         "INSERT INTO METADATA_TABLE_COLUMN (
             TRASH, 
+            RPT_PARAMETER_OID,
             TABLE_OID, 
             NAME, 
             TYPE_OID, 
@@ -395,6 +404,7 @@ pub fn edit_width(table_oid: i64, column_oid: i64, column_width: i64) -> Result<
         )
         SELECT
             1 AS TRASH,
+            RPT_PARAMETER_OID,
             TABLE_OID,
             NAME,
             TYPE_OID,
