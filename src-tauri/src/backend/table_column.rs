@@ -34,6 +34,7 @@ pub fn create(
     is_nullable: bool,
     is_unique: bool,
     is_primary_key: bool,
+    dropdown_values: Option<Vec<DropdownValue>>
 ) -> Result<i64, error::Error> {
     let is_nullable_bit = if is_nullable { 1 } else { 0 };
     let is_unique_bit = if is_unique { 1 } else { 0 };
@@ -66,8 +67,25 @@ pub fn create(
         }
     };
 
+    // Map from table_column::DropdownValue (which stores true/display values as nullable strings for use on the frontend) to data_type::DropdownValue (which stores true value as an integer OID and display value as a non-nullable string)
+    let mapped_dropdown_values = match dropdown_values {
+        Some(vec) => Some(
+            vec.iter().map(|v| data_type::DropdownValue { 
+                oid: match &v.true_value {
+                    Some(o_str) => if o_str.trim().eq(&String::from("")) { None } else { Some(o_str.parse().unwrap()) },
+                    None => None 
+                }, 
+                value: match &v.display_value {
+                    Some(v_str) => v_str.clone(),
+                    None => String::from("")
+                }
+            }).collect()
+        ),
+        None => None
+    };
+
     // Create the column
-    let column_type = column_type.create_for_table(&trans, &table_oid)?;
+    let column_type = column_type.create_for_table(&trans, &table_oid, mapped_dropdown_values)?;
     match &column_type {
         data_type::MetadataColumnType::Primitive(prim) => {
             // Add the column to the table's metadata
@@ -141,6 +159,7 @@ pub fn edit(
     is_nullable: bool,
     is_unique: bool,
     is_primary_key: bool,
+    dropdown_values: Option<Vec<DropdownValue>>
 ) -> Result<Option<i64>, error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
@@ -305,8 +324,25 @@ pub fn edit(
                     }
                 }
 
+                // Map from table_column::DropdownValue (which stores true/display values as nullable strings for use on the frontend) to data_type::DropdownValue (which stores true value as an integer OID and display value as a non-nullable string)
+                let mapped_dropdown_values = match dropdown_values {
+                    Some(vec) => Some(
+                        vec.iter().map(|v| data_type::DropdownValue { 
+                            oid: match &v.true_value {
+                                Some(o_str) => Some(o_str.parse().unwrap()),
+                                None => None 
+                            }, 
+                            value: match &v.display_value {
+                                Some(v_str) => v_str.clone(),
+                                None => String::from("")
+                            }
+                        }).collect()
+                    ),
+                    None => None
+                };
+
                 // Then construct any tables/columns for the new type, and upload data if applicable
-                let column_type = column_type.create_for_table(&trans, &table_oid)?;
+                let column_type = column_type.create_for_table(&trans, &table_oid, mapped_dropdown_values)?;
                 match column_type {
                     data_type::MetadataColumnType::Primitive(prim) => {
                         // Add the column to the table
@@ -368,6 +404,28 @@ pub fn edit(
                         )?;
                     }
                 }
+            } else {
+                // If column type has not changed, ensure that dropdown values are still updated
+
+                // Map from table_column::DropdownValue (which stores true/display values as nullable strings for use on the frontend) to data_type::DropdownValue (which stores true value as an integer OID and display value as a non-nullable string)
+                let mapped_dropdown_values = match dropdown_values {
+                    Some(vec) => Some(
+                        vec.iter().map(|v| data_type::DropdownValue { 
+                            oid: match &v.true_value {
+                                Some(o_str) => Some(o_str.parse().unwrap()),
+                                None => None 
+                            }, 
+                            value: match &v.display_value {
+                                Some(v_str) => v_str.clone(),
+                                None => String::from("")
+                            }
+                        }).collect()
+                    ),
+                    None => None
+                };
+
+                // Update the list of possible dropdown values
+                column_type.edit_dropdown_values(&trans, mapped_dropdown_values)?;
             }
 
             // Update table's surrogate view
@@ -420,12 +478,23 @@ pub fn edit_width(table_oid: i64, column_oid: i64, column_width: i64) -> Result<
     )?;
     let trash_column_oid: i64 = trans.last_insert_rowid();
 
-    // Replace the column style
-    let new_column_width: String = format!("\nwidth: {column_width}px;");
+    // Retrieve the column style
     let column_style: String = trans.query_one("SELECT COLUMN_CSS_STYLE FROM METADATA_TABLE_COLUMN WHERE OID = ?1", params![column_oid], |row| row.get(0))?;
-    let column_width_regex: Regex = Regex::new(r"(?:^|\s)width\s*:\s*[^;]*;").unwrap();
-    let mut new_column_style: String = column_width_regex.replace(&column_style, "").to_string();
-    new_column_style.push_str(&new_column_width);
+    
+    // Strip subtypes from the CSS style
+    let mut stripped_column_style = column_style;
+    let column_style_subtype_regex: Regex = Regex::new(r"(?:^|;|\})([^{}]+\{.*\})").unwrap();
+    let mut column_style_subtypes: Vec<String> = Vec::new();
+    loop {
+        let Some(capture) = column_style_subtype_regex.captures(&stripped_column_style) else { break; };
+        let (_, [column_style_subtype]) = capture.extract();
+        column_style_subtypes.push(String::from(column_style_subtype));
+        stripped_column_style = stripped_column_style.replace(column_style_subtype, "");
+    }
+    
+    // Construct new CSS style, adding the subtypes back in
+    let column_width_regex: Regex = Regex::new(r"(?:^|\<)width\s*:\s*[^;]*;").unwrap();
+    let new_column_style: String = format!("width: {column_width}px;\n{}\n{}", column_width_regex.replace(&stripped_column_style, "").trim(), column_style_subtypes.join("\n"));
 
     // Update the column style
     trans.execute("UPDATE METADATA_TABLE_COLUMN SET COLUMN_CSS_STYLE = ?1 WHERE OID = ?2", params![&new_column_style, column_oid])?;
@@ -740,8 +809,8 @@ pub fn send_metadata_list(
 #[serde(rename_all = "camelCase")]
 /// A value for a dropdown (i.e. single-select dropdown, multi-select dropdown, reference).
 pub struct DropdownValue {
-    true_value: Option<String>,
-    display_value: Option<String>,
+    pub true_value: Option<String>,
+    pub display_value: Option<String>,
 }
 
 /// Sets the possible values for a dropdown column.
@@ -837,11 +906,11 @@ pub fn get_table_column_dropdown_values(
         data_type::MetadataColumnType::SingleSelectDropdown(column_type_oid)
         | data_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
             // Select the values from the corresponding table
-            let select_cmd = format!("SELECT VALUE FROM TABLE{column_type_oid};");
+            let select_cmd = format!("SELECT CAST(OID AS TEXT) AS OID, VALUE FROM TABLE{column_type_oid};");
             db::query_iterate(&trans, &select_cmd, [], &mut |row| {
                 dropdown_values.push(DropdownValue {
-                    true_value: row.get::<_, Option<String>>(0)?,
-                    display_value: row.get::<_, Option<String>>(0)?,
+                    true_value: row.get::<_, Option<String>>("OID")?,
+                    display_value: row.get::<_, Option<String>>("VALUE")?,
                 });
                 return Ok(());
             })?;
@@ -877,11 +946,11 @@ pub fn send_table_column_dropdown_values(
         data_type::MetadataColumnType::SingleSelectDropdown(column_type_oid)
         | data_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
             // Select the values from the corresponding table
-            let select_cmd = format!("SELECT VALUE FROM TABLE{column_type_oid};");
+            let select_cmd = format!("SELECT CAST(OID AS TEXT) AS OID, VALUE FROM TABLE{column_type_oid};");
             db::query_iterate(&trans, &select_cmd, [], &mut |row| {
                 dropdown_value_channel.send(DropdownValue {
-                    true_value: row.get::<_, Option<String>>(0)?,
-                    display_value: row.get::<_, Option<String>>(0)?,
+                    true_value: row.get::<_, Option<String>>("OID")?,
+                    display_value: row.get::<_, Option<String>>("VALUE")?,
                 })?;
                 return Ok(());
             })?;

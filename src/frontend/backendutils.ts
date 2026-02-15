@@ -249,7 +249,8 @@ export type Action = {
         columnStyle: string,
         isNullable: boolean,
         isUnique: boolean,
-        isPrimaryKey: boolean
+        isPrimaryKey: boolean,
+        dropdownValues: DropdownValue[] | null
     }
 } | {
     editTableColumnMetadata: {
@@ -260,7 +261,8 @@ export type Action = {
         columnStyle: string,
         isNullable: boolean,
         isUnique: boolean,
-        isPrimaryKey: boolean
+        isPrimaryKey: boolean,
+        dropdownValues: DropdownValue[] | null
     }
 } | {
     editTableColumnWidth: {

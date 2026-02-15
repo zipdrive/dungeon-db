@@ -26,6 +26,7 @@ td {
 .table {
   position: relative;
   table-layout: fixed;
+  width: 100%;
   border: none;
   border-spacing: 0;
   border-collapse: separate;

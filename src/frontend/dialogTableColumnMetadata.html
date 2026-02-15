@@ -9,17 +9,25 @@
     <script type="module" src="dialogTableColumnMetadata.ts" defer></script>
     <style>
         .dropdown-value-oid {
-
+            display: none;
         }
         .dropdown-value-index {
-
+            width: 3em;
+            text-align: center;
+            vertical-align: middle;
+            padding: 4px 0;
+            line-height: 0;
         }
-        
+        .dropdown-value-editor {
+            width: 100%;
+            vertical-align: middle;
+            padding: 6px 6px;
+        }
     </style>
   </head>
 
   <body>
-    <div id="page">
+    <div class="page">
         <table class="form">
             <colgroup>
                 <col span="1" class="field-name-cell">
@@ -55,11 +63,6 @@
                     <td><label for="column-dropdown-values">Dropdown Values:</label></td>
                     <td>
                         <table id="column-dropdown-values" class="table">
-                            <colgroup>
-                                <col span="1" style="width: 0;">
-                                <col span="1" style="width: 3em;">
-                                <col span="1">
-                            </colgroup>
                             <tbody></tbody>
                             <tfoot>
                                 <tr>

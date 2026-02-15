@@ -1,18 +1,14 @@
+body {
+  display: grid;
+  grid-template-rows: 1fr auto;
+}
+
 .page {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  bottom: calc(2.05em + 16px);
-  font-size: 0.85em;
+  position: relative;
   overflow-y: auto;
 }
 
 .dialog-buttons {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
   padding: 8px;
   display: flex;
   flex-direction: row;

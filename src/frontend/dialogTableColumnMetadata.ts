@@ -38,7 +38,7 @@ function toggleAdvancedParameters() {
  * Retrieves the inputted metadata from the fields of the dialog.
  * @returns 
  */
-async function loadMetadataFromFields(): Promise<TableColumnMetadata> {
+async function loadMetadataFromFields(): Promise<TableColumnMetadata & { dropdownValues: DropdownValue[] | null }> {
     const columnName = (document.getElementById('column-name') as HTMLInputElement)?.value;
     if (!columnName) {
         throw new Error("A column cannot have no name.");
@@ -50,6 +50,7 @@ async function loadMetadataFromFields(): Promise<TableColumnMetadata> {
     let isPrimaryKey: boolean = (document.getElementById('column-is-primary-key') as HTMLInputElement)?.checked ?? false;
     const columnStyle: string = (document.getElementById('column-style') as HTMLTextAreaElement)?.value ?? '';
 
+    // Parse the column type
     let columnType: ColumnType;
     switch (columnTypeStr) {
         case 'Boolean':
@@ -102,6 +103,22 @@ async function loadMetadataFromFields(): Promise<TableColumnMetadata> {
             throw new Error("Unknown column type.");
     }
 
+    // Parse the dropdown values
+    let dropdownValues: DropdownValue[] | null;
+    if (columnTypeStr == 'SingleSelectDropdown' || columnTypeStr == 'MultiSelectDropdown') {
+        dropdownValues = [];
+        document.querySelectorAll('#column-dropdown-values > tbody > tr').forEach((rowElem) => {
+            let trueValue: string | null = (rowElem.querySelector('.dropdown-value-oid') as HTMLTableCellElement)?.innerText;
+            let displayValue: string | null = (rowElem.querySelector('.dropdown-value-editor') as HTMLTableCellElement)?.innerText;
+            dropdownValues?.push({
+                trueValue: trueValue ? trueValue : null,
+                displayValue: displayValue
+            });
+        });
+    } else {
+        dropdownValues = null;
+    }
+
     return {
         oid: 0,
         name: columnName,
@@ -110,7 +127,8 @@ async function loadMetadataFromFields(): Promise<TableColumnMetadata> {
         columnType: columnType,
         isNullable: isNullable,
         isUnique: isUnique,
-        isPrimaryKey: isPrimaryKey
+        isPrimaryKey: isPrimaryKey,
+        dropdownValues: dropdownValues
     };
 }
 
@@ -120,12 +138,12 @@ window.addEventListener("DOMContentLoaded", async () => {
 
     document.getElementById('advanced-parameter-toggle-button')?.addEventListener('click', toggleAdvancedParameters);
 
+    const columnDropdownValuesTbl = document.querySelector('#column-dropdown-values > tbody');
     document.getElementById('add-new-dropdown-value-button')?.addEventListener('click', (_) => {
-        let columnDropdownValuesTbl = document.querySelector('#column-dropdown-values > tbody');
         columnDropdownValuesTbl?.insertAdjacentHTML('beforeend', 
             `<tr>
                 <td class="dropdown-value-oid"></td>
-                <td class="dropdown-value-index">${columnDropdownValuesTbl.childElementCount + 1}</td>
+                <td class="dropdown-value-index"><img src="/src-tauri/icons/swap_vert.png" /></td>
                 <td contenteditable class="dropdown-value-editor"></td>
             </tr>`)
     });
@@ -169,28 +187,69 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (urlParams.has('column_oid')) {
         // This indicates that the column exists already and is being edited
 
-        const tableOid = urlParams.get('table_oid');
-        const columnOid = urlParams.get('column_oid');
-        if (!tableOid || !columnOid) {
+        const urlParamTableOid = urlParams.get('table_oid');
+        const urlParamColumnOid = urlParams.get('column_oid');
+        if (!urlParamTableOid || !urlParamColumnOid) {
             await message("Dialog window does not have expected GET parameters.", { 
                 title: "An error occurred while editing column.", 
                 kind: 'error' 
             });
             return;
         }
+        const tableOid: number = parseInt(urlParamTableOid);
+        const columnOid: number = parseInt(urlParamColumnOid);
 
         // Populate in the metadata for the column
         await queryAsync({
             invokeAction: 'get_table_column',
             invokeParams: { 
-                columnOid: parseInt(columnOid) 
+                columnOid: columnOid
             }
         })
-        .then((columnMetadata: TableColumnMetadata) => {
+        .then(async (columnMetadata: TableColumnMetadata) => {
             console.debug(columnMetadata);
             let columnNameInput: HTMLInputElement | null = document.getElementById('column-name') as HTMLInputElement;
             if (columnNameInput)
                 columnNameInput.value = columnMetadata.name;
+
+            async function populateDropdownValues() {
+                // Retrieve prior dropdown values from database to populate dropdown
+                const onReceiveDropdownValue = new Channel<DropdownValue>();
+                onReceiveDropdownValue.onmessage = (dropdownValue) => {
+                    // Construct row for the dropdown value that was previously entered
+                    let rowNode: HTMLTableRowElement = document.createElement('tr');
+                    columnDropdownValuesTbl?.appendChild(rowNode);
+
+                    let oidNode: HTMLTableCellElement = document.createElement('td');
+                    oidNode.classList.add('dropdown-value-oid');
+                    oidNode.innerText = dropdownValue.trueValue ?? '';
+                    rowNode.appendChild(oidNode);
+
+                    let indexNode: HTMLTableCellElement = document.createElement('td');
+                    indexNode.classList.add('dropdown-value-index');
+                    indexNode.innerHTML = '<img src="/src-tauri/icons/swap_vert.png" />'
+                    rowNode.appendChild(indexNode);
+
+                    let valueNode: HTMLTableCellElement = document.createElement('td');
+                    valueNode.classList.add('dropdown-value-editor');
+                    valueNode.contentEditable = 'true';
+                    valueNode.innerText = dropdownValue.displayValue ?? '';
+                    rowNode.appendChild(valueNode);
+                };
+                await queryAsync({
+                    invokeAction: 'get_table_column_dropdown_values',
+                    invokeParams: {
+                        columnOid: columnOid,
+                        dropdownValueChannel: onReceiveDropdownValue
+                    }
+                })
+                .catch(async (e) => {
+                    await message(e, {
+                        title: 'An error occurred while retrieving dropdown values from database.',
+                        kind: 'error'
+                    });
+                });
+            }
 
             let columnTypeInput: HTMLSelectElement | null = document.getElementById('column-type') as HTMLSelectElement;
             if (columnTypeInput) {
@@ -198,8 +257,10 @@ window.addEventListener("DOMContentLoaded", async () => {
                     columnTypeInput.value = columnMetadata.columnType.primitive;
                 } else if ('singleSelectDropdown' in columnMetadata.columnType) {
                     columnTypeInput.value = 'SingleSelectDropdown';
+                    await populateDropdownValues();
                 } else if ('multiSelectDropdown' in columnMetadata.columnType) {
                     columnTypeInput.value = 'MultiSelectDropdown';
+                    await populateDropdownValues();
                 } else if ('reference' in columnMetadata.columnType) {
                     columnTypeInput.value = 'Reference';
                     if (columnReferenceInput)
@@ -247,14 +308,15 @@ window.addEventListener("DOMContentLoaded", async () => {
                     // Edit the column
                     await executeAsync({
                         editTableColumnMetadata: {
-                            tableOid: parseInt(tableOid),
-                            columnOid: parseInt(columnOid),
+                            tableOid: parseInt(urlParamTableOid),
+                            columnOid: parseInt(urlParamColumnOid),
                             columnName: changedMetadata.name,
                             columnType: changedMetadata.columnType,
                             columnStyle: changedMetadata.columnStyle,
                             isNullable: changedMetadata.isNullable,
                             isUnique: changedMetadata.isUnique,
-                            isPrimaryKey: changedMetadata.isPrimaryKey
+                            isPrimaryKey: changedMetadata.isPrimaryKey,
+                            dropdownValues: changedMetadata.dropdownValues
                         }
                     });
 
@@ -263,17 +325,18 @@ window.addEventListener("DOMContentLoaded", async () => {
                         // Pull new list of dropdown values from form
                         let dropdownValues: DropdownValue[] = [];
                         document.querySelectorAll('#column-dropdown-values > tbody > tr').forEach((dropdownValueRow) => {
+                            let trueValue: string | null = (dropdownValueRow.querySelector('.dropdown-value-oid') as HTMLTableCellElement)?.innerText;
                             dropdownValues.push({
-                                trueValue: (dropdownValueRow.querySelector('.dropdown-value-oid') as HTMLTableCellElement)?.innerText,
-                                displayValue: (dropdownValueRow.querySelector('.dropdown-value-editor') as HTMLDivElement)?.innerText
+                                trueValue: trueValue ? trueValue : null,
+                                displayValue: (dropdownValueRow.querySelector('.dropdown-value-editor') as HTMLTableCellElement)?.innerText
                             });
                         });
 
                         // Send request to update set of dropdown values
                         await executeAsync({
                             editTableColumnDropdownValues: {
-                                tableOid: parseInt(tableOid),
-                                columnOid: parseInt(columnOid),
+                                tableOid: parseInt(urlParamTableOid),
+                                columnOid: parseInt(urlParamColumnOid),
                                 dropdownValues: dropdownValues
                             }
                         });
@@ -306,20 +369,24 @@ window.addEventListener("DOMContentLoaded", async () => {
                 return;
             }
 
-            // Create the column
+            // Load metadata from fields
             await loadMetadataFromFields()
-            .then(async (metadata) => await executeAsync({
-                createTableColumn: {
-                    tableOid: parseInt(tableOid),
-                    columnName: metadata.name,
-                    columnType: metadata.columnType,
-                    columnStyle: metadata.columnStyle,
-                    columnOrdering: columnOrdering ? parseInt(columnOrdering) : null,
-                    isNullable: metadata.isNullable,
-                    isUnique: metadata.isUnique,
-                    isPrimaryKey: metadata.isPrimaryKey
-                }
-            }))
+            .then(async (metadata) => {
+                // Create the column
+                await executeAsync({
+                    createTableColumn: {
+                        tableOid: parseInt(tableOid),
+                        columnName: metadata.name,
+                        columnType: metadata.columnType,
+                        columnStyle: metadata.columnStyle,
+                        columnOrdering: columnOrdering ? parseInt(columnOrdering) : null,
+                        isNullable: metadata.isNullable,
+                        isUnique: metadata.isUnique,
+                        isPrimaryKey: metadata.isPrimaryKey,
+                        dropdownValues: metadata.dropdownValues
+                    }
+                });
+            })
             .then(closeDialogAsync)
             .catch(async (e) => {
                 await message(e, {

@@ -67,6 +67,7 @@ pub enum Action {
         is_nullable: bool,
         is_unique: bool,
         is_primary_key: bool,
+        dropdown_values: Option<Vec<table_column::DropdownValue>>
     },
     EditTableColumnMetadata {
         table_oid: i64,
@@ -77,6 +78,7 @@ pub enum Action {
         is_nullable: bool,
         is_unique: bool,
         is_primary_key: bool,
+        dropdown_values: Option<Vec<table_column::DropdownValue>>
     },
     RestoreEditedTableColumnMetadata {
         table_oid: i64,
@@ -379,6 +381,7 @@ impl Action {
                 is_nullable,
                 is_unique,
                 is_primary_key,
+                dropdown_values
             } => {
                 match table_column::create(
                     table_oid.clone(),
@@ -389,6 +392,7 @@ impl Action {
                     is_nullable.clone(),
                     is_unique.clone(),
                     is_primary_key.clone(),
+                    dropdown_values.clone()
                 ) {
                     Ok(column_oid) => {
                         let mut reverse_stack = if is_forward {
@@ -416,6 +420,7 @@ impl Action {
                 is_nullable,
                 is_unique,
                 is_primary_key,
+                dropdown_values
             } => {
                 match table_column::edit(
                     table_oid.clone(),
@@ -426,6 +431,7 @@ impl Action {
                     is_nullable.clone(),
                     is_unique.clone(),
                     is_primary_key.clone(),
+                    dropdown_values.clone()
                 ) {
                     Ok(trash_column_oid_optional) => match trash_column_oid_optional {
                         Some(trash_column_oid) => {

@@ -3,6 +3,13 @@ use crate::util::error;
 use rusqlite::{params, Transaction};
 use serde::{Deserialize, Serialize};
 
+#[derive(PartialEq)]
+pub struct DropdownValue {
+    pub oid: Option<i64>,
+    pub value: String
+}
+
+
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub enum Primitive {
     Any,       // Mode = 0 && OID = 0
@@ -147,6 +154,7 @@ impl MetadataColumnType {
         self,
         trans: &Transaction,
         table_oid: &i64,
+        dropdown_values: Option<Vec<DropdownValue>>
     ) -> Result<Self, error::Error> {
         match self {
             Self::Primitive(_) | Self::Reference(_) | Self::ChildObject(_) => {
@@ -163,6 +171,23 @@ impl MetadataColumnType {
                 // Create table to store dropdown values
                 let create_table_cmd = format!("CREATE TABLE TABLE{column_type_oid} (OID INTEGER PRIMARY KEY, TRASH TINYINT NOT NULL DEFAULT 0, VALUE TEXT NOT NULL);");
                 trans.execute(&create_table_cmd, [])?;
+
+                // Insert options into table of possible dropdown values
+                if dropdown_values == None {
+                    return Err(error::Error::AdhocError("Dropdown values must be given for a single-select dropdown column."));
+                }
+                for dropdown_value in dropdown_values.unwrap().iter() {
+                    match dropdown_value.oid {
+                        Some(o) => {
+                            let insert_cmd = format!("INSERT INTO TABLE{column_type_oid} (OID, VALUE) VALUES (?1, ?2)");
+                            trans.execute(&insert_cmd, params![o, dropdown_value.value]);
+                        },
+                        None => {
+                            let insert_cmd = format!("INSERT INTO TABLE{column_type_oid} (VALUE) VALUES (?1)");
+                            trans.execute(&insert_cmd, params![dropdown_value.value]);
+                        }
+                    };
+                }
 
                 // Return the OID of the created type
                 return Ok(Self::SingleSelectDropdown(column_type_oid));
@@ -193,6 +218,23 @@ impl MetadataColumnType {
                 );"
                 );
                 trans.execute(&create_relationship_cmd, [])?;
+
+                // Insert options into table of possible dropdown values
+                if dropdown_values == None {
+                    return Err(error::Error::AdhocError("Dropdown values must be given for a multi-select dropdown column."));
+                }
+                for dropdown_value in dropdown_values.unwrap().iter() {
+                    match dropdown_value.oid {
+                        Some(o) => {
+                            let insert_cmd = format!("INSERT INTO TABLE{column_type_oid} (OID, VALUE) VALUES (?1, ?2)");
+                            trans.execute(&insert_cmd, params![o, dropdown_value.value]);
+                        },
+                        None => {
+                            let insert_cmd = format!("INSERT INTO TABLE{column_type_oid} (VALUE) VALUES (?1)");
+                            trans.execute(&insert_cmd, params![dropdown_value.value]);
+                        }
+                    };
+                }
 
                 // Return the OID of the created type
                 return Ok(Self::MultiSelectDropdown(column_type_oid));
@@ -239,6 +281,39 @@ impl MetadataColumnType {
                 return Ok(Self::ChildTable(column_type_oid));
             }
         }
+    }
+
+    // Updates the dropdown values for a dropdown-typed column.
+    pub fn edit_dropdown_values(&self, trans: &Transaction, dropdown_values: Option<Vec<DropdownValue>>) -> Result<(), error::Error> {
+        match &self {
+            Self::SingleSelectDropdown(type_oid) | Self::MultiSelectDropdown(type_oid) => {
+                // Make sure dropdown values were actually provided
+                if dropdown_values == None {
+                    return Err(error::Error::AdhocError("Dropdown values must be given for a dropdown-typed column."));
+                }
+
+                // Mark all former possible dropdown values as trash
+                let update_cmd = format!("UPDATE TABLE{type_oid} SET TRASH = 1");
+                trans.execute(&update_cmd, [])?;
+
+                // Insert options into table of possible dropdown values
+                for dropdown_value in dropdown_values.unwrap().iter() {
+                    match dropdown_value.oid {
+                        Some(o) => {
+                            let insert_cmd = format!("INSERT INTO TABLE{type_oid} (OID, VALUE) VALUES (?1, ?2) ON CONFLICT DO UPDATE SET TRASH = 0, VALUE = excluded.VALUE");
+                            trans.execute(&insert_cmd, params![o, dropdown_value.value]);
+                        },
+                        None => {
+                            let insert_cmd = format!("INSERT INTO TABLE{type_oid} (VALUE) VALUES (?1)");
+                            trans.execute(&insert_cmd, params![dropdown_value.value]);
+                        }
+                    };
+                }
+            },
+            _ => {}
+        }
+
+        return Ok(());
     }
 
     /// If the type is unique to a specific table (i.e. single-select dropdown, multi-select dropdown, child table), deletes the type and any associated rows/tables.
