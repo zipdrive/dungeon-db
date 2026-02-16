@@ -26,7 +26,7 @@ async function populateMetadataAsync() {
     })
     .catch(async (e) => {
         await message(e, {
-            title: `An error occurred while retrieving current metadata for ${(mode == 4 ? 'object type' : 'table')}}.`,
+            title: `An error occurred while retrieving current metadata for ${(mode == 4 ? 'object type' : 'table')}.`,
             kind: 'error'
         });
     });

@@ -73,6 +73,11 @@ export type Query = {
         reportChannel: Channel<BasicMetadata>
     }
 } | {
+    invokeAction: 'get_report_metadata',
+    invokeParams: {
+        reportOid: number
+    }
+} | {
     invokeAction: 'get_object_type_list',
     invokeParams: {
         objectTypeChannel: Channel<BasicHierarchicalMetadata>
@@ -166,6 +171,14 @@ export type Dialog = {
         tableOid: number
     }
 } | {
+    invokeAction: 'dialog_create_report',
+    invokeParams: {}
+} | {
+    invokeAction: 'dialog_edit_report',
+    invokeParams: {
+        reportOid: number
+    }
+} | {
     invokeAction: 'dialog_create_object_type',
     invokeParams: {}
 } | {
@@ -190,6 +203,12 @@ export type Dialog = {
     invokeParams: {
         tableOid: number,
         tableName: string
+    }
+} | {
+    invokeAction: 'dialog_report_data',
+    invokeParams: {
+        reportOid: number,
+        reportName: string
     }
 } | {
     invokeAction: 'dialog_child_table_data',
@@ -224,6 +243,20 @@ export type Action = {
 } | {
     deleteTable: {
         tableOid: number
+    }
+} | {
+    createReport: {
+        reportName: string,
+        baseTableOid: number
+    }
+} | {
+    editReportMetadata: {
+        reportOid: number,
+        reportName: string
+    }
+} | {
+    deleteReport: {
+        reportOid: number
     }
 } | {
     createObjectType: {

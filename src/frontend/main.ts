@@ -170,6 +170,104 @@ function loadTables() {
  * @param reportMetadata 
  */
 function addReportToList(reportsList: HTMLElement, reportMetadata: BasicMetadata) {
+  async function openReportAsync() {
+    await openDialogAsync({
+      invokeAction: 'dialog_report_data',
+      invokeParams: {
+        reportOid: reportMetadata.oid,
+        reportName: reportMetadata.name
+      }
+    })
+    .catch(async (e) => {
+      await message(e, {
+        title: 'An error occurred while opening the report data.',
+        kind: 'error'
+      });
+    });
+  }
+
+  async function editReportMetadataAsync() {
+    await openDialogAsync({
+      invokeAction: 'dialog_edit_report',
+      invokeParams: {
+        reportOid: reportMetadata.oid
+      }
+    })
+    .catch(async (e) => {
+      await message(e, {
+        title: 'An error occurred while opening dialog to edit report metadata.',
+        kind: 'error'
+      });
+    });
+  }
+
+  async function deleteReportAsync() {
+    await executeAsync({
+      deleteReport: {
+        reportOid: reportMetadata.oid
+      }
+    })
+    .catch(async (e) => {
+      await message(e, {
+        title: 'An error occurred while deleting the report.',
+        kind: 'error'
+      });
+    });
+  }
+
+  let reportRadioElem: HTMLInputElement = document.createElement('input');
+  reportRadioElem.name = 'reports';
+  reportRadioElem.type = 'radio';
+  reportRadioElem.id = `table-button-${reportMetadata.oid}`;
+  reportRadioElem.classList.add('hidden');
+
+  let reportElem: HTMLLabelElement = document.createElement('label');
+  reportElem.htmlFor = reportRadioElem.id;
+  reportElem.classList.add('list-item');
+  reportElem.tabIndex = 0;
+  reportElem.innerText = reportMetadata.name;
+  
+  reportRadioElem.addEventListener('input', (_) => {
+    let openTableButton: HTMLButtonElement | null = document.getElementById('open-report-button') as HTMLButtonElement;
+    if (openTableButton) {
+      // Replace the old button with a clone that has no event listeners
+      let openTableButtonClone: HTMLButtonElement = openTableButton.cloneNode(true) as HTMLButtonElement;
+      openTableButton.replaceWith(openTableButtonClone);
+
+      // Add event listener to the clone
+      openTableButtonClone.disabled = false;
+      openTableButtonClone.addEventListener('click', openReportAsync);
+    }
+
+    let editTableButton: HTMLButtonElement | null = document.getElementById('edit-report-button') as HTMLButtonElement;
+    if (editTableButton) {
+      // Replace the old button with a clone that has no event listeners
+      let editTableButtonClone: HTMLButtonElement = editTableButton.cloneNode(true) as HTMLButtonElement;
+      editTableButton.replaceWith(editTableButtonClone);
+
+      // Add event listener to the clone
+      editTableButtonClone.disabled = false;
+      editTableButtonClone.addEventListener('click', editReportMetadataAsync);
+    }
+
+    let deleteTableButton: HTMLButtonElement | null = document.getElementById('delete-report-button') as HTMLButtonElement;
+    if (deleteTableButton) {
+      // Replace the old button with a clone that has no event listeners
+      let deleteTableButtonClone: HTMLButtonElement = deleteTableButton.cloneNode(true) as HTMLButtonElement;
+      deleteTableButton.replaceWith(deleteTableButtonClone);
+
+      // Add event listener to the clone
+      deleteTableButtonClone.disabled = false;
+      deleteTableButtonClone.addEventListener('click', deleteReportAsync);
+    }
+  });
+
+  // Add an event listener to the item in the list, causing the table to be opened when double-clicked
+  reportElem.addEventListener('dblclick', openReportAsync);
+
+  // Add to the DOM tree
+  reportsList.appendChild(reportRadioElem);
+  reportsList.appendChild(reportElem);
 
 }
 
@@ -325,7 +423,6 @@ function addObjectTypeToList(objTypeList: HTMLElement, objTypeMetadata: BasicHie
  * Loads the list of all object types from the database.
  */
 function loadObjectTypes() {
-  console.debug('Received request to refresh object types.')
   navigator.locks.request('object-types-container', async () => {
     let objectTypesList: HTMLElement | null = document.querySelector('#object-types-container .list');
     if (objectTypesList) {
@@ -365,7 +462,6 @@ function loadObjectTypes() {
 
 // Add initial listeners
 window.addEventListener("DOMContentLoaded", () => {
-  console.debug('Page loaded.');
   document.getElementById('new-table-button')?.addEventListener('click', async (_) => {
     await openDialogAsync({
       invokeAction: "dialog_create_table", 
@@ -379,12 +475,16 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   });
   document.getElementById('new-report-button')?.addEventListener('click', async (_) => {
-    /*
     await openDialogAsync({
       invokeAction: "dialog_create_report", 
       invokeParams: {}
+    })
+    .catch(async (e) => {
+      await message(e, {
+        title: 'An error occurred while opening dialog to create a new report.',
+        kind: 'error'
+      });
     });
-    */
   });
   document.getElementById('new-object-type-button')?.addEventListener('click', async (_) => {
     await openDialogAsync({

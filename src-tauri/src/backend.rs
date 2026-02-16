@@ -37,6 +37,10 @@ pub enum Action {
         report_name: String,
         base_table_oid: i64,
     },
+    EditReportMetadata {
+        report_oid: i64,
+        report_name: String
+    },
     DeleteReport {
         report_oid: i64,
     },
@@ -186,153 +190,99 @@ impl Action {
                 table_name,
                 master_table_oid_list,
             } => {
-                match table::create(table_name.clone(), master_table_oid_list, data_type::MetadataColumnType::Reference(0)) {
-                    Ok(table_oid) => {
-                        record_action(Self::DeleteTable {
-                            table_oid: table_oid,
-                        }, is_forward);
-                        msg_update_table_list(app);
-                    }
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
+                let table_oid = table::create(table_name.clone(), master_table_oid_list, data_type::MetadataColumnType::Reference(0))?;
+                record_action(Self::DeleteTable {
+                    table_oid: table_oid,
+                }, is_forward);
+                msg_update_table_list(app);
             },
             Self::EditTableMetadata { table_oid, table_name, master_table_oid_list } => {
-                match table::edit(table_oid.clone(), table_name.clone(), master_table_oid_list) {
-                    Ok((old_table_name, old_master_table_oid_list)) => {
-                        record_action(Self::EditTableMetadata {
-                            table_oid: table_oid.clone(),
-                            table_name: old_table_name,
-                            master_table_oid_list: old_master_table_oid_list
-                        }, is_forward);
-                        msg_update_table_list(app);
-                    },
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
+                let (old_table_name, old_master_table_oid_list) = table::edit(table_oid.clone(), table_name.clone(), master_table_oid_list)?;
+                record_action(Self::EditTableMetadata {
+                    table_oid: table_oid.clone(),
+                    table_name: old_table_name,
+                    master_table_oid_list: old_master_table_oid_list
+                }, is_forward);
+                msg_update_table_list(app);
             },
             Self::DeleteTable { table_oid } => {
-                match table::move_trash(table_oid.clone()) {
-                    Ok(_) => {
-                        record_action(Self::RestoreDeletedTable {
-                            table_oid: table_oid.clone(),
-                        }, is_forward);
-                        msg_update_table_list(app);
-                    }
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
+                table::move_trash(table_oid.clone())?;
+                record_action(Self::RestoreDeletedTable {
+                    table_oid: table_oid.clone(),
+                }, is_forward);
+                msg_update_table_list(app);
             },
             Self::RestoreDeletedTable { table_oid } => {
-                match table::unmove_trash(table_oid.clone()) {
-                    Ok(_) => {
-                        record_action(Self::DeleteTable {
-                            table_oid: table_oid.clone(),
-                        }, is_forward);
-                        msg_update_table_list(app);
-                    }
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
+                table::unmove_trash(table_oid.clone())?;
+                record_action(Self::DeleteTable {
+                    table_oid: table_oid.clone(),
+                }, is_forward);
+                msg_update_table_list(app);
             }
             Self::CreateReport {
                 report_name,
                 base_table_oid,
-            } => match report::create(&report_name, base_table_oid.clone()) {
-                Ok(report_oid) => {
-                    record_action(Self::DeleteReport {
-                        report_oid: report_oid,
-                    }, is_forward);
-                    msg_update_report_list(app);
-                }
-                Err(e) => {
-                    return Err(e);
-                }
+            } => {
+                let report_oid = report::create(&report_name, base_table_oid.clone())?;
+                record_action(Self::DeleteReport {
+                    report_oid,
+                }, is_forward);
+                msg_update_report_list(app);
             },
-            Self::DeleteReport { report_oid } => match report::move_trash(report_oid.clone()) {
-                Ok(_) => {
-                    record_action(Self::RestoreDeletedReport {
-                        report_oid: report_oid.clone(),
-                    }, is_forward);
-                    msg_update_report_list(app);
-                }
-                Err(e) => {
-                    return Err(e);
-                }
+            Self::EditReportMetadata { report_oid, report_name } => {
+                let old_report_name = report::edit(report_oid.clone(), &report_name)?;
+                record_action(Self::EditReportMetadata { 
+                    report_oid: report_oid.clone(), 
+                    report_name: old_report_name 
+                }, is_forward);
+                msg_update_report_list(app);
+            },
+            Self::DeleteReport { report_oid } => {
+                report::trash(report_oid.clone())?;
+                record_action(Self::RestoreDeletedReport {
+                    report_oid: report_oid.clone(),
+                }, is_forward);
+                msg_update_report_list(app);
             },
             Self::RestoreDeletedReport { report_oid } => {
-                match report::unmove_trash(report_oid.clone()) {
-                    Ok(_) => {
-                        record_action(Self::DeleteReport {
-                            report_oid: report_oid.clone(),
-                        }, is_forward);
-                        msg_update_report_list(app);
-                    }
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
+                report::untrash(report_oid.clone())?;
+                record_action(Self::DeleteReport {
+                    report_oid: report_oid.clone(),
+                }, is_forward);
+                msg_update_report_list(app);
             }
             Self::CreateObjectType {
                 obj_type_name,
                 master_table_oid_list,
             } => {
-                match table::create(obj_type_name.clone(), master_table_oid_list, data_type::MetadataColumnType::ChildObject(0)) {
-                    Ok(obj_type_oid) => {
-                        record_action(Self::DeleteObjectType {
-                            obj_type_oid: obj_type_oid,
-                        }, is_forward);
-                        msg_update_obj_type_list(app);
-                    }
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
+                let obj_type_oid = table::create(obj_type_name.clone(), master_table_oid_list, data_type::MetadataColumnType::ChildObject(0))?;
+                record_action(Self::DeleteObjectType {
+                    obj_type_oid: obj_type_oid,
+                }, is_forward);
+                msg_update_obj_type_list(app);
             },
             Self::EditObjectTypeMetadata { obj_type_oid, obj_type_name, master_table_oid_list } => {
-                match table::edit(obj_type_oid.clone(), obj_type_name.clone(), master_table_oid_list) {
-                    Ok((old_obj_type_name, old_master_table_oid_list)) => {
-                        record_action(Self::EditObjectTypeMetadata {
-                            obj_type_oid: obj_type_oid.clone(),
-                            obj_type_name: old_obj_type_name,
-                            master_table_oid_list: old_master_table_oid_list
-                        }, is_forward);
-                        msg_update_obj_type_list(app);
-                    },
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
+                let (old_obj_type_name, old_master_table_oid_list) = table::edit(obj_type_oid.clone(), obj_type_name.clone(), master_table_oid_list)?;
+                record_action(Self::EditObjectTypeMetadata {
+                    obj_type_oid: obj_type_oid.clone(),
+                    obj_type_name: old_obj_type_name,
+                    master_table_oid_list: old_master_table_oid_list
+                }, is_forward);
+                msg_update_obj_type_list(app);
             },
             Self::DeleteObjectType { obj_type_oid } => {
-                match table::move_trash(obj_type_oid.clone()) {
-                    Ok(_) => {
-                        record_action(Self::RestoreDeletedObjectType {
-                            obj_type_oid: obj_type_oid.clone(),
-                        }, is_forward);
-                        msg_update_obj_type_list(app);
-                    }
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
+                table::move_trash(obj_type_oid.clone())?;
+                record_action(Self::RestoreDeletedObjectType {
+                    obj_type_oid: obj_type_oid.clone(),
+                }, is_forward);
+                msg_update_obj_type_list(app);
             }
             Self::RestoreDeletedObjectType { obj_type_oid } => {
-                match table::unmove_trash(obj_type_oid.clone()) {
-                    Ok(_) => {
-                        record_action(Self::DeleteObjectType {
-                            obj_type_oid: obj_type_oid.clone(),
-                        }, is_forward);
-                        msg_update_obj_type_list(app);
-                    }
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
+                table::unmove_trash(obj_type_oid.clone())?;
+                record_action(Self::DeleteObjectType {
+                    obj_type_oid: obj_type_oid.clone(),
+                }, is_forward);
+                msg_update_obj_type_list(app);
             }
             Self::CreateTableColumn {
                 table_oid,
@@ -345,7 +295,7 @@ impl Action {
                 is_primary_key,
                 dropdown_values
             } => {
-                match table_column::create(
+                let column_oid = table_column::create(
                     table_oid.clone(),
                     column_name,
                     column_type.clone(),
@@ -355,18 +305,12 @@ impl Action {
                     is_unique.clone(),
                     is_primary_key.clone(),
                     dropdown_values.clone()
-                ) {
-                    Ok(column_oid) => {
-                        record_action(Self::DeleteTableColumn {
-                            table_oid: table_oid.clone(),
-                            column_oid: column_oid,
-                        }, is_forward);
-                        msg_update_table_data_deep(app, table_oid.clone());
-                    }
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
+                )?;
+                record_action(Self::DeleteTableColumn {
+                    table_oid: table_oid.clone(),
+                    column_oid: column_oid,
+                }, is_forward);
+                msg_update_table_data_deep(app, table_oid.clone());
             },
             Self::EditTableColumnMetadata {
                 table_oid,
@@ -379,7 +323,7 @@ impl Action {
                 is_primary_key,
                 dropdown_values
             } => {
-                match table_column::edit(
+                if let Some(trash_column_oid) = table_column::edit(
                     table_oid.clone(),
                     column_oid.clone(),
                     column_name,
@@ -389,37 +333,23 @@ impl Action {
                     is_unique.clone(),
                     is_primary_key.clone(),
                     dropdown_values.clone()
-                ) {
-                    Ok(trash_column_oid_optional) => match trash_column_oid_optional {
-                        Some(trash_column_oid) => {
-                            record_action(Self::RestoreEditedTableColumnMetadata {
-                                table_oid: table_oid.clone(),
-                                column_oid: column_oid.clone(),
-                                prior_metadata_column_oid: trash_column_oid,
-                            }, is_forward);
-                            msg_update_table_data_deep(app, table_oid.clone());
-                        }
-                        _ => {}
-                    },
-                    Err(e) => {
-                        return Err(e);
-                    }
+                )? {
+                    record_action(Self::RestoreEditedTableColumnMetadata {
+                        table_oid: table_oid.clone(),
+                        column_oid: column_oid.clone(),
+                        prior_metadata_column_oid: trash_column_oid,
+                    }, is_forward);
+                    msg_update_table_data_deep(app, table_oid.clone());
                 }
             },
             Self::EditTableColumnWidth { table_oid, column_oid, column_width } => {
-                match table_column::edit_width(table_oid.clone(), column_oid.clone(), column_width.clone()) {
-                    Ok(trash_column_oid) => {
-                        record_action(Self::RestoreEditedTableColumnMetadata {
-                            table_oid: table_oid.clone(),
-                            column_oid: column_oid.clone(),
-                            prior_metadata_column_oid: trash_column_oid,
-                        }, is_forward);
-                        msg_update_table_data_deep(app, table_oid.clone());
-                    },
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
+                let trash_column_oid = table_column::edit_width(table_oid.clone(), column_oid.clone(), column_width.clone())?;
+                record_action(Self::RestoreEditedTableColumnMetadata {
+                    table_oid: table_oid.clone(),
+                    column_oid: column_oid.clone(),
+                    prior_metadata_column_oid: trash_column_oid,
+                }, is_forward);
+                msg_update_table_data_deep(app, table_oid.clone());
             }
             Self::EditTableColumnDropdownValues {
                 table_oid,
@@ -428,22 +358,16 @@ impl Action {
             } => {
                 let prior_dropdown_values: Vec<table_column::DropdownValue> =
                     table_column::get_table_column_dropdown_values(column_oid.clone())?;
-                match table_column::set_table_column_dropdown_values(
+                table_column::set_table_column_dropdown_values(
                     column_oid.clone(),
                     dropdown_values.clone(),
-                ) {
-                    Ok(_) => {
-                        record_action(Self::EditTableColumnDropdownValues {
-                            table_oid: table_oid.clone(),
-                            column_oid: column_oid.clone(),
-                            dropdown_values: prior_dropdown_values,
-                        }, is_forward);
-                        msg_update_table_data_deep(app, table_oid.clone());
-                    }
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
+                )?;
+                record_action(Self::EditTableColumnDropdownValues {
+                    table_oid: table_oid.clone(),
+                    column_oid: column_oid.clone(),
+                    dropdown_values: prior_dropdown_values,
+                }, is_forward);
+                msg_update_table_data_deep(app, table_oid.clone());
             }
             Self::ReorderTableColumn {
                 table_oid,
@@ -474,111 +398,73 @@ impl Action {
             Self::DeleteTableColumn {
                 table_oid,
                 column_oid,
-            } => match table_column::move_trash(table_oid.clone(), column_oid.clone()) {
-                Ok(_) => {
-                    record_action(Self::RestoreDeletedTableColumn {
-                        table_oid: table_oid.clone(),
-                        column_oid: column_oid.clone(),
-                    }, is_forward);
-                    msg_update_table_data_deep(app, table_oid.clone());
-                }
-                Err(e) => {
-                    return Err(e);
-                }
+            } => {
+                table_column::move_trash(table_oid.clone(), column_oid.clone())?;
+                record_action(Self::RestoreDeletedTableColumn {
+                    table_oid: table_oid.clone(),
+                    column_oid: column_oid.clone(),
+                }, is_forward);
+                msg_update_table_data_deep(app, table_oid.clone());
             },
             Self::RestoreDeletedTableColumn {
                 table_oid,
                 column_oid,
-            } => match table_column::unmove_trash(table_oid.clone(), column_oid.clone()) {
-                Ok(_) => {
-                    record_action(Self::DeleteTableColumn {
-                        table_oid: table_oid.clone(),
-                        column_oid: column_oid.clone(),
-                    }, is_forward);
-                    msg_update_table_data_deep(app, table_oid.clone());
-                }
-                Err(e) => {
-                    return Err(e);
-                }
+            } => {
+                table_column::unmove_trash(table_oid.clone(), column_oid.clone())?;
+                record_action(Self::DeleteTableColumn {
+                    table_oid: table_oid.clone(),
+                    column_oid: column_oid.clone(),
+                }, is_forward);
+                msg_update_table_data_deep(app, table_oid.clone());
             },
             Self::PushTableRow { table_oid, parent_row_oid } => {
-                match table_data::push(table_oid.clone(), parent_row_oid.clone()) {
-                    Ok(row_oid) => {
-                        record_action(Self::DeleteTableRow {
-                            table_oid: table_oid.clone(),
-                            row_oid: row_oid.clone(),
-                        }, is_forward);
-                        msg_update_table_data_deep(app, table_oid.clone());
-                    }
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
+                let row_oid = table_data::push(table_oid.clone(), parent_row_oid.clone())?;
+                record_action(Self::DeleteTableRow {
+                    table_oid: table_oid.clone(),
+                    row_oid: row_oid.clone(),
+                }, is_forward);
+                msg_update_table_data_deep(app, table_oid.clone());
             },
             Self::InsertTableRow { table_oid, parent_row_oid, row_oid } => {
-                match table_data::insert(table_oid.clone(), parent_row_oid.clone(), row_oid.clone()) {
-                    Ok(row_oid) => {
-                        record_action(Self::DeleteTableRow {
-                            table_oid: table_oid.clone(),
-                            row_oid: row_oid.clone(),
-                        }, is_forward);
-                        msg_update_table_data_deep(app, table_oid.clone());
-                    }
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
+                let row_oid = table_data::insert(table_oid.clone(), parent_row_oid.clone(), row_oid.clone())?;
+                record_action(Self::DeleteTableRow {
+                    table_oid: table_oid.clone(),
+                    row_oid: row_oid.clone(),
+                }, is_forward);
+                msg_update_table_data_deep(app, table_oid.clone());
             }
             Self::RetypeTableRow {
                 base_type_oid,
                 base_row_oid,
                 new_subtype_oid,
             } => {
-                match table_data::retype(
+                let old_subtype_oid = table_data::retype(
                     base_type_oid.clone(),
                     base_row_oid.clone(),
                     new_subtype_oid.clone(),
-                ) {
-                    Ok(old_subtype_oid) => {
-                        record_action(Self::RetypeTableRow {
-                            base_type_oid: base_type_oid.clone(),
-                            base_row_oid: base_row_oid.clone(),
-                            new_subtype_oid: old_subtype_oid.clone(),
-                        }, is_forward);
-                        msg_update_table_data_deep(app, base_type_oid.clone());
-                    }
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
+                )?;
+                record_action(Self::RetypeTableRow {
+                    base_type_oid: base_type_oid.clone(),
+                    base_row_oid: base_row_oid.clone(),
+                    new_subtype_oid: old_subtype_oid.clone(),
+                }, is_forward);
+                msg_update_table_data_deep(app, base_type_oid.clone());
             }
             Self::DeleteTableRow { table_oid, row_oid } => {
-                match table_data::trash(table_oid.clone(), row_oid.clone()) {
-                    Ok((table_oid, row_oid)) => {
-                        record_action(Self::RestoreDeletedTableRow {
-                            table_oid: table_oid.clone(),
-                            row_oid: row_oid.clone(),
-                        }, is_forward);
-                        msg_update_table_data_deep(app, table_oid.clone());
-                    }
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
+                let (table_oid, row_oid) = table_data::trash(table_oid.clone(), row_oid.clone())?;
+                record_action(Self::RestoreDeletedTableRow {
+                    table_oid: table_oid.clone(),
+                    row_oid: row_oid.clone(),
+                }, is_forward);
+                msg_update_table_data_deep(app, table_oid.clone());
             }
             Self::RestoreDeletedTableRow { table_oid, row_oid } => {
-                match table_data::untrash(table_oid.clone(), row_oid.clone()) {
-                    Ok(_) => {
-                        record_action(Self::DeleteTableRow {
-                            table_oid: table_oid.clone(),
-                            row_oid: row_oid.clone(),
-                        }, is_forward);
-                        msg_update_table_data_deep(app, table_oid.clone());
-                    }
-                    Err(e) => {
-                        return Err(e);
-                    }
-                }
+                table_data::untrash(table_oid.clone(), row_oid.clone())?;
+                record_action(Self::DeleteTableRow {
+                    table_oid: table_oid.clone(),
+                    row_oid: row_oid.clone(),
+                }, is_forward);
+                msg_update_table_data_deep(app, table_oid.clone());
             }
             Self::UpdateTableCellStoredAsPrimitiveValue {
                 table_oid,
@@ -769,7 +655,7 @@ pub async fn dialog_create_table(app: AppHandle) -> Result<(), error::Error> {
 }
 
 #[tauri::command]
-/// Pull up a dialog window for creating a new table.
+/// Pull up a dialog window for editing table metadata.
 pub async fn dialog_edit_table(app: AppHandle, table_oid: i64) -> Result<(), error::Error> {
     let window_idx = app.webview_windows().len();
     WebviewWindowBuilder::new(
@@ -778,6 +664,38 @@ pub async fn dialog_edit_table(app: AppHandle, table_oid: i64) -> Result<(), err
         WebviewUrl::App(format!("/src/frontend/dialogTableMetadata.html?table_oid={table_oid}&mode=3").into()),
     )
     .title("Edit Table")
+    .inner_size(400.0, 250.0)
+    .maximizable(false)
+    .build()?;
+    return Ok(());
+}
+
+#[tauri::command]
+/// Pull up a dialog window for creating a new report.
+pub async fn dialog_create_report(app: AppHandle) -> Result<(), error::Error> {
+    let window_idx = app.webview_windows().len();
+    WebviewWindowBuilder::new(
+        &app,
+        format!("reportMetadataWindow-{window_idx}"),
+        WebviewUrl::App("/src/frontend/dialogReportMetadata.html".into()),
+    )
+    .title("Create New Report")
+    .inner_size(400.0, 250.0)
+    .maximizable(false)
+    .build()?;
+    return Ok(());
+}
+
+#[tauri::command]
+/// Pull up a dialog window for editing report metadata.
+pub async fn dialog_edit_report(app: AppHandle, report_oid: i64) -> Result<(), error::Error> {
+    let window_idx = app.webview_windows().len();
+    WebviewWindowBuilder::new(
+        &app,
+        format!("reportMetadataWindow-{window_idx}"),
+        WebviewUrl::App(format!("/src/frontend/dialogReportMetadata.html?report_oid={report_oid}").into()),
+    )
+    .title("Edit Report")
     .inner_size(400.0, 250.0)
     .maximizable(false)
     .build()?;
@@ -801,7 +719,7 @@ pub async fn dialog_create_object_type(app: AppHandle) -> Result<(), error::Erro
 }
 
 #[tauri::command]
-/// Pull up a dialog window for creating a new object type.
+/// Pull up a dialog window for editing object type metadata.
 pub async fn dialog_edit_object_type(app: AppHandle, obj_type_oid: i64) -> Result<(), error::Error> {
     let window_idx = app.webview_windows().len();
     WebviewWindowBuilder::new(
@@ -914,6 +832,28 @@ pub async fn dialog_child_table_data(
 }
 
 #[tauri::command]
+/// Open a separate window for the contents of a report.
+pub async fn dialog_report_data(
+    app: AppHandle,
+    report_oid: i64,
+    report_name: String,
+) -> Result<(), error::Error> {
+    /*
+    // Create the window
+    let window_idx = app.webview_windows().len();
+    WebviewWindowBuilder::new(
+        &app,
+        format!("tableWindow-{window_idx}"),
+        WebviewUrl::App(format!("/src/frontend/table.html?table_oid={report_oid}").into()),
+    )
+    .title(&report_name)
+    .inner_size(800.0, 600.0)
+    .build()?;
+    */
+    return Ok(());
+}
+
+#[tauri::command]
 /// Open a separate window for the contents of an object.
 pub async fn dialog_object_data(
     app: AppHandle,
@@ -953,8 +893,7 @@ pub fn dialog_close(window: tauri::Window) -> Result<(), error::Error> {
 #[tauri::command]
 pub fn get_table_list(table_channel: Channel<table::BasicMetadata>) -> Result<(), error::Error> {
     // Use channel to send BasicMetadata objects
-    table::send_metadata_list(table_channel)?;
-    return Ok(());
+    return table::send_metadata_list(table_channel);
 }
 
 #[tauri::command]
@@ -964,9 +903,15 @@ pub fn get_table_metadata(table_oid: i64) -> Result<table::Metadata, error::Erro
 }
 
 #[tauri::command]
-pub fn get_report_list(report_channel: Channel<table::BasicMetadata>) -> Result<(), error::Error> {
+pub fn get_report_list(report_channel: Channel<report::BasicMetadata>) -> Result<(), error::Error> {
     // Use channel to send BasicMetadata objects
-    return Ok(());
+    return report::send_metadata_list(report_channel);
+}
+
+#[tauri::command]
+/// Gets the metadata for a report.
+pub fn get_report_metadata(report_oid: i64) -> Result<report::Metadata, error::Error> {
+    return report::get_metadata(&report_oid);
 }
 
 #[tauri::command]
@@ -974,8 +919,7 @@ pub fn get_object_type_list(
     object_type_channel: Channel<obj_type::BasicMetadata>,
 ) -> Result<(), error::Error> {
     // Use channel to send BasicMetadata objects
-    obj_type::send_metadata_list(None, object_type_channel)?;
-    return Ok(());
+    return obj_type::send_metadata_list(None, object_type_channel);
 }
 
 #[tauri::command]

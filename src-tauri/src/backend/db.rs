@@ -158,14 +158,14 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
 
     -- METADATA_RPT stores all user-defined reports
     CREATE TABLE METADATA_RPT (
-        OID INTEGER PRIMARY KEY,
-        TRASH BOOLEAN NOT NULL DEFAULT 0
+        OID INTEGER PRIMARY KEY
     );
     -- METADATA_RPT__REPORT stores all user-defined reports
     CREATE TABLE METADATA_RPT__REPORT (
         RPT_OID INTEGER PRIMARY KEY REFERENCES METADATA_RPT (OID)
             ON UPDATE CASCADE
             ON DELETE CASCADE,
+        TRASH BOOLEAN NOT NULL DEFAULT 0,
         BASE_TABLE_OID INTEGER NOT NULL REFERENCES METADATA_TABLE (TYPE_OID)
             ON UPDATE CASCADE
             ON DELETE CASCADE,

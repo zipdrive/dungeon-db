@@ -196,7 +196,7 @@ if (urlParamTableOid) {
         tableNode?.querySelector('colgroup')?.insertAdjacentHTML('beforeend', `<col span="1" id="table-content-column${columnOid}-widthcontrol">`);
 
         // Add a label to the column header
-        tableHeaderNode.innerText = column.name;
+        tableHeaderNode.innerText = `${(column.isPrimaryKey ? '🔑 ' : '')}${column.name}`;
         tableHeaderNode.classList.add(`table-content-column${columnOid}`);
         tableHeaderNode.classList.add('resizable-column');
         tableHeaderNode.classList.add('reorderable-column');
