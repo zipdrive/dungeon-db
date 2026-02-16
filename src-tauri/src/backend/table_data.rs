@@ -770,12 +770,40 @@ pub fn try_update_primitive_value(
     return Ok(prev_value);
 }
 
+/// Updates the values for a multiselect column.
+pub fn try_update_multiselect_value(table_oid: i64, row_oid: i64, column_oid: i64, column_type_oid: i64, value_oid_list: Vec<i64>) -> Result<Vec<i64>, error::Error> {
+    let mut conn = db::open()?;
+    let trans = conn.transaction()?;
+
+    // Store the values that were selected before
+    let mut prior_value_oid_list: Vec<i64> = Vec::new();
+    {
+        let select_prior_cmd = format!("SELECT VALUE_OID FROM TABLE{column_type_oid}_MULTISELECT WHERE ROW_OID = ?1");
+        let mut select_prior_statement = trans.prepare(&select_prior_cmd)?;
+        for prior_value_oid_row in select_prior_statement.query_and_then(params![row_oid], |row| row.get::<_, i64>("VALUE_OID"))? {
+            prior_value_oid_list.push(prior_value_oid_row?);
+        }
+    }
+
+    // Dump those rows
+    let delete_prior_cmd = format!("DELETE FROM TABLE{column_type_oid}_MULTISELECT WHERE ROW_OID = ?1");
+    trans.execute(&delete_prior_cmd, params![row_oid])?;
+
+    // Insert the new rows
+    let insert_cmd = format!("INSERT INTO TABLE{column_type_oid}_MULTISELECT (ROW_OID, VALUE_OID) VALUES (?1, ?2)");
+    for value_oid in value_oid_list.iter() {
+        trans.execute(&insert_cmd, params![row_oid, value_oid])?;
+    }
+
+    // Commit the transaction
+    trans.commit()?;
+    return Ok(prior_value_oid_list);
+}
+
 /// Updates a BLOB column with a BLOB value.
 pub fn try_update_blob_value(table_oid: i64, row_oid: i64, column_oid: i64, path: String) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
-
-    println!("Uploading file from {path} to TABLE{table_oid} COLUMN{column_oid} OID = {row_oid}");
 
     // Load the file from the filesystem
     let buf = match std::fs::read(path) {

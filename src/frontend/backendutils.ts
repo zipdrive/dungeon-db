@@ -318,6 +318,14 @@ export type Action = {
         value: string | null
     }
 } | {
+    updateTableCellStoredAsMultiselectValue: {
+        tableOid: number,
+        rowOid: number,
+        columnOid: number,
+        columnTypeOid: number,
+        valueOidList: number[]
+    }
+} | {
     updateTableCellStoredAsBlob: {
         tableOid: number,
         rowOid: number,

@@ -502,18 +502,24 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
      * MULTI-SELECT DROPDOWN CELL
      */
 
-    let selectNode: HTMLSelectElement = document.createElement('select');
-    selectNode.multiple = true;
-    selectNode.insertAdjacentHTML('beforeend', '<option value="">— NULL —</option>');
+    const columnTypeOid: number = cell.columnType.multiSelectDropdown;
+    node.innerText = cell.displayValue ?? '[]';
+
+    // Parse the OID of selected options
+    let selectedOidList: string[] = cell.trueValue?.split(',') ?? [];
+    
+    // Create container for the multiselect options
+    let multiselectNode: HTMLDivElement = document.createElement('div');
+    multiselectNode.classList.add('cell-multiselect');
 
     // Retrieve dropdown values from database to populate dropdown
     const onReceiveDropdownValue = new Channel<DropdownValue>();
     onReceiveDropdownValue.onmessage = (dropdownValue) => {
-      // Create option node in dropdown list
-      let optionNode: HTMLOptionElement = document.createElement('option');
-      optionNode.value = dropdownValue.trueValue ?? '';
-      optionNode.innerText = dropdownValue.displayValue ?? '';
-      selectNode.insertAdjacentElement('beforeend', optionNode);
+      // Create HTML element to represent the option
+      let labelNode: HTMLLabelElement = document.createElement('label');
+      labelNode.innerText = dropdownValue.displayValue ?? '';
+      labelNode.innerHTML = `<input type="checkbox" value="${dropdownValue.trueValue}" ${(dropdownValue.trueValue && selectedOidList.includes(dropdownValue.trueValue) ? 'checked' : '')}>${labelNode.innerHTML}`;
+      multiselectNode.appendChild(labelNode);
     };
     await queryAsync({
       invokeAction: 'get_table_column_dropdown_values',
@@ -529,17 +535,33 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
       });
     });
 
-    // Add event listener for when the value is changed
-    selectNode.addEventListener('change', async (_) => {
-      // TODO
+    // Update the value of the cell when unfocused
+    inputNode = multiselectNode;
+    node.appendChild(multiselectNode);
+    node.tabIndex = 0;
+    node.addEventListener('focusout', async (e) => {
+      if (!e.relatedTarget || !node.contains(e.relatedTarget as HTMLElement)) {
+        let newSelectedOidList: number[] = [];
+        multiselectNode.querySelectorAll('input:checked').forEach((checkboxNode) => {
+          newSelectedOidList.push(parseInt((checkboxNode as HTMLInputElement).value));
+        });
+        await executeAsync({
+          updateTableCellStoredAsMultiselectValue: {
+            tableOid: tableOid,
+            columnOid: columnOid,
+            rowOid: rowOid,
+            columnTypeOid: columnTypeOid,
+            valueOidList: newSelectedOidList
+          }
+        })
+        .catch(async (e) => {
+          await message(e, {
+            title: 'An error occurred while updating dropdown value in database.',
+            kind: 'error'
+          });
+        });
+      }
     });
-
-    // Add the select node to the cell
-    node.insertAdjacentElement('beforeend', selectNode);
-
-    // Set the value of the dropdown
-    selectNode.value = cell.trueValue ?? '';
-    inputNode = selectNode;
   } else if ('childObject' in cell.columnType) {
     /**
      * OBJECT

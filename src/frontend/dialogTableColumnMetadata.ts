@@ -308,8 +308,8 @@ window.addEventListener("DOMContentLoaded", async () => {
                     // Edit the column
                     await executeAsync({
                         editTableColumnMetadata: {
-                            tableOid: parseInt(urlParamTableOid),
-                            columnOid: parseInt(urlParamColumnOid),
+                            tableOid: tableOid,
+                            columnOid: columnOid,
                             columnName: changedMetadata.name,
                             columnType: changedMetadata.columnType,
                             columnStyle: changedMetadata.columnStyle,
@@ -335,8 +335,8 @@ window.addEventListener("DOMContentLoaded", async () => {
                         // Send request to update set of dropdown values
                         await executeAsync({
                             editTableColumnDropdownValues: {
-                                tableOid: parseInt(urlParamTableOid),
-                                columnOid: parseInt(urlParamColumnOid),
+                                tableOid: tableOid,
+                                columnOid: columnOid,
                                 dropdownValues: dropdownValues
                             }
                         });

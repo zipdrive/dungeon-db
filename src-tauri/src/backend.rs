@@ -137,6 +137,13 @@ pub enum Action {
         row_oid: i64,
         value: Option<String>,
     },
+    UpdateTableCellStoredAsMultiselectValue {
+        table_oid: i64,
+        column_oid: i64,
+        row_oid: i64,
+        column_type_oid: i64,
+        value_oid_list: Vec<i64>
+    },
     UpdateTableCellStoredAsBlob {
         table_oid: i64,
         column_oid: i64,
@@ -162,6 +169,16 @@ pub enum Action {
 static REVERSE_STACK: Mutex<Vec<Action>> = Mutex::new(Vec::new());
 static FORWARD_STACK: Mutex<Vec<Action>> = Mutex::new(Vec::new());
 
+/// Records the opposite action to the one that was just performed, for undo/redo purposes.
+fn record_action(action: Action, is_forward: bool) {
+    let mut reverse_stack = if is_forward {
+        REVERSE_STACK.lock().unwrap()
+    } else {
+        FORWARD_STACK.lock().unwrap()
+    };
+    (*reverse_stack).push(action);
+}
+
 impl Action {
     fn execute(&self, app: &AppHandle, is_forward: bool) -> Result<(), error::Error> {
         match self {
@@ -171,14 +188,9 @@ impl Action {
             } => {
                 match table::create(table_name.clone(), master_table_oid_list, data_type::MetadataColumnType::Reference(0)) {
                     Ok(table_oid) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::DeleteTable {
+                        record_action(Self::DeleteTable {
                             table_oid: table_oid,
-                        });
+                        }, is_forward);
                         msg_update_table_list(app);
                     }
                     Err(e) => {
@@ -189,16 +201,11 @@ impl Action {
             Self::EditTableMetadata { table_oid, table_name, master_table_oid_list } => {
                 match table::edit(table_oid.clone(), table_name.clone(), master_table_oid_list) {
                     Ok((old_table_name, old_master_table_oid_list)) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::EditTableMetadata {
+                        record_action(Self::EditTableMetadata {
                             table_oid: table_oid.clone(),
                             table_name: old_table_name,
                             master_table_oid_list: old_master_table_oid_list
-                        });
+                        }, is_forward);
                         msg_update_table_list(app);
                     },
                     Err(e) => {
@@ -209,14 +216,9 @@ impl Action {
             Self::DeleteTable { table_oid } => {
                 match table::move_trash(table_oid.clone()) {
                     Ok(_) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::RestoreDeletedTable {
+                        record_action(Self::RestoreDeletedTable {
                             table_oid: table_oid.clone(),
-                        });
+                        }, is_forward);
                         msg_update_table_list(app);
                     }
                     Err(e) => {
@@ -227,14 +229,9 @@ impl Action {
             Self::RestoreDeletedTable { table_oid } => {
                 match table::unmove_trash(table_oid.clone()) {
                     Ok(_) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::DeleteTable {
+                        record_action(Self::DeleteTable {
                             table_oid: table_oid.clone(),
-                        });
+                        }, is_forward);
                         msg_update_table_list(app);
                     }
                     Err(e) => {
@@ -247,14 +244,9 @@ impl Action {
                 base_table_oid,
             } => match report::create(&report_name, base_table_oid.clone()) {
                 Ok(report_oid) => {
-                    let mut reverse_stack = if is_forward {
-                        REVERSE_STACK.lock().unwrap()
-                    } else {
-                        FORWARD_STACK.lock().unwrap()
-                    };
-                    (*reverse_stack).push(Self::DeleteReport {
+                    record_action(Self::DeleteReport {
                         report_oid: report_oid,
-                    });
+                    }, is_forward);
                     msg_update_report_list(app);
                 }
                 Err(e) => {
@@ -263,14 +255,9 @@ impl Action {
             },
             Self::DeleteReport { report_oid } => match report::move_trash(report_oid.clone()) {
                 Ok(_) => {
-                    let mut reverse_stack = if is_forward {
-                        REVERSE_STACK.lock().unwrap()
-                    } else {
-                        FORWARD_STACK.lock().unwrap()
-                    };
-                    (*reverse_stack).push(Self::RestoreDeletedReport {
+                    record_action(Self::RestoreDeletedReport {
                         report_oid: report_oid.clone(),
-                    });
+                    }, is_forward);
                     msg_update_report_list(app);
                 }
                 Err(e) => {
@@ -280,14 +267,9 @@ impl Action {
             Self::RestoreDeletedReport { report_oid } => {
                 match report::unmove_trash(report_oid.clone()) {
                     Ok(_) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::DeleteReport {
+                        record_action(Self::DeleteReport {
                             report_oid: report_oid.clone(),
-                        });
+                        }, is_forward);
                         msg_update_report_list(app);
                     }
                     Err(e) => {
@@ -301,14 +283,9 @@ impl Action {
             } => {
                 match table::create(obj_type_name.clone(), master_table_oid_list, data_type::MetadataColumnType::ChildObject(0)) {
                     Ok(obj_type_oid) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::DeleteObjectType {
+                        record_action(Self::DeleteObjectType {
                             obj_type_oid: obj_type_oid,
-                        });
+                        }, is_forward);
                         msg_update_obj_type_list(app);
                     }
                     Err(e) => {
@@ -319,16 +296,11 @@ impl Action {
             Self::EditObjectTypeMetadata { obj_type_oid, obj_type_name, master_table_oid_list } => {
                 match table::edit(obj_type_oid.clone(), obj_type_name.clone(), master_table_oid_list) {
                     Ok((old_obj_type_name, old_master_table_oid_list)) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::EditObjectTypeMetadata {
+                        record_action(Self::EditObjectTypeMetadata {
                             obj_type_oid: obj_type_oid.clone(),
                             obj_type_name: old_obj_type_name,
                             master_table_oid_list: old_master_table_oid_list
-                        });
+                        }, is_forward);
                         msg_update_obj_type_list(app);
                     },
                     Err(e) => {
@@ -339,14 +311,9 @@ impl Action {
             Self::DeleteObjectType { obj_type_oid } => {
                 match table::move_trash(obj_type_oid.clone()) {
                     Ok(_) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::RestoreDeletedObjectType {
+                        record_action(Self::RestoreDeletedObjectType {
                             obj_type_oid: obj_type_oid.clone(),
-                        });
+                        }, is_forward);
                         msg_update_obj_type_list(app);
                     }
                     Err(e) => {
@@ -357,14 +324,9 @@ impl Action {
             Self::RestoreDeletedObjectType { obj_type_oid } => {
                 match table::unmove_trash(obj_type_oid.clone()) {
                     Ok(_) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::DeleteObjectType {
+                        record_action(Self::DeleteObjectType {
                             obj_type_oid: obj_type_oid.clone(),
-                        });
+                        }, is_forward);
                         msg_update_obj_type_list(app);
                     }
                     Err(e) => {
@@ -395,15 +357,10 @@ impl Action {
                     dropdown_values.clone()
                 ) {
                     Ok(column_oid) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::DeleteTableColumn {
+                        record_action(Self::DeleteTableColumn {
                             table_oid: table_oid.clone(),
                             column_oid: column_oid,
-                        });
+                        }, is_forward);
                         msg_update_table_data_deep(app, table_oid.clone());
                     }
                     Err(e) => {
@@ -435,16 +392,11 @@ impl Action {
                 ) {
                     Ok(trash_column_oid_optional) => match trash_column_oid_optional {
                         Some(trash_column_oid) => {
-                            let mut reverse_stack = if is_forward {
-                                REVERSE_STACK.lock().unwrap()
-                            } else {
-                                FORWARD_STACK.lock().unwrap()
-                            };
-                            (*reverse_stack).push(Self::RestoreEditedTableColumnMetadata {
+                            record_action(Self::RestoreEditedTableColumnMetadata {
                                 table_oid: table_oid.clone(),
                                 column_oid: column_oid.clone(),
                                 prior_metadata_column_oid: trash_column_oid,
-                            });
+                            }, is_forward);
                             msg_update_table_data_deep(app, table_oid.clone());
                         }
                         _ => {}
@@ -457,16 +409,11 @@ impl Action {
             Self::EditTableColumnWidth { table_oid, column_oid, column_width } => {
                 match table_column::edit_width(table_oid.clone(), column_oid.clone(), column_width.clone()) {
                     Ok(trash_column_oid) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::RestoreEditedTableColumnMetadata {
+                        record_action(Self::RestoreEditedTableColumnMetadata {
                             table_oid: table_oid.clone(),
                             column_oid: column_oid.clone(),
                             prior_metadata_column_oid: trash_column_oid,
-                        });
+                        }, is_forward);
                         msg_update_table_data_deep(app, table_oid.clone());
                     },
                     Err(e) => {
@@ -486,16 +433,11 @@ impl Action {
                     dropdown_values.clone(),
                 ) {
                     Ok(_) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::EditTableColumnDropdownValues {
+                        record_action(Self::EditTableColumnDropdownValues {
                             table_oid: table_oid.clone(),
                             column_oid: column_oid.clone(),
                             dropdown_values: prior_dropdown_values,
-                        });
+                        }, is_forward);
                         msg_update_table_data_deep(app, table_oid.clone());
                     }
                     Err(e) => {
@@ -515,17 +457,12 @@ impl Action {
                     new_column_ordering.clone(),
                 ) {
                     Ok(new_column_ordering) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::ReorderTableColumn {
+                        record_action(Self::ReorderTableColumn {
                             table_oid: table_oid.clone(),
                             column_oid: column_oid.clone(),
                             old_column_ordering: new_column_ordering,
                             new_column_ordering: Some(old_column_ordering.clone()),
-                        });
+                        }, is_forward);
                         msg_update_table_data_deep(app, table_oid.clone());
                     }
                     Err(e) => {
@@ -539,15 +476,10 @@ impl Action {
                 column_oid,
             } => match table_column::move_trash(table_oid.clone(), column_oid.clone()) {
                 Ok(_) => {
-                    let mut reverse_stack = if is_forward {
-                        REVERSE_STACK.lock().unwrap()
-                    } else {
-                        FORWARD_STACK.lock().unwrap()
-                    };
-                    (*reverse_stack).push(Self::RestoreDeletedTableColumn {
+                    record_action(Self::RestoreDeletedTableColumn {
                         table_oid: table_oid.clone(),
                         column_oid: column_oid.clone(),
-                    });
+                    }, is_forward);
                     msg_update_table_data_deep(app, table_oid.clone());
                 }
                 Err(e) => {
@@ -559,15 +491,10 @@ impl Action {
                 column_oid,
             } => match table_column::unmove_trash(table_oid.clone(), column_oid.clone()) {
                 Ok(_) => {
-                    let mut reverse_stack = if is_forward {
-                        REVERSE_STACK.lock().unwrap()
-                    } else {
-                        FORWARD_STACK.lock().unwrap()
-                    };
-                    (*reverse_stack).push(Self::DeleteTableColumn {
+                    record_action(Self::DeleteTableColumn {
                         table_oid: table_oid.clone(),
                         column_oid: column_oid.clone(),
-                    });
+                    }, is_forward);
                     msg_update_table_data_deep(app, table_oid.clone());
                 }
                 Err(e) => {
@@ -577,15 +504,10 @@ impl Action {
             Self::PushTableRow { table_oid, parent_row_oid } => {
                 match table_data::push(table_oid.clone(), parent_row_oid.clone()) {
                     Ok(row_oid) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::DeleteTableRow {
+                        record_action(Self::DeleteTableRow {
                             table_oid: table_oid.clone(),
                             row_oid: row_oid.clone(),
-                        });
+                        }, is_forward);
                         msg_update_table_data_deep(app, table_oid.clone());
                     }
                     Err(e) => {
@@ -596,15 +518,10 @@ impl Action {
             Self::InsertTableRow { table_oid, parent_row_oid, row_oid } => {
                 match table_data::insert(table_oid.clone(), parent_row_oid.clone(), row_oid.clone()) {
                     Ok(row_oid) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::DeleteTableRow {
+                        record_action(Self::DeleteTableRow {
                             table_oid: table_oid.clone(),
                             row_oid: row_oid.clone(),
-                        });
+                        }, is_forward);
                         msg_update_table_data_deep(app, table_oid.clone());
                     }
                     Err(e) => {
@@ -623,16 +540,11 @@ impl Action {
                     new_subtype_oid.clone(),
                 ) {
                     Ok(old_subtype_oid) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::RetypeTableRow {
+                        record_action(Self::RetypeTableRow {
                             base_type_oid: base_type_oid.clone(),
                             base_row_oid: base_row_oid.clone(),
                             new_subtype_oid: old_subtype_oid.clone(),
-                        });
+                        }, is_forward);
                         msg_update_table_data_deep(app, base_type_oid.clone());
                     }
                     Err(e) => {
@@ -643,15 +555,10 @@ impl Action {
             Self::DeleteTableRow { table_oid, row_oid } => {
                 match table_data::trash(table_oid.clone(), row_oid.clone()) {
                     Ok((table_oid, row_oid)) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::RestoreDeletedTableRow {
+                        record_action(Self::RestoreDeletedTableRow {
                             table_oid: table_oid.clone(),
                             row_oid: row_oid.clone(),
-                        });
+                        }, is_forward);
                         msg_update_table_data_deep(app, table_oid.clone());
                     }
                     Err(e) => {
@@ -662,15 +569,10 @@ impl Action {
             Self::RestoreDeletedTableRow { table_oid, row_oid } => {
                 match table_data::untrash(table_oid.clone(), row_oid.clone()) {
                     Ok(_) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::DeleteTableRow {
+                        record_action(Self::DeleteTableRow {
                             table_oid: table_oid.clone(),
                             row_oid: row_oid.clone(),
-                        });
+                        }, is_forward);
                         msg_update_table_data_deep(app, table_oid.clone());
                     }
                     Err(e) => {
@@ -691,19 +593,40 @@ impl Action {
                     value.clone(),
                 ) {
                     Ok(old_value) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::UpdateTableCellStoredAsPrimitiveValue {
+                        record_action(Self::UpdateTableCellStoredAsPrimitiveValue {
                             table_oid: table_oid.clone(),
                             column_oid: column_oid.clone(),
                             row_oid: row_oid.clone(),
                             value: old_value,
-                        });
+                        }, is_forward);
                         msg_update_table_data_shallow(app, table_oid.clone());
                     }
+                    Err(e) => {
+                        msg_update_table_data_shallow(app, table_oid.clone());
+                        return Err(e);
+                    }
+                }
+            },
+            Self::UpdateTableCellStoredAsMultiselectValue { table_oid, column_oid, row_oid, column_type_oid, value_oid_list } => {
+                match table_data::try_update_multiselect_value(
+                    table_oid.clone(), 
+                    row_oid.clone(), 
+                    column_oid.clone(), 
+                    column_type_oid.clone(), 
+                    value_oid_list.clone()) {
+
+                    Ok(prior_value_oid_list) => {
+                        record_action(Self::UpdateTableCellStoredAsMultiselectValue { 
+                            table_oid: table_oid.clone(), 
+                            column_oid: column_oid.clone(), 
+                            row_oid: row_oid.clone(), 
+                            column_type_oid: column_type_oid.clone(), 
+                            value_oid_list: prior_value_oid_list 
+                        }, is_forward);
+
+                        // Send message to update table display
+                        msg_update_table_data_shallow(app, table_oid.clone());
+                    },
                     Err(e) => {
                         msg_update_table_data_shallow(app, table_oid.clone());
                         return Err(e);
@@ -714,6 +637,7 @@ impl Action {
                 match table_data::try_update_blob_value(table_oid.clone(), row_oid.clone(), column_oid.clone(), file_path.clone()) {
                     Ok(_) => {
                         // This action cannot be undone
+                        // (for now)
 
                         // Send message to update table display
                         msg_update_table_data_shallow(app, table_oid.clone());
@@ -739,18 +663,13 @@ impl Action {
                     obj_row_oid.clone(),
                 ) {
                     Ok((obj_type_oid, obj_row_oid)) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::UnsetTableObjectCell {
+                        record_action(Self::UnsetTableObjectCell {
                             table_oid: table_oid.clone(),
                             column_oid: column_oid.clone(),
                             row_oid: row_oid.clone(),
                             obj_type_oid,
                             obj_row_oid,
-                        });
+                        }, is_forward);
                         msg_update_table_data_shallow(app, table_oid.clone());
                     }
                     Err(e) => {
@@ -774,18 +693,13 @@ impl Action {
                     obj_row_oid.clone(),
                 ) {
                     Ok(_) => {
-                        let mut reverse_stack = if is_forward {
-                            REVERSE_STACK.lock().unwrap()
-                        } else {
-                            FORWARD_STACK.lock().unwrap()
-                        };
-                        (*reverse_stack).push(Self::SetTableObjectCell {
+                        record_action(Self::SetTableObjectCell {
                             table_oid: table_oid.clone(),
                             column_oid: column_oid.clone(),
                             row_oid: row_oid.clone(),
                             obj_type_oid: Some(obj_type_oid.clone()),
                             obj_row_oid: Some(obj_row_oid.clone()),
-                        });
+                        }, is_forward);
                         msg_update_table_data_shallow(app, table_oid.clone());
                     }
                     Err(e) => {
