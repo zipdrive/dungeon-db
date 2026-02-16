@@ -78,6 +78,7 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
     node.classList.add('cell-null');
   } else {
     node.classList.remove('cell-null');
+    node.setAttribute('placeholder', '');
   }
 
   // Add listener to pull up context menu
@@ -503,7 +504,11 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
      */
 
     const columnTypeOid: number = cell.columnType.multiSelectDropdown;
-    node.innerText = cell.displayValue ?? '[]';
+    if (cell.displayValue) {
+      node.innerText = cell.displayValue;
+    } else {
+      node.setAttribute('placeholder', '— NULL —');
+    }
 
     // Parse the OID of selected options
     let selectedOidList: string[] = cell.trueValue?.split(',') ?? [];

@@ -1,9 +1,7 @@
 #table-content {
   table-layout: fixed;
   width: 0;
-  border: var(--main-color-dark) 1px solid;
-  border-top: none;
-  border-right: none;
+  border: none;
   border-spacing: 0;
   border-collapse: separate;
   cursor: default;
@@ -17,19 +15,30 @@ tr:nth-child(even), thead > tr, tfoot > tr {
 th, td {
   background-color: var(--row-background-color);
   border: var(--main-color-dark) 1px solid;
+  &:nth-child(1) {
+    border-left-width: 2px;
+  }
 }
 td {
   position: relative;
   padding: 0;
+  &:nth-last-child(1) {
+    border-right-width: 2px;
+  }
 }
 th {
   position: sticky;
   top: 0;
   padding: 2px 6px;
+  border-top-width: 2px;
+  &:nth-last-child(2) {
+    border-right-width: 2px;
+  }
 }
 tfoot td {
   position: sticky;
   bottom: -1px;
+  border-bottom-width: 2px;
   z-index: 1;
 }
 
@@ -53,10 +62,10 @@ tfoot td {
   color: var(--text-color-link-hover);
 }
 
-[contenteditable], .clickable-text, :has(.cell-multiselect) {
+[contenteditable], .clickable-text, td:has(.cell-multiselect) {
   padding: 2px 6px;
 
-  &[placeholder]:empty::before {
+  &[placeholder]::before {
     display: block;
     content: attr(placeholder);
     z-index: 9;
@@ -68,7 +77,7 @@ tfoot td {
     user-select: none;
   }
 
-  &[placeholder]:empty:focus::before {
+  &[placeholder]:focus::before {
     content: "";
   }
 }
