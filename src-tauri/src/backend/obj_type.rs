@@ -4,7 +4,7 @@ use crate::backend::{data_type, db, table, table_data};
 use crate::util::error;
 use rusqlite::{params, OptionalExtension, Statement, ToSql, Transaction};
 use serde::{Deserialize, Serialize};
-use tauri::ipc::Channel;
+use crate::util::channel::Channel;
 
 /// Creates a new table.
 pub fn create(name: String, master_table_oid_list: &Vec<i64>) -> Result<i64, error::Error> {

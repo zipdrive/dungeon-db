@@ -35,6 +35,37 @@ export type DropdownValue = {
     displayValue: string | null
 };
 
+
+
+export type ReportVirtualParameter = {
+    column: {
+        columnOid: number,
+        sourceName: string,
+        columnName: string,
+        linkedTableOid: number,
+        isManyToOne: boolean
+    }
+} | {
+    masterList: {
+        masterTableOid: number,
+        masterTableName: string
+    }
+} | {
+    reference: {
+        columnOid: number,
+        sourceName: string,
+        columnName: string,
+        linkedTableOid: number
+    }
+} | {
+    inheritance: {
+        inheritorTableOid: number,
+        inheritorTableName: string
+    }
+};
+
+
+
 export type TableColumnCell = {
     tableOid: number,
     rowOid: number,
@@ -57,20 +88,63 @@ export type TableRowCellChannelPacket = {
 } | (TableColumnCell & { columnOrdering: number });
 
 
-export type Query = {
-    invokeAction: 'get_table_list',
-    invokeParams: {
-        tableChannel: Channel<BasicMetadata>
+export type ReportColumnMetadata = {
+    formula: {
+        oid: number, 
+        name: string,
+        columnOrdering: number,
+        columnStyle: string,
+        formula: string
     }
 } | {
+    subreport: {
+        oid: number, 
+        name: string,
+        columnOrdering: number,
+        columnStyle: string,
+        subreportOid: number,
+        subreportBaseParameterOid: number
+    }
+};
+
+export type ReportCellChannelPacket = {
+    rowStart: {
+        rowOid: number,
+        rowIndex: number
+    }
+} | {
+    columnValue: TableColumnCell
+} | {
+    readOnlyValue: {
+        displayValue: string | null,
+        failedValidations: { description: string }[]
+    }
+} | {
+    subreport: {
+        subreportOid: number
+    }
+};
+
+export type ReportRowCellChannelPacket = {
+    rowExists: boolean
+} | {
+    columnValue: TableColumnCell
+} | {
+    readOnlyValue: {
+        displayValue: string | null,
+        failedValidations: { description: string }[]
+    }
+} | {
+    subreport: {
+        subreportOid: number
+    }
+};
+
+
+export type Query = {
     invokeAction: 'get_table_metadata',
     invokeParams: {
         tableOid: number
-    }
-} | {
-    invokeAction: 'get_report_list',
-    invokeParams: {
-        reportChannel: Channel<BasicMetadata>
     }
 } | {
     invokeAction: 'get_report_metadata',
@@ -78,72 +152,9 @@ export type Query = {
         reportOid: number
     }
 } | {
-    invokeAction: 'get_object_type_list',
-    invokeParams: {
-        objectTypeChannel: Channel<BasicHierarchicalMetadata>
-    }
-} | {
-    invokeAction: 'get_master_list_option_dropdown_values',
-    invokeParams: {
-        tableOid: number | null,
-        allowInheritanceFromTables: boolean,
-        optionChannel: Channel<ToggledHierarchicalMetadata>
-    }
-} | {
-    invokeAction: 'get_subtype_list',
-    invokeParams: {
-        tableOid: number,
-        objectTypeChannel: Channel<BasicHierarchicalMetadata>
-    }
-} | {
     invokeAction: 'get_table_column',
     invokeParams: {
         columnOid: number
-    }
-} | {
-    invokeAction: 'get_table_column_dropdown_values',
-    invokeParams: {
-        columnOid: number,
-        dropdownValueChannel: Channel<DropdownValue>
-    }
-} | {
-    invokeAction: 'get_table_column_list',
-    invokeParams: {
-        tableOid: number,
-        columnChannel: Channel<TableColumnMetadata>
-    }
-} | {
-    invokeAction: 'get_table_column_reference_values',
-    invokeParams: {
-        referenceTypeChannel: Channel<BasicMetadata>
-    }
-} | {
-    invokeAction: 'get_table_column_object_values',
-    invokeParams: {
-        objectTypeChannel: Channel<BasicMetadata>
-    }
-} | {
-    invokeAction: 'get_table_data',
-    invokeParams: {
-        tableOid: number,
-        parentRowOid: number | null,
-        pageNum: number,
-        pageSize: number,
-        cellChannel: Channel<TableCellChannelPacket>
-    }
-} | {
-    invokeAction: 'get_table_row',
-    invokeParams: {
-        tableOid: number,
-        rowOid: number,
-        cellChannel: Channel<TableRowCellChannelPacket>
-    }
-} | {
-    invokeAction: 'get_object_data',
-    invokeParams: {
-        objTypeOid: number,
-        objRowOid: number,
-        objDataChannel: Channel<TableRowCellChannelPacket>
     }
 } | {
     invokeAction: 'get_blob_value',
@@ -162,72 +173,227 @@ export type Query = {
     }
 };
 
+/**
+ * Runs a query and returns the result or passes the result through one or more channels.
+ * @param query The query to run.
+ * @returns The result of the query, if singular. Otherwise, returns void.
+ */
+export async function queryAsync(query: Query): Promise<any> {
+    return await invoke(query.invokeAction, query.invokeParams)
+    .catch(async (e) => {
+        await message(e, {
+            title: "An error occurred while reading database.",
+            kind: 'error'
+        });
+    });
+}
+
+
+
+export type QueryStream = [{
+    tables: {}
+}, Channel<BasicMetadata>] 
+
+| [{
+    reports: {}
+}, Channel<BasicMetadata>] 
+
+| [{
+    objectTypes: {}
+}, Channel<BasicHierarchicalMetadata>] 
+
+| [{
+    masterLists: {
+        tableOid: number
+    }
+}, Channel<ToggledHierarchicalMetadata>] 
+
+| [{
+    referenceColumnTypes: {}
+}, Channel<BasicMetadata>] 
+
+| [{
+    objectColumnTypes: {}
+}, Channel<BasicMetadata>] 
+
+| [{
+    objectSubtypes: {
+        tableOid: number
+    }
+}, Channel<BasicHierarchicalMetadata>] 
+
+| [{
+    reportParameters: {
+        baseTableOid: number
+    }
+}, Channel<ReportVirtualParameter>]
+
+| [{
+    tableColumns: {
+        tableOid: number
+    }
+}, Channel<TableColumnMetadata>]
+
+| [{
+    tableColumnDropdownValues: {
+        columnOid: number
+    }
+}, Channel<DropdownValue>]
+
+| [{
+    reportColumns: {
+        reportOid: number
+    }
+}, Channel<ReportColumnMetadata>]
+
+| [{
+    tablePageCells: {
+        tableOid: number,
+        parentRowOid: number | null,
+        pageNum: number,
+        pageSize: number
+    }
+}, Channel<TableCellChannelPacket>]
+
+| [{
+    tableRowCells: {
+        tableOid: number,
+        rowOid: number
+    }
+}, Channel<TableRowCellChannelPacket>]
+
+| [{
+    tableObjectCells: {
+        tableOid: number,
+        rowOid: number
+    }
+}, Channel<TableRowCellChannelPacket>]
+
+| [{
+    reportPageCells: {
+        reportOid: number,
+        parentRowOid: number | null,
+        pageNum: number,
+        pageSize: number
+    }
+}, Channel<ReportCellChannelPacket>]
+
+| [{
+    reportRowCells: {
+        reportOid: number,
+        baseTableRowOid: number
+    }
+}, Channel<ReportRowCellChannelPacket>];
+
+/**
+ * Receives data through a channel from the backend.
+ * @param queryStream 
+ */
+export async function queryStreamAsync(queryStream: QueryStream): Promise<void> {
+    await invoke('query_stream', {
+        query: queryStream[0],
+        channel: queryStream[1]
+    })
+    .catch(async (e) => {
+        await message(e, {
+            title: "An error occurred while reading database.",
+            kind: 'error'
+        });
+    });
+}
+
+
+
 export type Dialog = {
-    invokeAction: 'dialog_create_table',
-    invokeParams: {}
+    createTable: {}
 } | {
-    invokeAction: 'dialog_edit_table',
-    invokeParams: {
+    editTableMetadata: {
         tableOid: number
     }
 } | {
-    invokeAction: 'dialog_create_report',
-    invokeParams: {}
+    createReport: {}
 } | {
-    invokeAction: 'dialog_edit_report',
-    invokeParams: {
+    editReportMetadata: {
         reportOid: number
     }
 } | {
-    invokeAction: 'dialog_create_object_type',
-    invokeParams: {}
+    createObjectType: {}
 } | {
-    invokeAction: 'dialog_edit_object_type',
-    invokeParams: {
+    editObjectTypeMetadata: {
         objTypeOid: number
     }
 } | {
-    invokeAction: 'dialog_create_table_column',
-    invokeParams: {
+    createTableColumn: {
         tableOid: number,
         columnOrdering: number | null
     }
 } | {
-    invokeAction: 'dialog_edit_table_column',
-    invokeParams: {
+    editTableColumnMetadata: {
         tableOid: number,
         columnOid: number
     }
 } | {
-    invokeAction: 'dialog_table_data',
-    invokeParams: {
+    createReportColumn: {
+        reportOid: number,
+        columnOrdering: number | null
+    }
+} | {
+    editReportColumnMetadata: {
+        reportOid: number,
+        columnOid: number
+    }
+} | {
+    table: {
         tableOid: number,
         tableName: string
     }
 } | {
-    invokeAction: 'dialog_report_data',
-    invokeParams: {
-        reportOid: number,
-        reportName: string
-    }
-} | {
-    invokeAction: 'dialog_child_table_data',
-    invokeParams: {
+    childTable: {
         tableOid: number,
         parentRowOid: number,
         tableName: string
     }
 } | {
-    invokeAction: 'dialog_object_data',
-    invokeParams: {
+    object: {
         tableOid: number,
         rowOid: number,
-        title: string
+        objectName: string
     }
 } | {
-    invokeAction: 'dialog_close',
-    invokeParams: {}
+    report: {
+        reportOid: number,
+        reportName: string
+    }
 };
+
+/**
+ * Opens a dialog window.
+ * @param dialog The dialog window to open.
+ */
+export async function openDialogAsync(dialog: Dialog): Promise<void> {
+    await invoke('dialog_open', dialog)
+    .catch(async (e) => {
+        await message(e, {
+            title: "An error occurred while opening dialog box.",
+            kind: 'error'
+        });
+    });
+}
+
+/**
+ * Closes the current dialog window.
+ */
+export async function closeDialogAsync(): Promise<void> {
+    await invoke('dialog_close', {})
+    .catch(async (e) => {
+        await message(e, {
+            title: "An error occurred while closing dialog box.",
+            kind: 'error'
+        });
+    });
+}
+
+
 
 export type Action = {
     createTable: {
@@ -322,6 +488,55 @@ export type Action = {
         columnOid: number
     }
 } | {
+    createReportFormulaColumn: {
+        reportOid: number,
+        columnOrdering: number | null,
+        columnName: string,
+        columnStyle: string,
+        formula: string
+    }
+} | {
+    createReportSubreportColumn: {
+        reportOid: number,
+        columnOrdering: number | null,
+        columnName: string,
+        columnStyle: string,
+        baseParameterOid: number
+    }
+} | {
+    editReportFormulaColumnMetadata: {
+        report_oid: number,
+        column_oid: number,
+        column_name: string,
+        column_style: string,
+        formula: string
+    }
+} | {
+    editReportSubreportColumnMetadata: {
+        report_oid: number,
+        column_oid: number,
+        column_name: string,
+        column_style: string,
+    }
+} | {
+    editReportColumnWidth: {
+        report_oid: number,
+        column_oid: number,
+        column_width: number,
+    }
+} | {
+    reorderReportColumn: {
+        report_oid: number,
+        column_oid: number,
+        old_column_ordering: number,
+        new_column_ordering: number | null
+    }
+} | {
+    deleteReportColumn: {
+        reportOid: number,
+        columnOid: number
+    }
+} | {
     pushTableRow: {
         tableOid: number,
         parentRowOid: number | null 
@@ -375,52 +590,6 @@ export type Action = {
     }
 };
 
-
-
-/**
- * Runs a query and returns the result or passes the result through one or more channels.
- * @param query The query to run.
- * @returns The result of the query, if singular. Otherwise, returns void.
- */
-export async function queryAsync(query: Query): Promise<any> {
-    return await invoke(query.invokeAction, query.invokeParams)
-    .catch(async (e) => {
-        await message(e, {
-            title: "An error occurred while reading database.",
-            kind: 'error'
-        });
-    });
-}
-
-/**
- * Opens a dialog window.
- * @param dialog The dialog window to open.
- */
-export async function openDialogAsync(dialog: Dialog): Promise<void> {
-    await invoke(dialog.invokeAction, dialog.invokeParams)
-    .catch(async (e) => {
-        await message(e, {
-            title: "An error occurred while opening dialog box.",
-            kind: 'error'
-        });
-    });
-}
-
-/**
- * Closes the current dialog window.
- */
-export async function closeDialogAsync(): Promise<void> {
-    await invoke('dialog_close', {})
-    .catch(async (e) => {
-        await message(e, {
-            title: "An error occurred while closing dialog box.",
-            kind: 'error'
-        });
-    });
-}
-
-
-
 /**
  * Does an action with an impact on the state of the database.
  * @param action The action to perform.
@@ -428,18 +597,4 @@ export async function closeDialogAsync(): Promise<void> {
  */
 export async function executeAsync(action: Action): Promise<void> {
     return await invoke('execute', { action: action });
-}
-
-/**
- * Undoes the last action performed.
- */
-export async function undoAsync() {
-    await invoke('undo', {});
-}
-
-/**
- * Redoes the last action that was undone.
- */
-export async function redoAsync() {
-    await invoke('redo', {});
 }

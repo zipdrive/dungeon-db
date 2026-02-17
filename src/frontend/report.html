@@ -9,7 +9,24 @@
   </head>
 
   <body>
-    <table id="report-content">
-    </table>
+    <div id="page">
+      <table id="report-content">
+      </table>
+    </div>
+    <div id="pagenav-bar">
+      <div>
+        <label for="page-size-input">Rows per Page:</label>
+        <input type="number" id="page-size-input">
+      </div>
+      <div>
+        <img id="first-page-button" src="/src-tauri/icons/first_page.png">
+        <img id="prev-page-button" src="/src-tauri/icons/prev_page.png">
+        <span>
+          Page&nbsp;<input type="number" id="page-num-input">
+        </span>
+        <img id="next-page-button" src="/src-tauri/icons/next_page.png">
+        <img id="last-page-button" src="/src-tauri/icons/last_page.png">
+      </div>
+    </div>
   </body>
 </html>

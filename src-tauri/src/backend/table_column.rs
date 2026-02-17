@@ -1,4 +1,3 @@
-use crate::backend::table_data::trash;
 use crate::backend::{data_type, db, table};
 use crate::util::error;
 use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
@@ -7,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::cell::Ref;
 use std::collections::HashMap;
 use std::sync::mpsc::channel;
-use tauri::ipc::Channel;
+use crate::util::channel::Channel;
 use regex::Regex;
 
 #[derive(Serialize)]
@@ -545,7 +544,7 @@ pub fn reorder(
 }
 
 /// Flags a column as being trash.
-pub fn move_trash(table_oid: i64, column_oid: i64) -> Result<(), error::Error> {
+pub fn trash(table_oid: i64, column_oid: i64) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
@@ -564,7 +563,7 @@ pub fn move_trash(table_oid: i64, column_oid: i64) -> Result<(), error::Error> {
 }
 
 /// Unflags a column as being trash.
-pub fn unmove_trash(table_oid: i64, column_oid: i64) -> Result<(), error::Error> {
+pub fn untrash(table_oid: i64, column_oid: i64) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 

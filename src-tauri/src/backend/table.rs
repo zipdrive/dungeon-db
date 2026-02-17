@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::i32::MAX;
 use std::ops::Index;
-use tauri::ipc::Channel;
+use crate::util::channel::Channel;
 
 /// Creates a new table.
 pub fn create(name: String, master_table_oid_list: &Vec<i64>, column_type: data_type::MetadataColumnType) -> Result<i64, error::Error> {
@@ -391,7 +391,7 @@ fn create_surrogate_view(trans: &Transaction, table_oid: i64) -> Result<(), erro
 }
 
 /// Flags a table as trash.
-pub fn move_trash(table_oid: i64) -> Result<(), error::Error> {
+pub fn trash(table_oid: i64) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
@@ -407,7 +407,7 @@ pub fn move_trash(table_oid: i64) -> Result<(), error::Error> {
 }
 
 /// Unflags a table as trash.
-pub fn unmove_trash(table_oid: i64) -> Result<(), error::Error> {
+pub fn untrash(table_oid: i64) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 
@@ -482,7 +482,7 @@ pub struct Metadata {
 }
 
 /// Gets metadata for a specified table.
-pub fn get_metadata(table_oid: &i64) -> Result<Metadata, error::Error> {
+pub fn get_metadata(table_oid: i64) -> Result<Metadata, error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
 

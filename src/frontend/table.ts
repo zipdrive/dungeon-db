@@ -2,7 +2,7 @@ import { Menu, MenuItem } from "@tauri-apps/api/menu";
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from '@tauri-apps/api/event';
 import { message } from "@tauri-apps/plugin-dialog";
-import { TableCellChannelPacket, TableColumnMetadata, TableRowCellChannelPacket, executeAsync, openDialogAsync, queryAsync } from './backendutils';
+import { TableCellChannelPacket, TableColumnMetadata, TableRowCellChannelPacket, executeAsync, openDialogAsync, queryAsync, queryStreamAsync } from './backendutils';
 import { attachColumnContextMenu, updateTableColumnCell } from "./tableutils";
 import { makeColumnsReorderable, makeColumnsResizable } from "./frontendutils";
 
@@ -54,11 +54,10 @@ if (urlParamTableOid) {
           text: 'Edit Row',
           action: async () => {
             await openDialogAsync({
-              invokeAction: 'dialog_object_data',
-              invokeParams: {
+              object: {
                 tableOid: tableOid,
                 rowOid: rowOid,
-                title: 'Edit Row'
+                objectName: 'Edit Row'
               }
             })
           }
@@ -140,16 +139,14 @@ if (urlParamTableOid) {
     };
 
     // Send a command to Rust to get the list of rows from the database
-    await queryAsync({
-      invokeAction: "get_table_data",
-      invokeParams: {
+    await queryStreamAsync([{
+      tablePageCells: {
         tableOid: tableOid, 
         parentRowOid: parentRowOid,
         pageNum: pageNum,
-        pageSize: pageSize,
-        cellChannel: onReceiveCell 
+        pageSize: pageSize
       }
-    });
+    }, onReceiveCell]);
 
     // Set the scrolling position back to what it was previously
     pageNode.scrollLeft = scrollHorizontalPosition;
@@ -210,13 +207,11 @@ if (urlParamTableOid) {
     };
 
     // Send a command to Rust to get the list of table columns from the database
-    await queryAsync({
-      invokeAction: "get_table_column_list", 
-      invokeParams: {
-        tableOid: tableOid, 
-        columnChannel: onReceiveColumn 
+    await queryStreamAsync([{
+      tableColumns: {
+        tableOid: tableOid
       }
-    });
+    }, onReceiveColumn]);
 
     // Allow columns to be reordered
     if (tableHeaderRowNode) {
@@ -250,8 +245,7 @@ if (urlParamTableOid) {
       tableAddColumnHeaderNode.innerText = 'Add New Column';
       tableAddColumnHeaderNode.addEventListener('click', async (_) => {
         await openDialogAsync({
-          invokeAction: "dialog_create_table_column", 
-          invokeParams: {
+          createTableColumn: {
             tableOid: tableOid,
             columnOrdering: null
           }
@@ -314,16 +308,14 @@ if (urlParamTableOid) {
     };
 
     // Send a command to Rust to get the list of rows from the database
-    await queryAsync({
-      invokeAction: "get_table_data",
-      invokeParams: {
+    await queryStreamAsync([{
+      tablePageCells: {
         tableOid: tableOid, 
         parentRowOid: parentRowOid,
         pageNum: pageNum,
-        pageSize: pageSize,
-        cellChannel: onReceiveCell 
+        pageSize: pageSize
       }
-    });
+    }, onReceiveCell]);
 
     // Make the columns of the table resizable
     makeColumnsResizable(
@@ -387,14 +379,12 @@ if (urlParamTableOid) {
     };
 
     // Send a command to Rust to get the list of rows from the database
-    await queryAsync({
-      invokeAction: "get_table_row", 
-      invokeParams: {
+    await queryStreamAsync([{
+      tableRowCells: {
         tableOid: tableOid, 
-        rowOid: rowOid, 
-        cellChannel: onReceiveCell 
+        rowOid: rowOid
       }
-    });
+    }, onReceiveCell]);
   }
 
 

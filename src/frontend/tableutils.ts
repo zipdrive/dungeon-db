@@ -1,6 +1,6 @@
 import { Menu, MenuItem } from "@tauri-apps/api/menu";
 import { message, save, open } from "@tauri-apps/plugin-dialog";
-import { DropdownValue, TableColumnCell, executeAsync, openDialogAsync, queryAsync } from './backendutils';
+import { DropdownValue, TableColumnCell, executeAsync, openDialogAsync, queryAsync, queryStreamAsync } from './backendutils';
 import { Channel } from "@tauri-apps/api/core";
 import { fileTypeFromBlob, fileTypeFromBuffer, FileTypeResult } from "file-type";
 
@@ -15,8 +15,7 @@ export async function attachColumnContextMenu(tableHeaderNode: HTMLElement, tabl
         text: 'Insert New Column',
         action: async () => {
           await openDialogAsync({
-            invokeAction: 'dialog_create_table_column',
-            invokeParams: {
+            createTableColumn: {
               tableOid: tableOid,
               columnOrdering: columnOrdering
             }
@@ -27,8 +26,7 @@ export async function attachColumnContextMenu(tableHeaderNode: HTMLElement, tabl
         text: 'Edit Column',
         action: async () => {
           await openDialogAsync({
-            invokeAction: 'dialog_edit_table_column',
-            invokeParams: {
+            editTableColumnMetadata: {
               tableOid: tableOid,
               columnOid: columnOid
             }
@@ -458,13 +456,11 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
       optionNode.innerText = dropdownValue.displayValue ?? '';
       selectNode.insertAdjacentElement('beforeend', optionNode);
     };
-    await queryAsync({
-      invokeAction: 'get_table_column_dropdown_values',
-      invokeParams: {
-        columnOid: columnOid,
-        dropdownValueChannel: onReceiveDropdownValue
+    await queryStreamAsync([{
+      tableColumnDropdownValues: {
+        columnOid: columnOid
       }
-    })
+    }, onReceiveDropdownValue])
     .catch(async (e) => {
       await message(e, {
         title: 'An error occurred while retrieving dropdown values from database.',
@@ -526,13 +522,11 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
       labelNode.innerHTML = `<input type="checkbox" value="${dropdownValue.trueValue}" ${(dropdownValue.trueValue && selectedOidList.includes(dropdownValue.trueValue) ? 'checked' : '')}>${labelNode.innerHTML}`;
       multiselectNode.appendChild(labelNode);
     };
-    await queryAsync({
-      invokeAction: 'get_table_column_dropdown_values',
-      invokeParams: {
-        columnOid: columnOid,
-        dropdownValueChannel: onReceiveDropdownValue
+    await queryStreamAsync([{
+      tableColumnDropdownValues: {
+        columnOid: columnOid
       }
-    })
+    }, onReceiveDropdownValue])
     .catch(async (e) => {
       await message(e, {
         title: 'An error occurred while retrieving dropdown values from database.',
@@ -587,11 +581,10 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
       if (objectRowOid) {
         // Open existing object
         openDialogAsync({
-          invokeAction: 'dialog_object_data',
-          invokeParams: {
+          object: {
             tableOid: objectTableOid,
             rowOid: objectRowOid,
-            title: cell.columnName
+            objectName: cell.columnName
           }
         });
       } else {
@@ -628,8 +621,7 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
     // Add event listener to open the table when double-clicked
     function openChildTable() {
       openDialogAsync({
-        invokeAction: 'dialog_child_table_data',
-        invokeParams: {
+        childTable: {
           tableOid: childTableOid,
           parentRowOid: rowOid,
           tableName: cell.columnName

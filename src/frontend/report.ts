@@ -2,8 +2,8 @@ import { Menu, MenuItem } from "@tauri-apps/api/menu";
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from '@tauri-apps/api/event';
 import { message } from "@tauri-apps/plugin-dialog";
-import { TableCellChannelPacket, TableColumnMetadata, TableRowCellChannelPacket, executeAsync, openDialogAsync, queryAsync } from './backendutils';
-import { addTableColumnCellToRow } from "./tableutils";
+import { ReportCellChannelPacket, ReportColumnMetadata, ReportRowCellChannelPacket, executeAsync, openDialogAsync, queryAsync, queryStreamAsync } from './backendutils';
+import { updateTableColumnCell } from "./tableutils";
 
 const urlParams = new URLSearchParams(window.location.search);
 const urlParamReportOid = urlParams.get('report_oid');
@@ -27,7 +27,7 @@ if (urlParamReportOid) {
    */
   function addRowToTable(tableBodyNode: HTMLElement, rowOid: number, rowIndex: number): HTMLTableRowElement {
     let tableRowNode: HTMLTableRowElement = document.createElement('tr');
-    tableRowNode.id = `table-content-row-${rowOid}`;
+    tableRowNode.id = `report-content-row-${rowOid}`;
     let tableRowIndexNode = document.createElement('td');
     tableRowIndexNode.style.position = 'sticky';
     tableRowIndexNode.style.left = '0';
@@ -46,28 +46,11 @@ if (urlParamReportOid) {
 
       const contextMenuItems = await Promise.all([
         MenuItem.new({
-          text: 'Insert New Row',
-          action: async () => {
-            await executeAsync({
-              insertTableRow: {
-                tableOid: reportOid,
-                rowOid: rowOid
-              }
-            })
-            .catch(async e => {
-              await message(e, {
-                title: 'Error while inserting row into table.',
-                kind: 'error'
-              });
-            });
-          }
-        }),
-        MenuItem.new({
           text: 'Delete Row',
           action: async () => {
             await executeAsync({
               deleteTableRow: {
-                tableOid: reportOid,
+                tableOid: reportOid, // TODO
                 rowOid: rowOid
               }
             })
@@ -100,37 +83,50 @@ if (urlParamReportOid) {
    * Displays the data for a table.
    * @param tableOid The OID of the table.
    */
-  async function refreshTableAsync() {
+  async function refreshReportAsync() {
     // Strip the former contents of the table
-    let tableNode: HTMLTableElement | null = document.querySelector('#table-content');
+    let tableNode: HTMLTableElement | null = document.querySelector('#report-content');
     if (tableNode)
       tableNode.innerHTML = '<colgroup><col span="1" style="width: 2em;"><col span="1"></colgroup><tbody></tbody><thead><tr><th colspan="2" style="position: sticky; left: 0px; z-index: 1;"></th></tr></thead><tfoot><tr></tr></tfoot>';
-    let tableColgroupNode: HTMLElement | null = document.querySelector('#table-content > colgroup');
-    let tableHeaderRowNode: HTMLTableRowElement | null = document.querySelector('#table-content > thead > tr');
-    let tableBodyNode: HTMLElement | null = document.querySelector('#table-content > tbody');
+    let reportColgroupNode: HTMLElement | null = document.querySelector('#report-content > colgroup');
+    let reportHeaderRowNode: HTMLTableRowElement | null = document.querySelector('#report-content > thead > tr');
+    let reportBodyNode: HTMLElement | null = document.querySelector('#report-content > tbody');
 
     // Set up a channel to populate the list of user-defined columns
-    let tableColumnList: TableColumnMetadata[] = []
-    const onReceiveColumn = new Channel<TableColumnMetadata>();
+    let reportColumnList: ReportColumnMetadata[] = []
+    const onReceiveColumn = new Channel<ReportColumnMetadata>();
     onReceiveColumn.onmessage = (column) => {
+      let columnOid: number;
+      let columnOrdering: number;
+      let columnName: string;
+      let columnStyle: string;
+      if ('formula' in column) {
+        columnOid = column.formula.oid;
+        columnOrdering = column.formula.columnOrdering;
+        columnName = column.formula.name;
+        columnStyle = column.formula.columnStyle;
+      } else {
+        columnOid = column.subreport.oid;
+        columnOrdering = column.subreport.columnOrdering;
+        columnName = column.subreport.name;
+        columnStyle = column.subreport.columnStyle;
+      }
       // Add the column to the list of columns
-      const columnOid = column.oid;
-      const columnOrdering = column.columnOrdering;
-      tableColumnList.push(column);
+      reportColumnList.push(column);
 
       // Add a header for the column
-      let tableHeaderNode: HTMLElement | null = document.createElement('th');
-      if (tableHeaderNode != null) {
-        let tableColNode: HTMLElement = document.createElement('col');
-        tableColNode.setAttribute('span', '1');
-        tableColNode.setAttribute('style', column.columnStyle);
-        tableColgroupNode?.insertAdjacentElement('beforeend', tableColNode);
+      let reportHeaderNode: HTMLElement | null = document.createElement('th');
+      if (reportHeaderNode != null) {
+        let reportColNode: HTMLElement = document.createElement('col');
+        reportColNode.setAttribute('span', '1');
+        reportColNode.setAttribute('style', columnStyle);
+        reportColgroupNode?.appendChild(reportColNode);
 
-        tableHeaderNode.innerText = column.name;
-        tableHeaderRowNode?.insertAdjacentElement('beforeend', tableHeaderNode);
+        reportHeaderNode.innerText = columnName;
+        reportHeaderRowNode?.appendChild(reportHeaderNode);
 
         // Add listener to pull up context menu
-        tableHeaderNode.addEventListener('contextmenu', async (e) => {
+        reportHeaderNode.addEventListener('contextmenu', async (e) => {
           e.preventDefault();
           e.returnValue = false;
 
@@ -139,9 +135,8 @@ if (urlParamReportOid) {
               text: 'Insert New Column',
               action: async () => {
                 await openDialogAsync({
-                  invokeAction: 'dialog_create_table_column',
-                  invokeParams: {
-                    tableOid: reportOid,
+                  createReportColumn: {
+                    reportOid: reportOid,
                     columnOrdering: columnOrdering
                   }
                 });
@@ -151,9 +146,8 @@ if (urlParamReportOid) {
               text: 'Edit Column',
               action: async () => {
                 await openDialogAsync({
-                  invokeAction: 'dialog_edit_table_column',
-                  invokeParams: {
-                    tableOid: reportOid,
+                  editReportColumnMetadata: {
+                    reportOid: reportOid,
                     columnOid: columnOid
                   }
                 });
@@ -163,8 +157,8 @@ if (urlParamReportOid) {
               text: 'Delete Column',
               action: async () => {
                 await executeAsync({
-                  deleteTableColumn: {
-                    tableOid: reportOid,
+                  deleteReportColumn: {
+                    reportOid: reportOid,
                     columnOid: columnOid
                   }
                 });
@@ -177,7 +171,7 @@ if (urlParamReportOid) {
           await contextMenu.popup()
             .catch(async e => {
               await message(e, {
-                title: 'Error while displaying context menu for table column.',
+                title: 'Error while displaying context menu for report column.',
                 kind: 'error'
               });
             });
@@ -186,13 +180,11 @@ if (urlParamReportOid) {
     };
 
     // Send a command to Rust to get the list of table columns from the database
-    await queryAsync({
-      invokeAction: "get_table_column_list", 
-      invokeParams: {
-        tableOid: reportOid, 
-        columnChannel: onReceiveColumn 
+    await queryStreamAsync([{
+      reportColumns: {
+        reportOid: reportOid
       }
-    });
+    }, onReceiveColumn]);
 
     // Add a final column header that is a button to add a new column
     let tableAddColumnHeaderNode = document.createElement('th');
@@ -201,28 +193,29 @@ if (urlParamReportOid) {
       tableAddColumnHeaderNode.innerText = 'Add New Column';
       tableAddColumnHeaderNode.addEventListener('click', async (_) => {
         await openDialogAsync({
-          invokeAction: "dialog_create_table_column", 
-          invokeParams: {
-            tableOid: reportOid,
+          createReportColumn: {
+            reportOid: reportOid,
             columnOrdering: null
           }
         });
       });
-      tableHeaderRowNode?.insertAdjacentElement('beforeend', tableAddColumnHeaderNode);
+      reportHeaderRowNode?.appendChild(tableAddColumnHeaderNode);
     }
 
     // Set the span of the footer
-    let tableFooterRowNode: HTMLElement | null = document.querySelector('#table-content > tfoot > tr');
+    let tableFooterRowNode: HTMLElement | null = document.querySelector('#report-content > tfoot > tr');
     let tableFooterCellNode = document.createElement('td');
     tableFooterCellNode.id = 'add-new-row-button';
     tableFooterCellNode.innerHTML = '<div style="position: sticky; left: 0; right: 0;">Add New Row</div>';
     // Set the footer to span the entire row
-    tableFooterCellNode.setAttribute('colspan', (tableColumnList.length + 3).toString());
+    tableFooterCellNode.setAttribute('colspan', (reportColumnList.length + 3).toString());
     // Set what it should do on click
     tableFooterCellNode.addEventListener('click', async (_) => {
+      // TODO push a row into the base table
+      /*
       await executeAsync({
         pushTableRow: {
-          tableOid: reportOid 
+          tableOid: reportOid
         }
       })
       .catch(async (e) => {
@@ -231,117 +224,92 @@ if (urlParamReportOid) {
           kind: 'error'
         });
       });
+      */
     });
-    tableFooterRowNode?.insertAdjacentElement('beforeend', tableFooterCellNode);
+    tableFooterRowNode?.appendChild(tableFooterCellNode);
 
     // Set up a channel to populate the rows of the table
-    const onReceiveCell = new Channel<TableCellChannelPacket>();
+    const onReceiveCell = new Channel<ReportCellChannelPacket>();
     let currentRowNode: HTMLTableRowElement | null = null;
     let currentRowOid: number | null = null;
     onReceiveCell.onmessage = (cell) => {
-      if ('rowOid' in cell) {
+      if ('rowStart' in cell) {
         // New row
-        const rowOid = cell.rowOid;
-        const rowIndex = cell.rowIndex;
+        const rowOid = cell.rowStart.rowOid;
+        const rowIndex = cell.rowStart.rowIndex;
         currentRowOid = rowOid;
-        if (tableBodyNode) {
-          currentRowNode = addRowToTable(tableBodyNode, rowOid, rowIndex);
+        if (reportBodyNode) {
+          currentRowNode = addRowToTable(reportBodyNode, rowOid, rowIndex);
+        }
+      } else if ('columnValue' in cell) {
+        // Add editable cell to current row
+        if (currentRowNode) {
+          let tableCellNode: HTMLTableCellElement = document.createElement('td');
+          tableCellNode.id = `table-content-column${cell.columnValue.columnOid}-row${cell.columnValue.rowOid}`;
+          tableCellNode.classList.add(`table-content-column${cell.columnValue.columnOid}`);
+          tableCellNode.classList.add('resizable-column');
+          tableCellNode.dataset.tableOid = cell.columnValue.tableOid.toString();
+          tableCellNode.dataset.columnOid = cell.columnValue.columnOid.toString();
+          tableCellNode.dataset.rowOid = cell.columnValue.rowOid.toString();
+          currentRowNode.appendChild(tableCellNode);
+
+          // Insert an input into the td element
+          updateTableColumnCell(tableCellNode, cell.columnValue, true);
+        }
+      } else if ('readOnlyValue' in cell) {
+        // Add readonly cell to current row
+        if (currentRowNode) {
+          let readOnlyNode: HTMLTableCellElement = document.createElement('td');
+          readOnlyNode.id = `report-content-column-row`;
+          readOnlyNode.classList.add('cell-readonly');
+          readOnlyNode.classList.add('resizable-column');
+          readOnlyNode.innerText = cell.readOnlyValue.displayValue ?? '';
+          currentRowNode.appendChild(readOnlyNode);
         }
       } else {
-        // Add cell to current row
-        if (currentRowNode && currentRowOid) {
-          // Get current row and column OID
-          addTableColumnCellToRow(currentRowNode, reportOid, currentRowOid, cell);
+        // Add subreport link to cell
+        if (currentRowNode) {
+          let subreportNode: HTMLTableCellElement = document.createElement('td');
+          subreportNode.id = `report-content-column-row`;
+          subreportNode.classList.add('clickable-text');
+          subreportNode.classList.add('resizable-column');
+          subreportNode.innerText = 'Subreport';
+          currentRowNode.appendChild(subreportNode);
+
+          // Open the subreport when clicked
+          subreportNode.addEventListener('click', async (_) => {
+            await openDialogAsync({
+              report: {
+                reportOid: cell.subreport.subreportOid,
+                reportName: ''
+              }
+            })
+            .catch(async (e) => {
+              await message(e, {
+                title: 'An error occurred while opening subreport.',
+                kind: 'error'
+              });
+            });
+          });
         }
       }
     };
 
     // Send a command to Rust to get the list of rows from the database
-    await queryAsync({
-      invokeAction: "get_table_data",
-      invokeParams: {
-        tableOid: reportOid, 
+    await queryStreamAsync([{
+      reportPageCells: {
+        reportOid: reportOid, 
+        parentRowOid: null, // TODO
         pageNum: pageNum,
-        pageSize: pageSize,
-        cellChannel: onReceiveCell 
+        pageSize: pageSize
       }
-    });
-  }
-
-  /**
-   * Updates a single row of the current table.
-   * @param tableOid 
-   * @param rowOid 
-   * @returns 
-   */
-  async function updateRowAsync(rowOid: number) {
-    let tableRowNode: HTMLTableRowElement | null = document.getElementById(`table-content-row-${rowOid}`) as HTMLTableRowElement;
-
-    // Set up a channel to populate the columns of the table
-    const onReceiveCell = new Channel<TableRowCellChannelPacket>();
-    onReceiveCell.onmessage = (cell) => {
-      if ('rowExists' in cell) {
-        if (cell.rowExists) {
-          if (tableRowNode) {
-            // Clear all columns from row, other than Index
-            while (tableRowNode.lastElementChild && tableRowNode.childElementCount > 1) {
-              tableRowNode.removeChild(tableRowNode.lastElementChild);
-            }
-          } else {
-            let tableBodyNode: HTMLElement | null = document.querySelector('#table-content > tbody');
-            if (tableBodyNode) {
-              // Insert new row at end of table
-              tableRowNode = addRowToTable(tableBodyNode, rowOid, Infinity);
-
-              // Rearrange rows so that it is in the correct position
-              // TODO
-            }
-          }
-        } else {
-          // Delete row
-          tableRowNode?.remove();
-          tableRowNode = null;
-        }
-      } else {
-        // Add cell to current row
-        if (tableRowNode) {
-          addTableColumnCellToRow(tableRowNode, reportOid, rowOid, cell);
-        }
-      }
-    };
-
-    // Send a command to Rust to get the list of rows from the database
-    await queryAsync({
-      invokeAction: "get_table_row", 
-      invokeParams: {
-        tableOid: reportOid, 
-        rowOid: rowOid, 
-        cellChannel: onReceiveCell 
-      }
-    });
+    }, onReceiveCell]);
   }
 
 
   // Add initial listeners
   window.addEventListener("DOMContentLoaded", async () => {
-    refreshTableAsync();
+    refreshReportAsync();
   });
-
-  /*
-  listen<number>("update-table-data", (e) => {
-    navigator.locks.request('table-content', async () => {
-      if (e.payload == tableOid) {
-        await refreshTableAsync();
-      }
-    });
-  });
-  listen<[number, number]>("update-report-row", (e) => {
-    const updateTableOid = e.payload[0];
-    const updateRowOid = e.payload[1];
-    if (updateTableOid == tableOid) {
-      navigator.locks.request('report-content', async () => await updateRowAsync(updateRowOid));
-    }
-  });
-  */
 
 }

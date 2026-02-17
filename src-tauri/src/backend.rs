@@ -3,17 +3,17 @@ mod db;
 mod obj_type;
 mod report;
 mod report_column;
+mod report_parameter;
 mod report_data;
 mod table;
 mod table_column;
 mod table_data;
 use crate::util::error;
-use serde::{Deserialize, Serialize};
+use crate::util::channel::Channel;
+use serde::{Deserialize};
 use std::sync::Mutex;
-use tauri::ipc::{Channel, InvokeError};
-use tauri::menu::{ContextMenu, Menu, MenuBuilder, MenuItem};
-use tauri::{AppHandle, Emitter, Manager, PhysicalSize, Size, WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri::ipc::{Channel as TauriChannel};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -84,15 +84,20 @@ pub enum Action {
         is_primary_key: bool,
         dropdown_values: Option<Vec<table_column::DropdownValue>>
     },
+    EditTableColumnWidth {
+        table_oid: i64,
+        column_oid: i64,
+        column_width: i64,
+    },
     RestoreEditedTableColumnMetadata {
         table_oid: i64,
         column_oid: i64,
         prior_metadata_column_oid: i64,
     },
-    EditTableColumnWidth {
+    EditTableColumnDropdownValues {
         table_oid: i64,
         column_oid: i64,
-        column_width: i64,
+        dropdown_values: Vec<table_column::DropdownValue>,
     },
     ReorderTableColumn {
         table_oid: i64,
@@ -100,17 +105,63 @@ pub enum Action {
         old_column_ordering: i64,
         new_column_ordering: Option<i64>,
     },
-    EditTableColumnDropdownValues {
-        table_oid: i64,
-        column_oid: i64,
-        dropdown_values: Vec<table_column::DropdownValue>,
-    },
     DeleteTableColumn {
         table_oid: i64,
         column_oid: i64,
     },
     RestoreDeletedTableColumn {
         table_oid: i64,
+        column_oid: i64,
+    },
+    CreateReportFormulaColumn {
+        report_oid: i64,
+        column_name: String,
+        column_ordering: Option<i64>,
+        column_style: String,
+        formula: String
+    },
+    EditReportFormulaColumnMetadata {
+        report_oid: i64,
+        column_oid: i64,
+        column_name: String,
+        column_style: String,
+        formula: String
+    },
+    CreateReportSubreportColumn {
+        report_oid: i64,
+        column_name: String,
+        column_ordering: Option<i64>,
+        column_style: String,
+        base_parameter_oid: i64
+    },
+    EditReportSubreportColumnMetadata {
+        report_oid: i64,
+        column_oid: i64,
+        column_name: String,
+        column_style: String
+    },
+    EditReportColumnWidth {
+        report_oid: i64,
+        column_oid: i64,
+        column_width: i64,
+    },
+    RestoreEditedReportColumnMetadata {
+        report_oid: i64,
+        column_oid: i64,
+        prior_metadata_column_oid: i64,
+    },
+    ReorderReportColumn {
+        report_oid: i64,
+        column_oid: i64,
+        old_column_ordering: i64,
+        new_column_ordering: Option<i64>,
+    },
+    DeleteReportColumn {
+        report_oid: i64,
+        column_oid: i64,
+    },
+    RestoreDeletedReportColumn {
+        report_oid: i64,
         column_oid: i64,
     },
     PushTableRow {
@@ -206,14 +257,14 @@ impl Action {
                 msg_update_table_list(app);
             },
             Self::DeleteTable { table_oid } => {
-                table::move_trash(table_oid.clone())?;
+                table::trash(table_oid.clone())?;
                 record_action(Self::RestoreDeletedTable {
                     table_oid: table_oid.clone(),
                 }, is_forward);
                 msg_update_table_list(app);
             },
             Self::RestoreDeletedTable { table_oid } => {
-                table::unmove_trash(table_oid.clone())?;
+                table::untrash(table_oid.clone())?;
                 record_action(Self::DeleteTable {
                     table_oid: table_oid.clone(),
                 }, is_forward);
@@ -271,14 +322,14 @@ impl Action {
                 msg_update_obj_type_list(app);
             },
             Self::DeleteObjectType { obj_type_oid } => {
-                table::move_trash(obj_type_oid.clone())?;
+                table::trash(obj_type_oid.clone())?;
                 record_action(Self::RestoreDeletedObjectType {
                     obj_type_oid: obj_type_oid.clone(),
                 }, is_forward);
                 msg_update_obj_type_list(app);
             }
             Self::RestoreDeletedObjectType { obj_type_oid } => {
-                table::unmove_trash(obj_type_oid.clone())?;
+                table::untrash(obj_type_oid.clone())?;
                 record_action(Self::DeleteObjectType {
                     obj_type_oid: obj_type_oid.clone(),
                 }, is_forward);
@@ -399,7 +450,7 @@ impl Action {
                 table_oid,
                 column_oid,
             } => {
-                table_column::move_trash(table_oid.clone(), column_oid.clone())?;
+                table_column::trash(table_oid.clone(), column_oid.clone())?;
                 record_action(Self::RestoreDeletedTableColumn {
                     table_oid: table_oid.clone(),
                     column_oid: column_oid.clone(),
@@ -410,12 +461,40 @@ impl Action {
                 table_oid,
                 column_oid,
             } => {
-                table_column::unmove_trash(table_oid.clone(), column_oid.clone())?;
+                table_column::untrash(table_oid.clone(), column_oid.clone())?;
                 record_action(Self::DeleteTableColumn {
                     table_oid: table_oid.clone(),
                     column_oid: column_oid.clone(),
                 }, is_forward);
                 msg_update_table_data_deep(app, table_oid.clone());
+            },
+            Self::CreateReportFormulaColumn { report_oid, column_name, column_ordering, column_style, formula } => {
+                let column_oid = report_column::create_formula(
+                    report_oid.clone(),
+                    &column_name, 
+                    column_ordering.clone(), 
+                    &column_style, 
+                    &formula
+                )?;
+                record_action(Self::DeleteReportColumn { 
+                    report_oid: report_oid.clone(), 
+                    column_oid: column_oid.clone()
+                }, is_forward);
+                msg_update_report_data_deep(app, report_oid.clone());
+            },
+            Self::CreateReportSubreportColumn { report_oid, column_name, column_ordering, column_style, base_parameter_oid } => {
+                let column_oid = report_column::create_subreport(
+                    report_oid.clone(),
+                    &column_name, 
+                    column_ordering.clone(), 
+                    &column_style, 
+                    base_parameter_oid.clone()
+                )?;
+                record_action(Self::DeleteReportColumn { 
+                    report_oid: report_oid.clone(), 
+                    column_oid: column_oid.clone()
+                }, is_forward);
+                msg_update_report_data_deep(app, report_oid.clone());
             },
             Self::PushTableRow { table_oid, parent_row_oid } => {
                 let row_oid = table_data::push(table_oid.clone(), parent_row_oid.clone())?;
@@ -602,11 +681,328 @@ impl Action {
     }
 }
 
+
+#[derive(Deserialize)]
+pub enum Dialog {
+    CreateTable,
+    EditTableMetadata {
+        table_oid: i64 
+    },
+    CreateReport,
+    EditReportMetadata {
+        report_oid: i64 
+    },
+    CreateObjectType,
+    EditObjectTypeMetadata {
+        obj_type_oid: i64 
+    },
+    CreateTableColumn {
+        table_oid: i64,
+        column_ordering: Option<i64>
+    },
+    EditTableColumnMetadata {
+        table_oid: i64,
+        column_oid: i64 
+    },
+    CreateReportColumn {
+        report_oid: i64,
+        column_ordering: Option<i64>
+    },
+    EditReportColumnMetadata {
+        report_oid: i64,
+        column_oid: i64 
+    },
+    Table {
+        table_oid: i64,
+        table_name: String
+    },
+    ChildTable {
+        table_oid: i64,
+        parent_row_oid: i64,
+        table_name: String
+    },
+    TableObject {
+        table_oid: i64,
+        row_oid: i64,
+        title: String
+    },
+    Report {
+        report_oid: i64,
+        report_name: String
+    }
+}
+
+impl Dialog {
+    pub async fn open(&self, app: &AppHandle) -> Result<(), error::Error> {
+        let label: String = format!("window{}", app.webview_windows().len());
+        match &self {
+            Self::CreateTable => {
+                WebviewWindowBuilder::new(app, label,
+                    WebviewUrl::App("/src/frontend/dialogTableMetadata.html?mode=table".into()),
+                )
+                .title("Create New Table")
+                .inner_size(400.0, 250.0)
+                .maximizable(false)
+                .build()?;
+            },
+            Self::EditTableMetadata { table_oid } => {
+                WebviewWindowBuilder::new(app, label,
+                    WebviewUrl::App(format!("/src/frontend/dialogTableMetadata.html?table_oid={table_oid}&mode=table").into()),
+                )
+                .title("Edit Table")
+                .inner_size(400.0, 250.0)
+                .maximizable(false)
+                .build()?;
+            },
+            Self::CreateReport => {
+                WebviewWindowBuilder::new(app, label,
+                    WebviewUrl::App("/src/frontend/dialogReportMetadata.html".into()),
+                )
+                .title("Create New Report")
+                .inner_size(400.0, 250.0)
+                .maximizable(false)
+                .build()?;
+            },
+            Self::EditReportMetadata { report_oid } => {
+                WebviewWindowBuilder::new(app, label,
+                    WebviewUrl::App(format!("/src/frontend/dialogReportMetadata.html?report_oid={report_oid}").into()),
+                )
+                .title("Edit Report")
+                .inner_size(400.0, 250.0)
+                .maximizable(false)
+                .build()?;
+            },
+            Self::CreateObjectType => {
+                WebviewWindowBuilder::new(app, label,
+                    WebviewUrl::App("/src/frontend/dialogTableMetadata.html?mode=obj_type".into()),
+                )
+                .title("Create New Object Type")
+                .inner_size(400.0, 250.0)
+                .maximizable(false)
+                .build()?;
+            },
+            Self::EditObjectTypeMetadata { obj_type_oid } => {
+                WebviewWindowBuilder::new(app, label,
+                    WebviewUrl::App(format!("/src/frontend/dialogTableMetadata.html?table_oid={obj_type_oid}&mode=obj_type").into()),
+                )
+                .title("Edit Object Type")
+                .inner_size(400.0, 250.0)
+                .maximizable(false)
+                .build()?;
+            },
+            Self::CreateTableColumn { table_oid, column_ordering } => {
+                WebviewWindowBuilder::new(app, label,
+                    WebviewUrl::App(
+                        format!(
+                            "/src/frontend/dialogTableColumnMetadata.html?table_oid={table_oid}{}",
+                            match column_ordering {
+                                Some(o) => format!("&column_ordering={o}"),
+                                None => String::from(""),
+                            }
+                        )
+                        .into(),
+                    ),
+                )
+                .title("Add New Column")
+                .inner_size(400.0, 200.0)
+                .maximizable(false)
+                .build()?;
+            },
+            Self::EditTableColumnMetadata { table_oid, column_oid } => {
+                WebviewWindowBuilder::new(app, label,
+                    WebviewUrl::App(format!("/src/frontend/dialogTableColumnMetadata.html?table_oid={table_oid}&column_oid={column_oid}").into()),
+                )
+                .title("Edit Column")
+                .inner_size(400.0, 200.0)
+                .maximizable(false)
+                .build()?;
+            },
+            Self::CreateReportColumn { report_oid, column_ordering } => {
+                WebviewWindowBuilder::new(app, label,
+                    WebviewUrl::App(
+                        format!(
+                            "/src/frontend/dialogReportColumnMetadata.html?report_oid={report_oid}{}",
+                            match column_ordering {
+                                Some(o) => format!("&column_ordering={o}"),
+                                None => String::from(""),
+                            }
+                        )
+                        .into(),
+                    ),
+                )
+                .title("Add New Column")
+                .inner_size(400.0, 200.0)
+                .maximizable(false)
+                .build()?;
+            },
+            Self::EditReportColumnMetadata { report_oid, column_oid } => {
+                WebviewWindowBuilder::new(app, label,
+                    WebviewUrl::App(format!("/src/frontend/dialogReportColumnMetadata.html?report_oid={report_oid}&column_oid={column_oid}").into()),
+                )
+                .title("Edit Column")
+                .inner_size(400.0, 200.0)
+                .maximizable(false)
+                .build()?;
+            },
+            Self::Table { table_oid, table_name } => {
+                WebviewWindowBuilder::new(app, label,
+                    WebviewUrl::App(format!("/src/frontend/table.html?table_oid={table_oid}").into()),
+                )
+                .title(&*table_name)
+                .inner_size(800.0, 600.0)
+                .build()?;
+            },
+            Self::ChildTable { table_oid, parent_row_oid, table_name } => {
+                WebviewWindowBuilder::new(app, label,
+                    WebviewUrl::App(
+                        format!(
+                            "/src/frontend/table.html?table_oid={table_oid}&parent_row_oid={parent_row_oid}"
+                        )
+                        .into(),
+                    ),
+                )
+                .title(&*table_name)
+                .inner_size(800.0, 600.0)
+                .build()?;
+            },
+            Self::TableObject { table_oid, row_oid, title } => {
+                WebviewWindowBuilder::new(app, label,
+                    WebviewUrl::App(
+                        format!("/src/frontend/table_object.html?table_oid={table_oid}&obj_oid={row_oid}")
+                            .into(),
+                    ),
+                )
+                .title(&*title)
+                .inner_size(800.0, 600.0)
+                .build()?;
+            },
+            Self::Report { report_oid, report_name } => {
+                WebviewWindowBuilder::new(app, label,
+                    WebviewUrl::App(format!("/src/frontend/report.html?report_oid={report_oid}").into()),
+                )
+                .title(&*report_name)
+                .inner_size(800.0, 600.0)
+                .build()?;
+            }
+        }
+        return Ok(());
+    }
+}
+
+#[tauri::command]
+/// Open a separate window for the contents of a report.
+pub async fn dialog_open(app: AppHandle, dialog: Dialog) -> Result<(), error::Error> {
+    return dialog.open(&app).await;
+}
+
+#[tauri::command]
+/// Closes the current dialog window.
+pub fn dialog_close(window: tauri::Window) -> Result<(), error::Error> {
+    window.close()?;
+    return Ok(());
+}
+
+
+#[derive(Deserialize)]
+pub enum QueryStream {
+    Tables,
+    Reports,
+    ObjectTypes,
+    MasterLists {
+        table_oid: Option<i64>,
+        allow_inheritance_from_tables: bool
+    },
+    ReferenceColumnTypes,
+    ObjectColumnTypes,
+    ObjectSubtypes {
+        table_oid: i64
+    },
+    ReportParameters {
+        base_table_oid: i64
+    },
+    TableColumns {
+        table_oid: i64
+    },
+    TableColumnDropdownValues {
+        column_oid: i64
+    },
+    TablePageCells {
+        table_oid: i64,
+        parent_row_oid: Option<i64>,
+        page_num: i64,
+        page_size: i64
+    },
+    TableRowCells {
+        table_oid: i64,
+        row_oid: i64
+    },
+    TableObjectCells {
+        table_oid: i64,
+        row_oid: i64
+    },
+    ReportColumns {
+        report_oid: i64
+    }
+}
+
+impl QueryStream {
+    /// Sends data through a channel from the database to the frontend.
+    pub fn send(&self, channel: &TauriChannel) -> Result<(), error::Error> {
+        match &self {
+            Self::Tables => 
+                table::send_metadata_list(Channel::new(channel)),
+            Self::Reports => 
+                report::send_metadata_list(Channel::new(channel)),
+            Self::ObjectTypes => 
+                obj_type::send_metadata_list(None, Channel::new(channel)),
+
+            Self::MasterLists { table_oid, allow_inheritance_from_tables } => 
+                table::send_master_list_options(table_oid.clone(), allow_inheritance_from_tables.clone(), Channel::new(channel)),
+
+            Self::ReferenceColumnTypes =>
+                table_column::send_type_metadata_list(data_type::MetadataColumnType::Reference(0), Channel::new(channel)),
+            Self::ObjectColumnTypes =>
+                table_column::send_type_metadata_list(data_type::MetadataColumnType::ChildObject(0), Channel::new(channel)),
+
+            Self::ObjectSubtypes { table_oid } =>
+                obj_type::send_metadata_list(Some(table_oid.clone()), Channel::new(channel)),
+
+            Self::ReportParameters { base_table_oid } =>
+                report_parameter::send_parameter_list(base_table_oid.clone(), Channel::new(channel)),
+
+            Self::TableColumns { table_oid } => 
+                table_column::send_metadata_list(table_oid.clone(), Channel::new(channel)),
+            Self::TableColumnDropdownValues { column_oid } => 
+                table_column::send_table_column_dropdown_values(column_oid.clone(), Channel::new(channel)),
+
+            Self::ReportColumns { report_oid } => 
+                report_column::send_metadata_list(report_oid.clone(), Channel::new(channel)),
+
+            Self::TablePageCells { table_oid, parent_row_oid, page_num, page_size } =>
+                table_data::send_table_data(table_oid.clone(), parent_row_oid.clone(), page_num.clone(), page_size.clone(), Channel::new(channel)),
+            Self::TableRowCells { table_oid, row_oid } =>
+                table_data::send_table_row(table_oid.clone(), row_oid.clone(), Channel::new(channel)),
+            Self::TableObjectCells { table_oid, row_oid } =>
+                obj_type::send_obj_data(table_oid.clone(), row_oid.clone(), Channel::new(channel)),
+        }
+    }
+}
+
+#[tauri::command]
+/// Sends data through a channel from the backend to the frontend.
+pub fn query(query: QueryStream, channel: TauriChannel) -> Result<(), error::Error> {
+    query.send(&channel)
+}
+
+
+
 #[tauri::command]
 /// Initialize a connection to a StaticDB database file.
 pub fn init(path: String) -> Result<(), error::Error> {
     return db::init(path);
 }
+
+
 
 /// Sends a message to the frontend that the list of tables needs to be updated.
 fn msg_update_table_list(app: &AppHandle) {
@@ -638,401 +1034,39 @@ fn msg_update_table_row(app: &AppHandle, table_oid: i64, row_oid: i64) {
     app.emit("update-table-row", (table_oid, row_oid)).unwrap();
 }
 
-#[tauri::command]
-/// Pull up a dialog window for creating a new table.
-pub async fn dialog_create_table(app: AppHandle) -> Result<(), error::Error> {
-    let window_idx = app.webview_windows().len();
-    WebviewWindowBuilder::new(
-        &app,
-        format!("tableMetadataWindow-{window_idx}"),
-        WebviewUrl::App("/src/frontend/dialogTableMetadata.html?mode=3".into()),
-    )
-    .title("Create New Table")
-    .inner_size(400.0, 250.0)
-    .maximizable(false)
-    .build()?;
-    return Ok(());
+fn msg_update_report_data_deep(app: &AppHandle, report_oid: i64) {
+    app.emit("update-report-data-deep", report_oid).unwrap();
 }
 
-#[tauri::command]
-/// Pull up a dialog window for editing table metadata.
-pub async fn dialog_edit_table(app: AppHandle, table_oid: i64) -> Result<(), error::Error> {
-    let window_idx = app.webview_windows().len();
-    WebviewWindowBuilder::new(
-        &app,
-        format!("tableMetadataWindow-{window_idx}"),
-        WebviewUrl::App(format!("/src/frontend/dialogTableMetadata.html?table_oid={table_oid}&mode=3").into()),
-    )
-    .title("Edit Table")
-    .inner_size(400.0, 250.0)
-    .maximizable(false)
-    .build()?;
-    return Ok(());
-}
 
-#[tauri::command]
-/// Pull up a dialog window for creating a new report.
-pub async fn dialog_create_report(app: AppHandle) -> Result<(), error::Error> {
-    let window_idx = app.webview_windows().len();
-    WebviewWindowBuilder::new(
-        &app,
-        format!("reportMetadataWindow-{window_idx}"),
-        WebviewUrl::App("/src/frontend/dialogReportMetadata.html".into()),
-    )
-    .title("Create New Report")
-    .inner_size(400.0, 250.0)
-    .maximizable(false)
-    .build()?;
-    return Ok(());
-}
 
-#[tauri::command]
-/// Pull up a dialog window for editing report metadata.
-pub async fn dialog_edit_report(app: AppHandle, report_oid: i64) -> Result<(), error::Error> {
-    let window_idx = app.webview_windows().len();
-    WebviewWindowBuilder::new(
-        &app,
-        format!("reportMetadataWindow-{window_idx}"),
-        WebviewUrl::App(format!("/src/frontend/dialogReportMetadata.html?report_oid={report_oid}").into()),
-    )
-    .title("Edit Report")
-    .inner_size(400.0, 250.0)
-    .maximizable(false)
-    .build()?;
-    return Ok(());
-}
-
-#[tauri::command]
-/// Pull up a dialog window for creating a new object type.
-pub async fn dialog_create_object_type(app: AppHandle) -> Result<(), error::Error> {
-    let window_idx = app.webview_windows().len();
-    WebviewWindowBuilder::new(
-        &app,
-        format!("tableMetadataWindow-{window_idx}"),
-        WebviewUrl::App("/src/frontend/dialogTableMetadata.html?mode=4".into()),
-    )
-    .title("Create New Object Type")
-    .inner_size(400.0, 250.0)
-    .maximizable(false)
-    .build()?;
-    return Ok(());
-}
-
-#[tauri::command]
-/// Pull up a dialog window for editing object type metadata.
-pub async fn dialog_edit_object_type(app: AppHandle, obj_type_oid: i64) -> Result<(), error::Error> {
-    let window_idx = app.webview_windows().len();
-    WebviewWindowBuilder::new(
-        &app,
-        format!("tableMetadataWindow-{window_idx}"),
-        WebviewUrl::App(format!("/src/frontend/dialogTableMetadata.html?table_oid={obj_type_oid}&mode=4").into()),
-    )
-    .title("Edit Object Type")
-    .inner_size(400.0, 250.0)
-    .maximizable(false)
-    .build()?;
-    return Ok(());
-}
-
-#[tauri::command]
-/// Pull up a dialog window for creating a new table.
-pub async fn dialog_create_table_column(
-    app: AppHandle,
-    table_oid: i64,
-    column_ordering: Option<i64>,
-) -> Result<(), error::Error> {
-    let window_idx = app.webview_windows().len();
-    WebviewWindowBuilder::new(
-        &app,
-        format!("tableColumnMetadataWindow-{window_idx}"),
-        WebviewUrl::App(
-            format!(
-                "/src/frontend/dialogTableColumnMetadata.html?table_oid={table_oid}{}",
-                match column_ordering {
-                    Some(o) => format!("&column_ordering={o}"),
-                    None => String::from(""),
-                }
-            )
-            .into(),
-        ),
-    )
-    .title("Add New Column")
-    .inner_size(400.0, 200.0)
-    .resizable(false)
-    .maximizable(false)
-    .build()?;
-    return Ok(());
-}
-
-#[tauri::command]
-/// Pull up a dialog window for editing a table column.
-pub async fn dialog_edit_table_column(
-    app: AppHandle,
-    table_oid: i64,
-    column_oid: i64,
-) -> Result<(), error::Error> {
-    let window_idx = app.webview_windows().len();
-    WebviewWindowBuilder::new(
-        &app,
-        format!("tableColumnMetadataWindow-{window_idx}"),
-        WebviewUrl::App(format!("/src/frontend/dialogTableColumnMetadata.html?table_oid={table_oid}&column_oid={column_oid}").into()),
-    )
-    .title("Edit Column")
-    .inner_size(400.0, 200.0)
-    .resizable(false)
-    .maximizable(false)
-    .build()?;
-    return Ok(());
-}
-
-#[tauri::command]
-/// Open a separate window for the contents of a table.
-pub async fn dialog_table_data(
-    app: AppHandle,
-    table_oid: i64,
-    table_name: String,
-) -> Result<(), error::Error> {
-    // Create the window
-    let window_idx = app.webview_windows().len();
-    WebviewWindowBuilder::new(
-        &app,
-        format!("tableWindow-{window_idx}"),
-        WebviewUrl::App(format!("/src/frontend/table.html?table_oid={table_oid}").into()),
-    )
-    .title(&table_name)
-    .inner_size(800.0, 600.0)
-    .build()?;
-    return Ok(());
-}
-
-#[tauri::command]
-/// Open a separate window for the contents of a table.
-pub async fn dialog_child_table_data(
-    app: AppHandle,
-    table_oid: i64,
-    parent_row_oid: i64,
-    table_name: String,
-) -> Result<(), error::Error> {
-    // Create the window
-    let window_idx = app.webview_windows().len();
-    WebviewWindowBuilder::new(
-        &app,
-        format!("childTableWindow-{window_idx}"),
-        WebviewUrl::App(
-            format!(
-                "/src/frontend/table.html?table_oid={table_oid}&parent_row_oid={parent_row_oid}"
-            )
-            .into(),
-        ),
-    )
-    .title(&table_name)
-    .inner_size(800.0, 600.0)
-    .build()?;
-    return Ok(());
-}
-
-#[tauri::command]
-/// Open a separate window for the contents of a report.
-pub async fn dialog_report_data(
-    app: AppHandle,
-    report_oid: i64,
-    report_name: String,
-) -> Result<(), error::Error> {
-    /*
-    // Create the window
-    let window_idx = app.webview_windows().len();
-    WebviewWindowBuilder::new(
-        &app,
-        format!("tableWindow-{window_idx}"),
-        WebviewUrl::App(format!("/src/frontend/table.html?table_oid={report_oid}").into()),
-    )
-    .title(&report_name)
-    .inner_size(800.0, 600.0)
-    .build()?;
-    */
-    return Ok(());
-}
-
-#[tauri::command]
-/// Open a separate window for the contents of an object.
-pub async fn dialog_object_data(
-    app: AppHandle,
-    table_oid: i64,
-    row_oid: i64,
-    title: String,
-) -> Result<(), error::Error> {
-    // Create the window
-    let window_idx = app.webview_windows().len();
-    WebviewWindowBuilder::new(
-        &app,
-        format!("tableObjectWindow-{window_idx}"),
-        WebviewUrl::App(
-            format!("/src/frontend/table_object.html?table_oid={table_oid}&obj_oid={row_oid}")
-                .into(),
-        ),
-    )
-    .title(&title)
-    .inner_size(800.0, 600.0)
-    .build()?;
-    return Ok(());
-}
-
-#[tauri::command]
-/// Closes the current dialog window.
-pub fn dialog_close(window: tauri::Window) -> Result<(), error::Error> {
-    match window.close() {
-        Ok(_) => {
-            return Ok(());
-        }
-        Err(e) => {
-            return Err(error::Error::TauriError(e));
-        }
-    }
-}
-
-#[tauri::command]
-pub fn get_table_list(table_channel: Channel<table::BasicMetadata>) -> Result<(), error::Error> {
-    // Use channel to send BasicMetadata objects
-    return table::send_metadata_list(table_channel);
-}
 
 #[tauri::command]
 /// Gets the metadata for a table.
 pub fn get_table_metadata(table_oid: i64) -> Result<table::Metadata, error::Error> {
-    return table::get_metadata(&table_oid);
-}
-
-#[tauri::command]
-pub fn get_report_list(report_channel: Channel<report::BasicMetadata>) -> Result<(), error::Error> {
-    // Use channel to send BasicMetadata objects
-    return report::send_metadata_list(report_channel);
+    table::get_metadata(table_oid)
 }
 
 #[tauri::command]
 /// Gets the metadata for a report.
 pub fn get_report_metadata(report_oid: i64) -> Result<report::Metadata, error::Error> {
-    return report::get_metadata(&report_oid);
-}
-
-#[tauri::command]
-pub fn get_object_type_list(
-    object_type_channel: Channel<obj_type::BasicMetadata>,
-) -> Result<(), error::Error> {
-    // Use channel to send BasicMetadata objects
-    return obj_type::send_metadata_list(None, object_type_channel);
-}
-
-#[tauri::command]
-pub fn get_master_list_option_dropdown_values(
-    table_oid: Option<i64>,
-    allow_inheritance_from_tables: bool,
-    option_channel: Channel<table::MasterListOption>,
-) -> Result<(), error::Error> {
-    table::send_master_list_options(table_oid, allow_inheritance_from_tables, option_channel)?;
-    return Ok(());
-}
-
-#[tauri::command]
-pub fn get_subtype_list(
-    table_oid: i64,
-    object_type_channel: Channel<obj_type::BasicMetadata>,
-) -> Result<(), error::Error> {
-    // Use channel to send BasicMetadata objects
-    obj_type::send_metadata_list(Some(table_oid), object_type_channel)?;
-    return Ok(());
+    report::get_metadata(&report_oid)
 }
 
 #[tauri::command]
 /// Get the metadata for a particular column in a table.
 pub fn get_table_column(column_oid: i64) -> Result<Option<table_column::Metadata>, error::Error> {
-    return table_column::get_metadata(column_oid);
-}
-
-#[tauri::command]
-/// Send possible dropdown values for a column.
-pub fn get_table_column_dropdown_values(
-    column_oid: i64,
-    dropdown_value_channel: Channel<table_column::DropdownValue>,
-) -> Result<(), error::Error> {
-    // Use channel to send DropdownValue objects
-    table_column::send_table_column_dropdown_values(column_oid, dropdown_value_channel)?;
-    return Ok(());
-}
-
-#[tauri::command]
-/// Send possible tables to be referenced.
-pub fn get_table_column_reference_values(
-    reference_type_channel: Channel<table_column::BasicTypeMetadata>,
-) -> Result<(), error::Error> {
-    table_column::send_type_metadata_list(
-        data_type::MetadataColumnType::Reference(0),
-        reference_type_channel,
-    )?;
-    return Ok(());
-}
-
-#[tauri::command]
-/// Send possible global data types for an object.
-pub fn get_table_column_object_values(
-    object_type_channel: Channel<table_column::BasicTypeMetadata>,
-) -> Result<(), error::Error> {
-    table_column::send_type_metadata_list(
-        data_type::MetadataColumnType::ChildObject(0),
-        object_type_channel,
-    )?;
-    return Ok(());
-}
-
-#[tauri::command]
-pub fn get_table_column_list(
-    table_oid: i64,
-    column_channel: Channel<table_column::Metadata>,
-) -> Result<(), error::Error> {
-    // Use channel to send BasicMetadata objects
-    table_column::send_metadata_list(table_oid, column_channel)?;
-    return Ok(());
-}
-
-#[tauri::command]
-pub fn get_table_data(
-    table_oid: i64,
-    parent_row_oid: Option<i64>,
-    page_num: i64,
-    page_size: i64,
-    cell_channel: Channel<table_data::Cell>,
-) -> Result<(), error::Error> {
-    table_data::send_table_data(table_oid, parent_row_oid, page_num, page_size, cell_channel)?;
-    return Ok(());
-}
-
-#[tauri::command]
-pub fn get_table_row(
-    table_oid: i64,
-    row_oid: i64,
-    cell_channel: Channel<table_data::RowCell>,
-) -> Result<(), error::Error> {
-    table_data::send_table_row(table_oid, row_oid, cell_channel)?;
-    return Ok(());
-}
-
-#[tauri::command]
-pub fn get_object_data(
-    obj_type_oid: i64,
-    obj_row_oid: i64,
-    obj_data_channel: Channel<table_data::RowCell>,
-) -> Result<(), error::Error> {
-    obj_type::send_obj_data(obj_type_oid, obj_row_oid, obj_data_channel)?;
-    return Ok(());
+    table_column::get_metadata(column_oid)
 }
 
 #[tauri::command]
 pub fn get_blob_value(table_oid: i64, row_oid: i64, column_oid: i64) -> Result<String, error::Error> {
-    return table_data::get_blob_value(table_oid, row_oid, column_oid);
+    table_data::get_blob_value(table_oid, row_oid, column_oid)
 }
 
 #[tauri::command]
 pub fn download_blob_value(table_oid: i64, row_oid: i64, column_oid: i64, file_path: String) -> Result<(), error::Error> {
-    return table_data::download_blob_value(table_oid, row_oid, column_oid, file_path);
+    table_data::download_blob_value(table_oid, row_oid, column_oid, file_path)
 }
 
 #[tauri::command]

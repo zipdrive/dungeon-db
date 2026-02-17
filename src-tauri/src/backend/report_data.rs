@@ -4,7 +4,7 @@ use rusqlite::{params, Error as RusqliteError, OptionalExtension, Row, Transacti
 use serde::Serialize;
 use serde_json::{Result as SerdeJsonResult, Value};
 use std::collections::{HashMap, HashSet, LinkedList};
-use tauri::ipc::Channel;
+use crate::util::channel::Channel;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -32,9 +32,7 @@ pub enum Cell {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", untagged)]
 pub enum RowCell {
-    RowExists {
-        row_exists: bool,
-    },
+    RowExists(bool),
     ColumnValue {
         column_oid: i64,
         column_type: data_type::MetadataColumnType,

@@ -1,5 +1,5 @@
 import { Channel } from "@tauri-apps/api/core";
-import { BasicHierarchicalMetadata, closeDialogAsync, executeAsync, queryAsync, TableRowCellChannelPacket } from "./backendutils";
+import { BasicHierarchicalMetadata, closeDialogAsync, executeAsync, queryAsync, queryStreamAsync, TableRowCellChannelPacket } from "./backendutils";
 import { attachColumnContextMenu, updateTableColumnCell } from "./tableutils";
 import { listen } from "@tauri-apps/api/event";
 import { makeColumnsResizable } from "./frontendutils";
@@ -41,13 +41,11 @@ if (urlParamTableOid && urlParamObjOid) {
     };
 
     // Send the query to receive all possible subtypes
-    await queryAsync({
-      invokeAction: 'get_subtype_list',
-      invokeParams: {
-        tableOid: tableOid,
-        objectTypeChannel: onReceiveSubtype
+    await queryStreamAsync([{
+      objectSubtypes: {
+        tableOid: tableOid
       }
-    });
+    }, onReceiveSubtype]);
 
     // Only add the subtype dropdown if there is at least one subtype
     if (subtypeDropdown.childElementCount > 1) {
@@ -111,14 +109,12 @@ if (urlParamTableOid && urlParamObjOid) {
       }
     };
 
-    await queryAsync({
-      invokeAction: 'get_object_data',
-      invokeParams: {
-        objTypeOid: tableOid,
-        objRowOid: objOid,
-        objDataChannel: onReceiveCell
+    await queryStreamAsync([{
+      tableObjectCells: {
+        tableOid: tableOid,
+        rowOid: objOid
       }
-    });
+    }, onReceiveCell]);
 
     // Allow field name column to be resized
     makeColumnsResizable(

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::cell::Ref;
 use std::collections::HashMap;
 use std::sync::mpsc::channel;
-use tauri::ipc::Channel;
+use crate::util::channel::Channel;
 
 /// Creates a report.
 pub fn create(report_name: &str, base_table_oid: i64) -> Result<i64, error::Error> {

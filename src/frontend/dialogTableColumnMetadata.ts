@@ -345,7 +345,7 @@ window.addEventListener("DOMContentLoaded", async () => {
                 .then(async (_) => await closeDialogAsync())
                 .catch(async (e) => {
                     await message(e, {
-                        title: "An error occurred while applying changes to table.",
+                        title: "An error occurred while applying changes to table column.",
                         kind: 'error'
                     });
                 });

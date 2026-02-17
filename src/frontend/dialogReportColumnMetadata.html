@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="stylesheet" href="./dialog.css" />
+    <link rel="stylesheet" href="./form.css" />
+    <title>Create New Column</title>
+    <script type="module" src="dialogReportColumnMetadata.ts" defer></script>
+  </head>
+
+  <body>
+    <div class="page">
+        <table class="form">
+            <colgroup>
+                <col span="1" class="field-name-cell">
+                <col span="1" class="field-input-cell">
+            </colgroup>
+            <tbody>
+                <tr>
+                    <td><label for="column-name">Column Name:</label></td>
+                    <td><input name="column-name" id="column-name" type="text" class="input" /></td>
+                </tr>
+                <tr>
+                    <td><label for="column-type">Column Type:</label></td>
+                    <td>
+                        <select name="column-type" id="column-type" class="input">
+                            <option value="Formula">Formula</option>
+                            <option value="Subreport">Subreport</option>
+                        </select>
+                    </td>
+                </tr>
+                <tr class="parameter parameter-Formula">
+                    <td><label for="column-formula">Formula:</label></td>
+                    <td>
+                        <textarea name="column-formula" id="column-formula" class="input">
+                        </textarea>
+                        <button id="add-parameter-button">Insert Parameter</button>
+                        <button id="validate-formula-button">Error Check</button>
+                    </td>
+                </tr>
+                <tr class="parameter parameter-Subreport">
+                    <td><label for="column-subreport-base-parameter">Base Table for Subreport:</label></td>
+                    <td>
+                        <button id="select-base-parameter-button">— SELECT —</button>
+                    </td>
+                </tr>
+                <tr>
+                    <td colspan="2" id="advanced-parameter-toggle-button" class="clickable-text">⊕ Advanced</td>
+                </tr>
+                <tr class="parameter parameter-advanced parameter-Formula parameter-Subreport">
+                    <td><label for="column-style">Column Style:</label></td>
+                    <td>
+                        <textarea name="column-style" id="column-style" class="input">width: 180px;</textarea>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+    <div class="dialog-buttons">
+        <button id="confirm-button">OK</button>
+        <button id="cancel-button">Cancel</button>
+    </div>
+  </body>
+</html>

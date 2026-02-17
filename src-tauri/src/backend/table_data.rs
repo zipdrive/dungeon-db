@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::{Result as SerdeJsonResult, Value};
 use std::collections::{HashMap, HashSet, LinkedList};
 use std::path::Path;
-use tauri::ipc::Channel;
+use crate::util::channel::Channel;
 use time::format_description::well_known;
 use time::macros::time;
 use time::{Date, PrimitiveDateTime, UtcDateTime};
