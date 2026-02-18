@@ -13,15 +13,15 @@ pub struct DropdownValue {
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub enum Primitive {
     Any,       // Mode = 0 && OID = 0
-    Boolean,   // Mode = 0 && OID = 1
-    Integer,   // Mode = 0 && OID = 2
-    Number,    // Mode = 0 && OID = 3
-    Date,      // Mode = 0 && OID = 4
-    Timestamp, // Mode = 0 && OID = 5
-    Text,      // Mode = 0 && OID = 6
-    JSON,      // Mode = 0 && OID = 7
-    File,      // Mode = 0 && OID = 8
-    Image,     // Mode = 0 && OID = 9
+    Boolean,   // Mode = 0 && OID = -1
+    Integer,   // Mode = 0 && OID = -2
+    Number,    // Mode = 0 && OID = -3
+    Date,      // Mode = 0 && OID = -4
+    Timestamp, // Mode = 0 && OID = -5
+    Text,      // Mode = 0 && OID = -6
+    JSON,      // Mode = 0 && OID = -7
+    File,      // Mode = 0 && OID = -8
+    Image,     // Mode = 0 && OID = -9
 }
 
 impl Primitive {
@@ -43,15 +43,15 @@ impl Primitive {
     pub fn get_type_oid(&self) -> i64 {
         match self {
             Self::Any => 0,
-            Self::Boolean => 1,
-            Self::Integer => 2,
-            Self::Number => 3,
-            Self::Date => 4,
-            Self::Timestamp => 5,
-            Self::Text => 6,
-            Self::JSON => 7,
-            Self::File => 8,
-            Self::Image => 9,
+            Self::Boolean => -1,
+            Self::Integer => -2,
+            Self::Number => -3,
+            Self::Date => -4,
+            Self::Timestamp => -5,
+            Self::Text => -6,
+            Self::JSON => -7,
+            Self::File => -8,
+            Self::Image => -9,
         }
     }
 }
@@ -72,31 +72,31 @@ impl MetadataColumnType {
     pub fn from_database(type_oid: i64, type_mode: i64) -> MetadataColumnType {
         match type_mode {
             0 => match type_oid {
-                1 => {
+                -1 => {
                     return Self::Primitive(Primitive::Boolean);
                 }
-                2 => {
+                -2 => {
                     return Self::Primitive(Primitive::Integer);
                 }
-                3 => {
+                -3 => {
                     return Self::Primitive(Primitive::Number);
                 }
-                4 => {
+                -4 => {
                     return Self::Primitive(Primitive::Date);
                 }
-                5 => {
+                -5 => {
                     return Self::Primitive(Primitive::Timestamp);
                 }
-                6 => {
+                -6 => {
                     return Self::Primitive(Primitive::Text);
                 }
-                7 => {
+                -7 => {
                     return Self::Primitive(Primitive::JSON);
                 }
-                8 => {
+                -8 => {
                     return Self::Primitive(Primitive::File);
                 }
-                9 => {
+                -9 => {
                     return Self::Primitive(Primitive::Image);
                 }
                 _ => {

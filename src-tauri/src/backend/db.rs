@@ -73,16 +73,16 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
             -- 4 = child object
             -- 5 = child table
     );
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (0, 0); -- Always null
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (1, 0); -- Boolean
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (2, 0); -- Integer
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (3, 0); -- Number
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (4, 0); -- Date
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (5, 0); -- Timestamp
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (6, 0); -- Text
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (7, 0); -- Text (JSON)
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (8, 0); -- BLOB
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (9, 0); -- BLOB (displayed as image thumbnail)
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (0, 0);  -- Any?
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-1, 0); -- Boolean
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-2, 0); -- Integer
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-3, 0); -- Number
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-4, 0); -- Date
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-5, 0); -- Timestamp
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-6, 0); -- Text
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-7, 0); -- Text (JSON)
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-8, 0); -- BLOB
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-9, 0); -- BLOB (displayed as image thumbnail)
 
     -- METADATA_RPT_PARAMETER stores all parameters to a user-defined report
     CREATE TABLE METADATA_RPT_PARAMETER (
@@ -104,7 +104,9 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
 
     -- METADATA_TABLE_INHERITANCE stores inheritance of columns from another table
     CREATE TABLE METADATA_TABLE_INHERITANCE (
-        OID INTEGER PRIMARY KEY,
+        RPT_PARAMETER_OID INTEGER PRIMARY KEY REFERENCES METADATA_RPT_PARAMETER (OID)
+            ON UPDATE CASCADE
+            ON DELETE CASCADE,
         INHERITOR_TABLE_OID INTEGER REFERENCES METADATA_TABLE (TYPE_OID) 
             ON UPDATE CASCADE 
             ON DELETE CASCADE,
@@ -140,20 +142,19 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
             ON DELETE SET DEFAULT
     );
 
-    -- METADATA_RPT_PARAMETER__REFERENCED stores adhoc parameters that link a row of a base table to [a column in] another table through some form of reference
+    -- METADATA_RPT_PARAMETER__CHAIN stores adhoc parameters that link a row of a base table to [a column in] another table through some form of reference
     -- [Reference] column: N-to-1
     -- [Object] column: 1-to-1
     -- [Table] column: 1-to-N
-    CREATE TABLE METADATA_RPT_PARAMETER__REFERENCED (
+    -- Inheritance: 1-to-1
+    CREATE TABLE METADATA_RPT_PARAMETER__CHAIN (
         RPT_PARAMETER_OID INTEGER PRIMARY KEY REFERENCES METADATA_RPT_PARAMETER (OID)
             ON UPDATE CASCADE
             ON DELETE CASCADE,
-        REFERENCED_THROUGH_PARAMETER_OID INTEGER NOT NULL REFERENCES METADATA_RPT_PARAMETER (OID) 
+        REF_RPT_PARAMETER_OID INTEGER NOT NULL REFERENCES METADATA_RPT_PARAMETER (OID) 
+            ON UPDATE CASCADE,
+        DEF_RPT_PARAMETER_OID INTEGER REFERENCES METADATA_RPT_PARAMETER (OID)
             ON UPDATE CASCADE
-            ON DELETE CASCADE,
-        COLUMN_OID INTEGER REFERENCES METADATA_TABLE_COLUMN (OID)
-            ON UPDATE CASCADE
-            ON DELETE CASCADE
     );
 
     -- METADATA_RPT stores all user-defined reports
@@ -197,7 +198,7 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
             ON DELETE CASCADE,
         RPT_OID INTEGER NOT NULL REFERENCES METADATA_RPT (OID)
             ON UPDATE CASCADE,
-        RPT_PARAMETER__REFERENCED__OID INTEGER NOT NULL REFERENCES METADATA_RPT_PARAMETER__REFERENCED (OID)
+        TABLE_PARAMETER_OID INTEGER NOT NULL REFERENCES METADATA_RPT_PARAMETER (OID)
             ON UPDATE CASCADE
     );
     

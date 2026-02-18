@@ -33,10 +33,14 @@ pub fn create(name: String, master_table_oid_list: &Vec<i64>, column_type: data_
 
     // Add inheritance from each master table
     for master_table_oid in master_table_oid_list.iter() {
+        // Get new parameter OID
+        trans.execute("INSERT INTO METADATA_RPT_PARAMETER DEFAULT VALUES");
+        let rpt_parameter_oid: i64 = trans.last_insert_rowid();
+
         // Insert metadata indicating that this table inherits from the master table
         trans.execute(
-            "INSERT INTO METADATA_TABLE_INHERITANCE (INHERITOR_TABLE_OID, MASTER_TABLE_OID) VALUES (?1, ?2);",
-            params![table_oid, master_table_oid]
+            "INSERT INTO METADATA_TABLE_INHERITANCE (RPT_PARAMETER_OID, INHERITOR_TABLE_OID, MASTER_TABLE_OID) VALUES (?1, ?2, ?3);",
+            params![rpt_parameter_oid, table_oid, master_table_oid]
         )?;
 
         // Add a column to the table that references a row in the master list
@@ -95,19 +99,23 @@ pub fn edit(table_oid: i64, name: String, master_table_oid_list: &Vec<i64>) -> R
     // Add inheritance from each master table
     for master_table_oid in master_table_oid_list.iter() {
         // Check if a row in the inheritance table already exists
-        match trans.query_one("SELECT OID FROM METADATA_TABLE_INHERITANCE WHERE INHERITOR_TABLE_OID = ?1 AND MASTER_TABLE_OID = ?2", params![table_oid, master_table_oid], |row| row.get::<_, i64>(0)).optional()? {
+        match trans.query_one("SELECT RPT_PARAMETER_OID FROM METADATA_TABLE_INHERITANCE WHERE INHERITOR_TABLE_OID = ?1 AND MASTER_TABLE_OID = ?2", params![table_oid, master_table_oid], |row| row.get::<_, i64>(0)).optional()? {
             Some(inheritance_row_oid) => {
                 // Update the inheritance table to indicate that the inheritance is not trash
                 trans.execute(
-                    "UPDATE METADATA_TABLE_INHERITANCE SET TRASH = 0 WHERE OID = ?1",
+                    "UPDATE METADATA_TABLE_INHERITANCE SET TRASH = 0 WHERE RPT_PARAMETER_OID = ?1",
                     params![inheritance_row_oid]
                 )?;
             },
             None => {
+                // Get new parameter OID
+                trans.execute("INSERT INTO METADATA_RPT_PARAMETER DEFAULT VALUES");
+                let rpt_parameter_oid: i64 = trans.last_insert_rowid();
+
                 // Insert a new row into the inheritance table
                 trans.execute(
-                    "INSERT INTO METADATA_TABLE_INHERITANCE (INHERITOR_TABLE_OID, MASTER_TABLE_OID) VALUES (?1, ?2)",
-                    params![table_oid, master_table_oid]
+                    "INSERT INTO METADATA_TABLE_INHERITANCE (RPT_PARAMETER_OID, INHERITOR_TABLE_OID, MASTER_TABLE_OID) VALUES (?1, ?2, ?3)",
+                    params![rpt_parameter_oid, table_oid, master_table_oid]
                 )?;
                 
                 // Add a column to the table that references a row in the master list
