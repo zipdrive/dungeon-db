@@ -10,6 +10,7 @@ pub enum Error {
         full_formula: String,
         substring_with_error: String
     },
+    /*
     FormulaTypeValidationError {
         outer_name: &'static str,
         inner_name: String,
@@ -18,9 +19,13 @@ pub enum Error {
     },
     FormulaTypeConflictError {
         name: String,
-        type1: String,
-        type2: String
+        types: Vec<String>
     },
+    FormulaTypeCardinalityError {
+        name: String,
+        types: Vec<String>
+    },
+     */
     SaveInitializationError(RusqliteError),
     RusqliteError(RusqliteError),
     TauriError(TauriError),

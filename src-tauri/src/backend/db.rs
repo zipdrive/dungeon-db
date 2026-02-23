@@ -60,9 +60,16 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
 
     BEGIN;
 
-    -- __METADATA_TYPE stores all pre-defined and user-defined data types
+    -- METADATA_DATASOURCE stores all possible data sources for a report.
+    CREATE TABLE METADATA_DATASOURCE (
+        OID INTEGER PRIMARY KEY
+    );
+
+    -- METADATA_TYPE stores all pre-defined and user-defined data types
     CREATE TABLE METADATA_TYPE (
-        OID INTEGER PRIMARY KEY,
+        OID INTEGER PRIMARY KEY REFERENCES METADATA_DATASOURCE (OID)
+            ON UPDATE CASCADE
+            ON DELETE CASCADE,
         TRASH BOOLEAN NOT NULL DEFAULT 0,
         MODE INTEGER NOT NULL DEFAULT 0 
             -- Modes are:
@@ -73,38 +80,70 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
             -- 4 = child object
             -- 5 = child table
     );
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (0, 0);  -- Any?
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-1, 0); -- Boolean
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-2, 0); -- Integer
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-3, 0); -- Number
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-4, 0); -- Date
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-5, 0); -- Timestamp
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-6, 0); -- Text
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-7, 0); -- Text (JSON)
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-8, 0); -- BLOB
-    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-9, 0); -- BLOB (displayed as image thumbnail)
 
-    -- METADATA_RPT_PARAMETER stores all parameters to a user-defined report
-    CREATE TABLE METADATA_RPT_PARAMETER (
-        OID INTEGER PRIMARY KEY
+    -- Any primitive type? Always null? Shouldn't be used, regardless
+    INSERT INTO METADATA_DATASOURCE (OID) VALUES (0);
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (0, 0);
+
+    -- Boolean primitive
+    INSERT INTO METADATA_DATASOURCE (OID) VALUES (-1);
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-1, 0);
+
+    -- Integer primitive
+    INSERT INTO METADATA_DATASOURCE (OID) VALUES (-2);
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-2, 0);
+
+    -- Number primitive
+    INSERT INTO METADATA_DATASOURCE (OID) VALUES (-3);
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-3, 0);
+
+    -- Date primitive
+    INSERT INTO METADATA_DATASOURCE (OID) VALUES (-4);
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-4, 0);
+
+    -- Timestamp primitive
+    INSERT INTO METADATA_DATASOURCE (OID) VALUES (-5);
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-5, 0);
+
+    -- Text primitive
+    INSERT INTO METADATA_DATASOURCE (OID) VALUES (-6);
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-6, 0);
+
+    -- Text primitive (forced to be JSON)
+    INSERT INTO METADATA_DATASOURCE (OID) VALUES (-7);
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-7, 0);
+
+    -- BLOB primitive
+    INSERT INTO METADATA_DATASOURCE (OID) VALUES (-8);
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-8, 0);
+
+    -- BLOB primitive (but this one is displayed as an image)
+    INSERT INTO METADATA_DATASOURCE (OID) VALUES (-9);
+    INSERT INTO METADATA_TYPE (OID, MODE) VALUES (-9, 0);
+    
+
+    -- METADATA_PARAMETER stores all parameters to a user-defined report
+    CREATE TABLE METADATA_PARAMETER (
+        OID INTEGER PRIMARY KEY REFERENCES METADATA_DATASOURCE (OID)
+            ON UPDATE CASCADE
+            ON DELETE CASCADE
     );
 
     -- METADATA_TABLE stores all user-defined tables and object types
     CREATE TABLE METADATA_TABLE (
-        TYPE_OID INTEGER PRIMARY KEY,
-        TRASH BOOLEAN NOT NULL DEFAULT 0,
-        NAME TEXT NOT NULL,
-        FOREIGN KEY (TYPE_OID) REFERENCES METADATA_TYPE (OID) 
+        OID INTEGER PRIMARY KEY REFERENCES METADATA_TYPE (OID) 
             ON UPDATE CASCADE
-            ON DELETE CASCADE
+            ON DELETE CASCADE,
+        TRASH BOOLEAN NOT NULL DEFAULT 0,
+        NAME TEXT NOT NULL
     );
     ALTER TABLE METADATA_TABLE ADD COLUMN PARENT_TABLE_OID INTEGER 
-        REFERENCES METADATA_TABLE (TYPE_OID) 
+        REFERENCES METADATA_TABLE (OID) 
             ON UPDATE CASCADE;
 
     -- METADATA_TABLE_INHERITANCE stores inheritance of columns from another table
     CREATE TABLE METADATA_TABLE_INHERITANCE (
-        RPT_PARAMETER_OID INTEGER PRIMARY KEY REFERENCES METADATA_RPT_PARAMETER (OID)
+        OID INTEGER PRIMARY KEY REFERENCES METADATA_PARAMETER (OID)
             ON UPDATE CASCADE
             ON DELETE CASCADE,
         INHERITOR_TABLE_OID INTEGER REFERENCES METADATA_TABLE (TYPE_OID) 
@@ -119,7 +158,6 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
     -- METADATA_TABLE_COLUMN stores all columns of user-defined tables and data types
     CREATE TABLE METADATA_TABLE_COLUMN (
         OID INTEGER PRIMARY KEY,
-        RPT_PARAMETER_OID INTEGER NOT NULL,
         TRASH BOOLEAN NOT NULL DEFAULT 0,
         TABLE_OID INTEGER NOT NULL,
         NAME TEXT NOT NULL DEFAULT 'Column',
@@ -132,9 +170,9 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
         IS_UNIQUE TINYINT NOT NULL DEFAULT 0,
         IS_PRIMARY_KEY TINYINT NOT NULL DEFAULT 0,
         DEFAULT_VALUE ANY,
-        FOREIGN KEY (RPT_PARAMETER_OID) REFERENCES METADATA_RPT_PARAMETER (OID)
+        FOREIGN KEY (OID) REFERENCES METADATA_PARAMETER (DATASOURCE_OID)
             ON UPDATE CASCADE,
-        FOREIGN KEY (TABLE_OID) REFERENCES METADATA_TABLE (TYPE_OID)
+        FOREIGN KEY (TABLE_OID) REFERENCES METADATA_TABLE (OID)
             ON UPDATE CASCADE
             ON DELETE CASCADE,
         FOREIGN KEY (TYPE_OID) REFERENCES METADATA_TYPE (OID)
@@ -142,18 +180,18 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
             ON DELETE SET DEFAULT
     );
 
-    -- METADATA_RPT_PARAMETER__CHAIN stores adhoc parameters that link a row of a base table to [a column in] another table through some form of reference
+    -- METADATA_PARAMETER__CHAIN stores adhoc parameters that link a row of a base table to [a column in] another table through some form of reference
     -- [Reference] column: N-to-1
     -- [Object] column: 1-to-1
     -- [Table] column: 1-to-N
     -- Inheritance: 1-to-1
-    CREATE TABLE METADATA_RPT_PARAMETER__CHAIN (
-        RPT_PARAMETER_OID INTEGER PRIMARY KEY REFERENCES METADATA_RPT_PARAMETER (OID)
+    CREATE TABLE METADATA_PARAMETER__CHAIN (
+        OID INTEGER PRIMARY KEY REFERENCES METADATA_PARAMETER (OID)
             ON UPDATE CASCADE
             ON DELETE CASCADE,
-        REF_RPT_PARAMETER_OID INTEGER NOT NULL REFERENCES METADATA_RPT_PARAMETER (OID) 
+        REF_PARAMETER_OID INTEGER NOT NULL REFERENCES METADATA_PARAMETER (OID) 
             ON UPDATE CASCADE,
-        DEF_RPT_PARAMETER_OID INTEGER REFERENCES METADATA_RPT_PARAMETER (OID)
+        DEF_PARAMETER_OID INTEGER REFERENCES METADATA_PARAMETER (OID)
             ON UPDATE CASCADE
     );
 
@@ -161,15 +199,25 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
     CREATE TABLE METADATA_RPT (
         OID INTEGER PRIMARY KEY
     );
+
+    -- METADATA_RPT_DATASOURCE stores all datasources of a report
+    CREATE TABLE METADATA_RPT_DATASOURCE (
+        TRASH BOOLEAN NOT NULL DEFAULT 0,
+        RPT_OID INTEGER REFERENCES METADATA_RPT (OID) 
+            ON UPDATE CASCADE
+            ON DELETE CASCADE,
+        DATASOURCE_OID INTEGER REFERENCES METADATA_DATASOURCE (OID)
+            ON UPDATE CASCADE
+            ON DELETE CASCADE,
+        PRIMARY KEY (RPT_OID, DATASOURCE_OID)
+    );
+
     -- METADATA_RPT__REPORT stores all user-defined reports
     CREATE TABLE METADATA_RPT__REPORT (
-        RPT_OID INTEGER PRIMARY KEY REFERENCES METADATA_RPT (OID)
+        OID INTEGER PRIMARY KEY REFERENCES METADATA_RPT (OID)
             ON UPDATE CASCADE
             ON DELETE CASCADE,
         TRASH BOOLEAN NOT NULL DEFAULT 0,
-        BASE_TABLE_OID INTEGER NOT NULL REFERENCES METADATA_TABLE (TYPE_OID)
-            ON UPDATE CASCADE
-            ON DELETE CASCADE,
         NAME TEXT NOT NULL
     );
 
@@ -186,7 +234,7 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
     );
     -- METADATA_RPT_COLUMN__FORMULA
     CREATE TABLE METADATA_RPT_COLUMN__FORMULA (
-        RPT_COLUMN_OID INTEGER PRIMARY KEY REFERENCES METADATA_RPT_COLUMN (OID)
+        OID INTEGER PRIMARY KEY REFERENCES METADATA_RPT_COLUMN (OID)
             ON UPDATE CASCADE
             ON DELETE CASCADE,
         FORMULA TEXT NOT NULL
@@ -197,8 +245,6 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
             ON UPDATE CASCADE
             ON DELETE CASCADE,
         RPT_OID INTEGER NOT NULL REFERENCES METADATA_RPT (OID)
-            ON UPDATE CASCADE,
-        TABLE_PARAMETER_OID INTEGER NOT NULL REFERENCES METADATA_RPT_PARAMETER (OID)
             ON UPDATE CASCADE
     );
     
@@ -208,7 +254,7 @@ fn initialize_new_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error
         RPT_OID INTEGER NOT NULL REFERENCES METADATA_RPT (OID)
             ON UPDATE CASCADE
             ON DELETE CASCADE,
-        RPT_PARAMETER_OID INTEGER NOT NULL REFERENCES METADATA_RPT_PARAMETER (OID)
+        PARAMETER_OID INTEGER NOT NULL REFERENCES METADATA_PARAMETER (OID)
             ON UPDATE CASCADE
             ON DELETE CASCADE
     );

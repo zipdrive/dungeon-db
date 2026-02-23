@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::cell::Ref;
 use std::collections::HashMap;
 use std::sync::mpsc::channel;
-use crate::util::channel::Channel;
+use tauri::ipc::Channel;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

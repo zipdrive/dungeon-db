@@ -1,8 +1,21 @@
 use serde::Serialize;
-use rusqlite::params;
+use rusqlite::{Transaction, params};
 use crate::backend::db;
 use crate::util::error;
-use crate::util::channel::Channel;
+use tauri::ipc::Channel;
+
+
+/// Create a new report parameter.
+pub fn create(trans: &Transaction) -> Result<i64, error::Error> {
+    // Create datasource
+    trans.execute("INSERT INTO METADATA_DATASOURCE DEFAULT VALUES", [])?;
+    let datasource_oid: i64 = trans.last_insert_rowid();
+    // Create parameter
+    trans.execute("INSERT INTO METADATA_PARAMETER (OID) VALUES (?1)", params![datasource_oid])?;
+    // Return the datasource/parameter OID
+    return Ok(datasource_oid);
+}
+
 
 #[derive(Serialize)]
 #[serde(rename_all="camelCase", rename_all_fields="camelCase")]

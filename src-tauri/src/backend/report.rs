@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::cell::Ref;
 use std::collections::HashMap;
 use std::sync::mpsc::channel;
-use crate::util::channel::Channel;
+use tauri::ipc::Channel;
 
 /// Creates a report.
 pub fn create(report_name: &str, base_table_oid: i64) -> Result<i64, error::Error> {
@@ -17,7 +17,7 @@ pub fn create(report_name: &str, base_table_oid: i64) -> Result<i64, error::Erro
     trans.execute("INSERT INTO METADATA_RPT DEFAULT VALUES;", [])?;
     let report_oid: i64 = trans.last_insert_rowid();
     trans.execute(
-        "INSERT INTO METADATA_RPT__REPORT (RPT_OID, BASE_TABLE_OID, NAME) VALUES (?1, ?2, ?3);",
+        "INSERT INTO METADATA_RPT__REPORT (OID, BASE_TABLE_OID, NAME) VALUES (?1, ?2, ?3);",
         params![report_oid, base_table_oid, report_name],
     )?;
 
@@ -33,14 +33,14 @@ pub fn edit(report_oid: i64, report_name: &str) -> Result<String, error::Error> 
 
     // Record the old name of the table in metadata
     let old_report_name: String = trans.query_one(
-        "SELECT NAME FROM METADATA_RPT__REPORT WHERE RPT_OID = ?1", 
+        "SELECT NAME FROM METADATA_RPT__REPORT WHERE OID = ?1", 
         params![report_oid], 
         |row| row.get::<_, String>(0)
     )?;
 
     // Edit the name of the table in metadata
     trans.execute(
-        "UPDATE METADATA_RPT__REPORT SET NAME = ?1 WHERE RPT_OID = ?2",
+        "UPDATE METADATA_RPT__REPORT SET NAME = ?1 WHERE OID = ?2",
         params![report_name, report_oid],
     )?;
 
@@ -98,7 +98,7 @@ pub fn send_metadata_list(report_channel: Channel<BasicMetadata>) -> Result<(), 
     db::query_iterate(
         &trans,
         "SELECT 
-            rpt.RPT_OID, 
+            rpt.OID, 
             rpt.NAME
         FROM METADATA_RPT__REPORT rpt
         WHERE rpt.TRASH = 0 
@@ -106,7 +106,7 @@ pub fn send_metadata_list(report_channel: Channel<BasicMetadata>) -> Result<(), 
         [],
         &mut |row| {
             report_channel.send(BasicMetadata {
-                oid: row.get::<_, i64>("RPT_OID")?,
+                oid: row.get::<_, i64>("OID")?,
                 name: row.get::<_, String>("NAME")?,
             })?;
             return Ok(());
@@ -135,7 +135,7 @@ pub fn get_metadata(report_oid: &i64) -> Result<Metadata, error::Error> {
             NAME,
             BASE_TABLE_OID
         FROM METADATA_RPT__REPORT 
-        WHERE TRASH = 0 AND RPT_OID = ?1;",
+        WHERE TRASH = 0 AND OID = ?1;",
         params![report_oid],
         |row| { 
             Ok((row.get::<_, String>("NAME")?, row.get::<_, i64>("BASE_TABLE_OID")?))

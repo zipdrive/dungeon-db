@@ -1,5 +1,5 @@
 import { Channel } from "@tauri-apps/api/core";
-import { closeDialogAsync, executeAsync, queryAsync, ToggledHierarchicalMetadata } from "./backendutils";
+import { closeDialogAsync, executeAsync, queryAsync, queryStreamAsync, ToggledHierarchicalMetadata } from "./backendutils";
 import { message } from "@tauri-apps/plugin-dialog";
 
 const urlParams = new URLSearchParams(window.location.search);
@@ -63,12 +63,11 @@ async function refreshMasterListAsync() {
     }
 
     // Run the query
-    await queryAsync({
-        invokeAction: 'get_master_list_option_dropdown_values',
-        invokeParams: {
+    await queryStreamAsync({
+        masterLists: {
             tableOid: tableOid,
             allowInheritanceFromTables: true,
-            optionChannel: onReceiveOption
+            channel: onReceiveOption
         }
     });
 }

@@ -4,7 +4,7 @@ use crate::backend::{data_type, db, table, table_data};
 use crate::util::error;
 use rusqlite::{params, OptionalExtension, Statement, ToSql, Transaction};
 use serde::{Deserialize, Serialize};
-use crate::util::channel::Channel;
+use tauri::ipc::Channel;
 
 /// Creates a new table.
 pub fn create(name: String, master_table_oid_list: &Vec<i64>) -> Result<i64, error::Error> {
@@ -15,7 +15,7 @@ pub fn create(name: String, master_table_oid_list: &Vec<i64>) -> Result<i64, err
     trans.execute("INSERT INTO METADATA_TYPE (MODE) VALUES (4);", [])?;
     let table_oid: i64 = trans.last_insert_rowid();
     trans.execute(
-        "INSERT INTO METADATA_TABLE (TYPE_OID, NAME) VALUES (?1, ?2);",
+        "INSERT INTO METADATA_TABLE (OID, NAME) VALUES (?1, ?2);",
         params![table_oid, &name],
     )?;
 
@@ -81,7 +81,7 @@ pub fn send_metadata_list(
                     typ.OID AS TYPE_OID,
                     tbl.NAME AS TYPE_NAME
                 FROM METADATA_TYPE typ
-                INNER JOIN METADATA_TABLE tbl ON tbl.TYPE_OID = typ.OID
+                INNER JOIN METADATA_TABLE tbl ON tbl.OID = typ.OID
                 WHERE tbl.TRASH = 0 AND typ.OID = ?1
                 UNION
                 SELECT
@@ -91,7 +91,7 @@ pub fn send_metadata_list(
                     tbl.NAME AS TYPE_NAME
                 FROM SUBTYPE_QUERY s
                 INNER JOIN METADATA_TABLE_INHERITANCE u ON u.MASTER_TABLE_OID = s.TYPE_OID
-                INNER JOIN METADATA_TABLE tbl ON tbl.TYPE_OID = u.INHERITOR_TABLE_OID
+                INNER JOIN METADATA_TABLE tbl ON tbl.OID = u.INHERITOR_TABLE_OID
                 WHERE u.TRASH = 0 AND tbl.TRASH = 0
                 ORDER BY 1 DESC, 4 ASC
             )
@@ -114,7 +114,7 @@ pub fn send_metadata_list(
                     typ.OID AS TYPE_OID,
                     tbl.NAME AS TYPE_NAME
                 FROM METADATA_TYPE typ
-                INNER JOIN METADATA_TABLE tbl ON tbl.TYPE_OID = typ.OID
+                INNER JOIN METADATA_TABLE tbl ON tbl.OID = typ.OID
                 WHERE tbl.TRASH = 0 
                     AND tbl.TRASH = 0 
                     AND typ.MODE = 4 
@@ -127,7 +127,7 @@ pub fn send_metadata_list(
                     tbl.NAME AS TYPE_NAME
                 FROM SUBTYPE_QUERY s
                 INNER JOIN METADATA_TABLE_INHERITANCE u ON u.MASTER_TABLE_OID = s.TYPE_OID
-                INNER JOIN METADATA_TABLE tbl ON tbl.TYPE_OID = u.INHERITOR_TABLE_OID
+                INNER JOIN METADATA_TABLE tbl ON tbl.OID = u.INHERITOR_TABLE_OID
                 WHERE u.TRASH = 0 AND tbl.TRASH = 0
                 ORDER BY 1 DESC, 4 ASC
             )

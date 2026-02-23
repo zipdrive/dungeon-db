@@ -1,4 +1,4 @@
-use crate::backend::{data_type, db, table};
+use crate::backend::{data_type, db, report_parameter, table};
 use crate::util::error;
 use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
 use rusqlite::{params, Error as RusqliteError, Row, Transaction, OptionalExtension};
@@ -6,7 +6,7 @@ use serde::Serialize;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::i32::MAX;
 use std::ops::Index;
-use crate::util::channel::Channel;
+use tauri::ipc::Channel;
 
 /// Creates a new table.
 pub fn create(name: String, master_table_oid_list: &Vec<i64>, column_type: data_type::MetadataColumnType) -> Result<i64, error::Error> {
@@ -14,10 +14,14 @@ pub fn create(name: String, master_table_oid_list: &Vec<i64>, column_type: data_
     let trans = conn.transaction()?;
 
     // Add metadata for the table
-    trans.execute("INSERT INTO METADATA_TYPE (MODE) VALUES (?1);", [column_type.get_type_mode()])?;
+    trans.execute("INSERT INTO METADATA_DATASOURCE DEFAULT VALUES", [])?;
     let table_oid: i64 = trans.last_insert_rowid();
     trans.execute(
-        "INSERT INTO METADATA_TABLE (TYPE_OID, NAME) VALUES (?1, ?2);",
+        "INSERT INTO METADATA_TYPE (OID, MODE) VALUES (?1, ?2);", 
+        params![table_oid, column_type.get_type_mode()]
+    )?;
+    trans.execute(
+        "INSERT INTO METADATA_TABLE (OID, NAME) VALUES (?1, ?2);",
         params![table_oid, &name],
     )?;
 
@@ -34,12 +38,11 @@ pub fn create(name: String, master_table_oid_list: &Vec<i64>, column_type: data_
     // Add inheritance from each master table
     for master_table_oid in master_table_oid_list.iter() {
         // Get new parameter OID
-        trans.execute("INSERT INTO METADATA_RPT_PARAMETER DEFAULT VALUES");
-        let rpt_parameter_oid: i64 = trans.last_insert_rowid();
+        let rpt_parameter_oid: i64 = report_parameter::create(&trans)?;
 
         // Insert metadata indicating that this table inherits from the master table
         trans.execute(
-            "INSERT INTO METADATA_TABLE_INHERITANCE (RPT_PARAMETER_OID, INHERITOR_TABLE_OID, MASTER_TABLE_OID) VALUES (?1, ?2, ?3);",
+            "INSERT INTO METADATA_TABLE_INHERITANCE (OID, INHERITOR_TABLE_OID, MASTER_TABLE_OID) VALUES (?1, ?2, ?3);",
             params![rpt_parameter_oid, table_oid, master_table_oid]
         )?;
 
@@ -78,7 +81,7 @@ pub fn edit(table_oid: i64, name: String, master_table_oid_list: &Vec<i64>) -> R
             SELECT 
                 u.MASTER_TABLE_OID 
             FROM METADATA_TABLE_INHERITANCE u
-            INNER JOIN METADATA_TABLE tbl ON tbl.TYPE_OID = u.MASTER_TABLE_OID
+            INNER JOIN METADATA_TABLE tbl ON tbl.OID = u.MASTER_TABLE_OID
             WHERE u.INHERITOR_TABLE_OID = ?1 
                 AND u.TRASH = 0
                 AND tbl.TRASH = 0
@@ -109,7 +112,7 @@ pub fn edit(table_oid: i64, name: String, master_table_oid_list: &Vec<i64>) -> R
             },
             None => {
                 // Get new parameter OID
-                trans.execute("INSERT INTO METADATA_RPT_PARAMETER DEFAULT VALUES");
+                trans.execute("INSERT INTO METADATA_RPT_PARAMETER DEFAULT VALUES", [])?;
                 let rpt_parameter_oid: i64 = trans.last_insert_rowid();
 
                 // Insert a new row into the inheritance table
@@ -195,7 +198,7 @@ fn drop_surrogate_view(
 
     // Query to find all tables dependent on the one being dropped
     for dependent_table_oid_result in trans.prepare(
-        "SELECT TABLE_OID FROM METADATA_TABLE_COLUMN WHERE TYPE_OID = ?1 AND IS_PRIMARY_KEY = 1"
+        "SELECT TABLE_OID FROM METADATA_TABLE_COLUMN WHERE OID = ?1 AND IS_PRIMARY_KEY = 1"
         )?.query_and_then(
             params![table_oid], 
             |row| {
@@ -274,7 +277,7 @@ fn create_surrogate_view(trans: &Transaction, table_oid: i64) -> Result<(), erro
             };
             let column_type: data_type::MetadataColumnType =
                 data_type::MetadataColumnType::from_database(
-                    row.get("TYPE_OID")?,
+                    row.get("OID")?,
                     row.get("MODE")?,
                 );
 
@@ -405,7 +408,7 @@ pub fn trash(table_oid: i64) -> Result<(), error::Error> {
 
     // Flag the table as trash
     trans.execute(
-        "UPDATE METADATA_TABLE SET TRASH = 1 WHERE TYPE_OID = ?1;",
+        "UPDATE METADATA_TABLE SET TRASH = 1 WHERE OID = ?1;",
         params![table_oid],
     )?;
 
@@ -421,7 +424,7 @@ pub fn untrash(table_oid: i64) -> Result<(), error::Error> {
 
     // Flag the table as trash
     trans.execute(
-        "UPDATE METADATA_TABLE SET TRASH = 0 WHERE TYPE_OID = ?1;",
+        "UPDATE METADATA_TABLE SET TRASH = 0 WHERE OID = ?1;",
         params![table_oid],
     )?;
 
@@ -499,7 +502,7 @@ pub fn get_metadata(table_oid: i64) -> Result<Metadata, error::Error> {
         "SELECT 
             NAME 
         FROM METADATA_TABLE 
-        WHERE TRASH = 0 AND TYPE_OID = ?1;",
+        WHERE TRASH = 0 AND OID = ?1;",
         params![table_oid],
         |row| row.get::<_, String>("NAME"),
     )?;
@@ -512,7 +515,7 @@ pub fn get_metadata(table_oid: i64) -> Result<Metadata, error::Error> {
             SELECT 
                 u.MASTER_TABLE_OID 
             FROM METADATA_TABLE_INHERITANCE u
-            INNER JOIN METADATA_TABLE tbl ON tbl.TYPE_OID = u.MASTER_TABLE_OID
+            INNER JOIN METADATA_TABLE tbl ON tbl.OID = u.MASTER_TABLE_OID
             WHERE u.INHERITOR_TABLE_OID = ?1 
                 AND u.TRASH = 0
                 AND tbl.TRASH = 0
@@ -539,16 +542,21 @@ pub fn send_metadata_list(table_channel: Channel<BasicMetadata>) -> Result<(), e
     db::query_iterate(
         &trans,
         "SELECT 
-            tbl.TYPE_OID, 
+            tbl.OID, 
             tbl.NAME
         FROM METADATA_TABLE tbl
-        INNER JOIN METADATA_TYPE typ ON typ.OID = tbl.TYPE_OID
+        INNER JOIN METADATA_TYPE typ ON typ.OID = tbl.OID
         WHERE tbl.TRASH = 0 AND typ.MODE = 3
         ORDER BY tbl.NAME ASC;",
         [],
         &mut |row| {
+            println!("OID = {}, NAME = {}",
+                row.get::<_, i64>("OID")?,
+                row.get::<_, String>("NAME")?,
+            );
+
             table_channel.send(BasicMetadata {
-                oid: row.get::<_, i64>("TYPE_OID")?,
+                oid: row.get::<_, i64>("OID")?,
                 name: row.get::<_, String>("NAME")?,
             })?;
             return Ok(());
@@ -579,45 +587,45 @@ pub fn send_master_list_options(
         &trans,
         if allow_inheritance_from_tables {
             "
-            WITH RECURSIVE EXCLUDED_TABLES (TYPE_OID) AS (
-                SELECT ?1 AS TYPE_OID
+            WITH RECURSIVE EXCLUDED_TABLES (OID) AS (
+                SELECT ?1 AS OID
                 UNION
                 SELECT
-                    u.INHERITOR_TABLE_OID AS TYPE_OID
+                    u.INHERITOR_TABLE_OID AS OID
                 FROM EXCLUDED_TABLES s
-                INNER JOIN METADATA_TABLE_INHERITANCE u ON u.MASTER_TABLE_OID = s.TYPE_OID
+                INNER JOIN METADATA_TABLE_INHERITANCE u ON u.MASTER_TABLE_OID = s.OID
                 WHERE u.TRASH = 0
             )
             SELECT
-                tbl.TYPE_OID,
+                tbl.OID,
                 tbl.NAME,
                 0 AS HIERARCHY_LEVEL,
-                CASE WHEN exc.TYPE_OID IS NOT NULL THEN 1 ELSE 0 END AS IS_DISABLED
+                CASE WHEN exc.OID IS NOT NULL THEN 1 ELSE 0 END AS IS_DISABLED
             FROM METADATA_TABLE tbl
-            INNER JOIN METADATA_TYPE typ ON typ.OID = tbl.TYPE_OID
-            LEFT JOIN EXCLUDED_TABLES exc ON exc.TYPE_OID = tbl.TYPE_OID
+            INNER JOIN METADATA_TYPE typ ON typ.OID = tbl.OID
+            LEFT JOIN EXCLUDED_TABLES exc ON exc.OID = tbl.OID
             WHERE tbl.TRASH = 0 AND typ.MODE IN (3, 4)
             ORDER BY tbl.NAME
             "
         } else {
             "
-            WITH RECURSIVE EXCLUDED_TABLES (TYPE_OID) AS (
-                SELECT ?1 AS TYPE_OID
+            WITH RECURSIVE EXCLUDED_TABLES (OID) AS (
+                SELECT ?1 AS OID
                 UNION
                 SELECT
-                    u.INHERITOR_TABLE_OID AS TYPE_OID
+                    u.INHERITOR_TABLE_OID AS OID
                 FROM EXCLUDED_TABLES s
-                INNER JOIN METADATA_TABLE_INHERITANCE u ON u.MASTER_TABLE_OID = s.TYPE_OID
+                INNER JOIN METADATA_TABLE_INHERITANCE u ON u.MASTER_TABLE_OID = s.OID
                 WHERE u.TRASH = 0
             )
             SELECT
-                tbl.TYPE_OID,
+                tbl.OID,
                 tbl.NAME,
                 0 AS HIERARCHY_LEVEL,
-                CASE WHEN exc.TYPE_OID IS NOT NULL THEN 1 ELSE 0 END AS IS_DISABLED
+                CASE WHEN exc.OID IS NOT NULL THEN 1 ELSE 0 END AS IS_DISABLED
             FROM METADATA_TABLE tbl
-            INNER JOIN METADATA_TYPE typ ON typ.OID = tbl.TYPE_OID
-            LEFT JOIN EXCLUDED_TABLES exc ON exc.TYPE_OID = tbl.TYPE_OID
+            INNER JOIN METADATA_TYPE typ ON typ.OID = tbl.OID
+            LEFT JOIN EXCLUDED_TABLES exc ON exc.OID = tbl.OID
             WHERE tbl.TRASH = 0 AND typ.MODE = 4
             ORDER BY tbl.NAME
             "
@@ -625,7 +633,7 @@ pub fn send_master_list_options(
         params![table_oid],
         &mut |row| {
             channel.send(MasterListOption {
-                oid: row.get("TYPE_OID")?,
+                oid: row.get("OID")?,
                 name: row.get("NAME")?,
                 hierarchy_level: row.get("HIERARCHY_LEVEL")?,
                 is_disabled: row.get("IS_DISABLED")?,

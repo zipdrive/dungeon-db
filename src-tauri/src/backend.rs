@@ -4,7 +4,7 @@ mod obj_type;
 mod report;
 mod report_column;
 mod report_parameter;
-mod report_data;
+//mod report_data;
 mod table;
 mod table_column;
 mod table_data;
@@ -12,8 +12,8 @@ use crate::util::error;
 use crate::util::channel::Channel;
 use serde::{Deserialize};
 use std::sync::Mutex;
-use tauri::ipc::{Channel as TauriChannel};
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::ipc::{Channel as TauriChannel, JavaScriptChannelId};
+use tauri::{AppHandle, Emitter, Manager, Webview, WebviewUrl, WebviewWindowBuilder};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -683,6 +683,7 @@ impl Action {
 
 
 #[derive(Deserialize)]
+#[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum Dialog {
     CreateTable,
     EditTableMetadata {
@@ -904,94 +905,114 @@ pub fn dialog_close(window: tauri::Window) -> Result<(), error::Error> {
 
 
 #[derive(Deserialize)]
+#[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum QueryStream {
-    Tables,
-    Reports,
-    ObjectTypes,
+    Tables {
+        channel: JavaScriptChannelId
+    },
+    Reports {
+        channel: JavaScriptChannelId
+    },
+    ObjectTypes {
+        channel: JavaScriptChannelId
+    },
     MasterLists {
         table_oid: Option<i64>,
-        allow_inheritance_from_tables: bool
+        allow_inheritance_from_tables: bool,
+        channel: JavaScriptChannelId
     },
-    ReferenceColumnTypes,
-    ObjectColumnTypes,
+    ReferenceColumnTypes {
+        channel: JavaScriptChannelId
+    },
+    ObjectColumnTypes {
+        channel: JavaScriptChannelId
+    },
     ObjectSubtypes {
-        table_oid: i64
+        table_oid: i64,
+        channel: JavaScriptChannelId
     },
     ReportParameters {
-        base_table_oid: i64
+        base_table_oid: i64,
+        channel: JavaScriptChannelId
     },
     TableColumns {
-        table_oid: i64
+        table_oid: i64,
+        channel: JavaScriptChannelId
     },
     TableColumnDropdownValues {
-        column_oid: i64
+        column_oid: i64,
+        channel: JavaScriptChannelId
     },
     TablePageCells {
         table_oid: i64,
         parent_row_oid: Option<i64>,
         page_num: i64,
-        page_size: i64
+        page_size: i64,
+        channel: JavaScriptChannelId
     },
     TableRowCells {
         table_oid: i64,
-        row_oid: i64
+        row_oid: i64,
+        channel: JavaScriptChannelId
     },
     TableObjectCells {
         table_oid: i64,
-        row_oid: i64
+        row_oid: i64,
+        channel: JavaScriptChannelId
     },
     ReportColumns {
-        report_oid: i64
+        report_oid: i64,
+        channel: JavaScriptChannelId
     }
 }
 
 impl QueryStream {
     /// Sends data through a channel from the database to the frontend.
-    pub fn send(&self, channel: &TauriChannel) -> Result<(), error::Error> {
+    pub fn send(&self, webview: Webview) -> Result<(), error::Error> {
         match &self {
-            Self::Tables => 
-                table::send_metadata_list(Channel::new(channel)),
-            Self::Reports => 
-                report::send_metadata_list(Channel::new(channel)),
-            Self::ObjectTypes => 
-                obj_type::send_metadata_list(None, Channel::new(channel)),
+            Self::Tables { channel} => 
+                table::send_metadata_list(channel.channel_on(webview)),
+            Self::Reports { channel} => 
+                report::send_metadata_list(channel.channel_on(webview)),
+            Self::ObjectTypes { channel} => 
+                obj_type::send_metadata_list(None, channel.channel_on(webview)),
 
-            Self::MasterLists { table_oid, allow_inheritance_from_tables } => 
-                table::send_master_list_options(table_oid.clone(), allow_inheritance_from_tables.clone(), Channel::new(channel)),
+            Self::MasterLists { table_oid, allow_inheritance_from_tables, channel } => 
+                table::send_master_list_options(table_oid.clone(), allow_inheritance_from_tables.clone(), channel.channel_on(webview)),
 
-            Self::ReferenceColumnTypes =>
-                table_column::send_type_metadata_list(data_type::MetadataColumnType::Reference(0), Channel::new(channel)),
-            Self::ObjectColumnTypes =>
-                table_column::send_type_metadata_list(data_type::MetadataColumnType::ChildObject(0), Channel::new(channel)),
+            Self::ReferenceColumnTypes { channel} =>
+                table_column::send_type_metadata_list(data_type::MetadataColumnType::Reference(0), channel.channel_on(webview)),
+            Self::ObjectColumnTypes { channel} =>
+                table_column::send_type_metadata_list(data_type::MetadataColumnType::ChildObject(0), channel.channel_on(webview)),
 
-            Self::ObjectSubtypes { table_oid } =>
-                obj_type::send_metadata_list(Some(table_oid.clone()), Channel::new(channel)),
+            Self::ObjectSubtypes { table_oid, channel } =>
+                obj_type::send_metadata_list(Some(table_oid.clone()), channel.channel_on(webview)),
 
-            Self::ReportParameters { base_table_oid } =>
-                report_parameter::send_parameter_list(base_table_oid.clone(), Channel::new(channel)),
+            Self::ReportParameters { base_table_oid, channel } =>
+                report_parameter::send_parameter_list(base_table_oid.clone(), channel.channel_on(webview)),
 
-            Self::TableColumns { table_oid } => 
-                table_column::send_metadata_list(table_oid.clone(), Channel::new(channel)),
-            Self::TableColumnDropdownValues { column_oid } => 
-                table_column::send_table_column_dropdown_values(column_oid.clone(), Channel::new(channel)),
+            Self::TableColumns { table_oid, channel } => 
+                table_column::send_metadata_list(table_oid.clone(), channel.channel_on(webview)),
+            Self::TableColumnDropdownValues { column_oid, channel } => 
+                table_column::send_table_column_dropdown_values(column_oid.clone(), channel.channel_on(webview)),
 
-            Self::ReportColumns { report_oid } => 
-                report_column::send_metadata_list(report_oid.clone(), Channel::new(channel)),
+            Self::ReportColumns { report_oid, channel } => 
+                report_column::send_metadata_list(report_oid.clone(), channel.channel_on(webview)),
 
-            Self::TablePageCells { table_oid, parent_row_oid, page_num, page_size } =>
-                table_data::send_table_data(table_oid.clone(), parent_row_oid.clone(), page_num.clone(), page_size.clone(), Channel::new(channel)),
-            Self::TableRowCells { table_oid, row_oid } =>
-                table_data::send_table_row(table_oid.clone(), row_oid.clone(), Channel::new(channel)),
-            Self::TableObjectCells { table_oid, row_oid } =>
-                obj_type::send_obj_data(table_oid.clone(), row_oid.clone(), Channel::new(channel)),
+            Self::TablePageCells { table_oid, parent_row_oid, page_num, page_size, channel } =>
+                table_data::send_table_data(table_oid.clone(), parent_row_oid.clone(), page_num.clone(), page_size.clone(), channel.channel_on(webview)),
+            Self::TableRowCells { table_oid, row_oid, channel } =>
+                table_data::send_table_row(table_oid.clone(), row_oid.clone(), channel.channel_on(webview)),
+            Self::TableObjectCells { table_oid, row_oid, channel } =>
+                obj_type::send_obj_data(table_oid.clone(), row_oid.clone(), channel.channel_on(webview)),
         }
     }
 }
 
 #[tauri::command]
 /// Sends data through a channel from the backend to the frontend.
-pub fn query(query: QueryStream, channel: TauriChannel) -> Result<(), error::Error> {
-    query.send(&channel)
+pub fn query(webview: Webview, query: QueryStream) -> Result<(), error::Error> {
+    query.send(webview)
 }
 
 

@@ -1,4 +1,4 @@
-use std::io::BufWriter;
+use std::io::{BufWriter, Write};
 use std::marker::PhantomData;
 use serde::{Serialize};
 use serde_json::Serializer;
@@ -23,18 +23,22 @@ impl<'a, T: Serialize> Channel<'a, T> {
     /// Sends a value through the channel.
     pub fn send(&self, value: T) -> Result<(), error::Error> {
         let writer = BufWriter::new(Vec::new());
+        
+        // Serialize the JSON
         let mut serializer = Serializer::new(writer);
-        match value.serialize(&mut serializer) {
-            Err(_) => {
-                return Err(error::Error::AdhocError("Unable to serialize value to JSON."));
-            },
-            _ => {}
+        if let Err(_) = value.serialize(&mut serializer) {
+            return Err(error::Error::AdhocError("Unable to serialize value to JSON."));
         };
-        let raw: Vec<u8> = match serializer.into_inner().into_inner() {
-            Ok(r) => r,
-            Err(_) => {
-                return Err(error::Error::AdhocError("Unable to extract JSON buffer after serialization."));
-            }
+        
+        // Flush the buffer
+        let mut writer = serializer.into_inner();
+        if let Err(_) = writer.flush() {
+            return Err(error::Error::AdhocError("Unable to flush buffer after serialization."));
+        }
+
+        // Send through internal channel
+        let Ok(raw) = writer.into_inner() else {
+            return Err(error::Error::AdhocError("Unable to extract JSON buffer after serialization."));
         };
         self.inner_channel.send(tauri::ipc::InvokeResponseBody::Raw(raw))?;
         return Ok(());

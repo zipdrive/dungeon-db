@@ -190,109 +190,115 @@ export async function queryAsync(query: Query): Promise<any> {
 
 
 
-export type QueryStream = [{
-    tables: {}
-}, Channel<BasicMetadata>] 
-
-| [{
-    reports: {}
-}, Channel<BasicMetadata>] 
-
-| [{
-    objectTypes: {}
-}, Channel<BasicHierarchicalMetadata>] 
-
-| [{
+export type QueryStream = {
+    tables: {
+        channel: Channel<BasicMetadata>
+    }
+}
+| {
+    reports: {
+        channel: Channel<BasicMetadata>
+    }
+}
+| {
+    objectTypes: {
+        channel: Channel<BasicHierarchicalMetadata>
+    }
+} 
+| {
     masterLists: {
-        tableOid: number
+        tableOid: number | null,
+        allowInheritanceFromTables: boolean,
+        channel: Channel<ToggledHierarchicalMetadata>
     }
-}, Channel<ToggledHierarchicalMetadata>] 
-
-| [{
-    referenceColumnTypes: {}
-}, Channel<BasicMetadata>] 
-
-| [{
-    objectColumnTypes: {}
-}, Channel<BasicMetadata>] 
-
-| [{
+}
+| {
+    referenceColumnTypes: {
+        channel: Channel<BasicMetadata>
+    }
+}
+| {
+    objectColumnTypes: {
+        channel: Channel<BasicMetadata>
+    }
+}
+| {
     objectSubtypes: {
-        tableOid: number
+        tableOid: number,
+        channel: Channel<BasicHierarchicalMetadata>
     }
-}, Channel<BasicHierarchicalMetadata>] 
-
-| [{
+} 
+| {
     reportParameters: {
-        baseTableOid: number
+        baseTableOid: number,
+        channel: Channel<ReportVirtualParameter>
     }
-}, Channel<ReportVirtualParameter>]
-
-| [{
+}
+| {
     tableColumns: {
-        tableOid: number
+        tableOid: number,
+        channel: Channel<TableColumnMetadata>
     }
-}, Channel<TableColumnMetadata>]
-
-| [{
+}
+| {
     tableColumnDropdownValues: {
-        columnOid: number
+        columnOid: number,
+        channel: Channel<DropdownValue>
     }
-}, Channel<DropdownValue>]
-
-| [{
+}
+| {
     reportColumns: {
-        reportOid: number
+        reportOid: number,
+        channel: Channel<ReportColumnMetadata>
     }
-}, Channel<ReportColumnMetadata>]
-
-| [{
+}
+| {
     tablePageCells: {
         tableOid: number,
         parentRowOid: number | null,
         pageNum: number,
-        pageSize: number
+        pageSize: number,
+        channel: Channel<TableCellChannelPacket>
     }
-}, Channel<TableCellChannelPacket>]
-
-| [{
+}
+| {
     tableRowCells: {
         tableOid: number,
-        rowOid: number
+        rowOid: number,
+        channel: Channel<TableRowCellChannelPacket>
     }
-}, Channel<TableRowCellChannelPacket>]
-
-| [{
+}
+| {
     tableObjectCells: {
         tableOid: number,
-        rowOid: number
+        rowOid: number,
+        channel: Channel<TableRowCellChannelPacket>
     }
-}, Channel<TableRowCellChannelPacket>]
-
-| [{
+}
+| {
     reportPageCells: {
         reportOid: number,
         parentRowOid: number | null,
         pageNum: number,
-        pageSize: number
+        pageSize: number,
+        channel: Channel<ReportCellChannelPacket>
     }
-}, Channel<ReportCellChannelPacket>]
-
-| [{
+}
+| {
     reportRowCells: {
         reportOid: number,
-        baseTableRowOid: number
+        baseTableRowOid: number,
+        channel: Channel<ReportRowCellChannelPacket>
     }
-}, Channel<ReportRowCellChannelPacket>];
+};
 
 /**
  * Receives data through a channel from the backend.
  * @param queryStream 
  */
 export async function queryStreamAsync(queryStream: QueryStream): Promise<void> {
-    await invoke('query_stream', {
-        query: queryStream[0],
-        channel: queryStream[1]
+    await invoke('query', {
+        query: queryStream
     })
     .catch(async (e) => {
         await message(e, {
@@ -305,19 +311,19 @@ export async function queryStreamAsync(queryStream: QueryStream): Promise<void> 
 
 
 export type Dialog = {
-    createTable: {}
+    createTable: null
 } | {
     editTableMetadata: {
         tableOid: number
     }
 } | {
-    createReport: {}
+    createReport: null
 } | {
     editReportMetadata: {
         reportOid: number
     }
 } | {
-    createObjectType: {}
+    createObjectType: null
 } | {
     editObjectTypeMetadata: {
         objTypeOid: number
@@ -371,7 +377,7 @@ export type Dialog = {
  * @param dialog The dialog window to open.
  */
 export async function openDialogAsync(dialog: Dialog): Promise<void> {
-    await invoke('dialog_open', dialog)
+    await invoke('dialog_open', { dialog: dialog })
     .catch(async (e) => {
         await message(e, {
             title: "An error occurred while opening dialog box.",

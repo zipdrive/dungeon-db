@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::{Result as SerdeJsonResult, Value};
 use std::collections::{HashMap, HashSet, LinkedList};
 use std::path::Path;
-use crate::util::channel::Channel;
+use tauri::ipc::Channel;
 use time::format_description::well_known;
 use time::macros::time;
 use time::{Date, PrimitiveDateTime, UtcDateTime};
@@ -955,7 +955,7 @@ fn construct_data_query(
                 u.MASTER_TABLE_OID AS SUPERTYPE_OID,
                 u.INHERITOR_TABLE_OID AS INHERITOR_TYPE_OID
             FROM METADATA_TABLE_INHERITANCE u
-            INNER JOIN METADATA_TABLE tbl ON tbl.TYPE_OID = u.MASTER_TABLE_OID
+            INNER JOIN METADATA_TABLE tbl ON tbl.OID = u.MASTER_TABLE_OID
             WHERE u.TRASH = 0 AND tbl.TRASH = 0 AND u.INHERITOR_TABLE_OID = ?1
             UNION
             SELECT
@@ -965,7 +965,7 @@ fn construct_data_query(
                 u.INHERITOR_TABLE_OID AS INHERITOR_TYPE_OID
             FROM SUPERTYPE_QUERY s
             INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.SUPERTYPE_OID
-            INNER JOIN METADATA_TABLE tbl ON tbl.TYPE_OID = u.MASTER_TABLE_OID
+            INNER JOIN METADATA_TABLE tbl ON tbl.OID = u.MASTER_TABLE_OID
             WHERE u.TRASH = 0 AND tbl.TRASH = 0
         ),
         CONDENSED_SUPERTYPE_QUERY (MAX_LEVEL, FINAL_TYPE_OID, SUPERTYPE_OID, COL_EXPRESSION, JOIN_CLAUSE) AS (

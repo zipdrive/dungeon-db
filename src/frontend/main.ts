@@ -2,7 +2,7 @@ import { Menu, MenuItem } from "@tauri-apps/api/menu";
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from '@tauri-apps/api/event';
 import { message } from "@tauri-apps/plugin-dialog";
-import { BasicHierarchicalMetadata, BasicMetadata, TableCellChannelPacket, TableColumnMetadata, TableRowCellChannelPacket, executeAsync, openDialogAsync, queryAsync } from './backendutils';
+import { BasicHierarchicalMetadata, BasicMetadata, TableCellChannelPacket, TableColumnMetadata, TableRowCellChannelPacket, executeAsync, openDialogAsync, queryAsync, queryStreamAsync } from './backendutils';
 
 
 /**
@@ -23,10 +23,11 @@ async function updateTableListAsync() {
  * @param tableMetadata 
  */
 function addTableToList(tablesList: HTMLElement, tableMetadata: BasicMetadata) {
+  console.debug(JSON.stringify(tableMetadata));
+
   async function openTableAsync() {
     await openDialogAsync({
-      invokeAction: 'dialog_table_data',
-      invokeParams: {
+      table: {
         tableOid: tableMetadata.oid,
         tableName: tableMetadata.name
       }
@@ -41,8 +42,7 @@ function addTableToList(tablesList: HTMLElement, tableMetadata: BasicMetadata) {
 
   async function editTableMetadataAsync() {
     await openDialogAsync({
-      invokeAction: 'dialog_edit_table',
-      invokeParams: {
+      editTableMetadata: {
         tableOid: tableMetadata.oid
       }
     })
@@ -140,9 +140,10 @@ function loadTables() {
       };
 
       // Send a command to Rust to get the list of tables from the database
-      await queryAsync({
-        invokeAction: "get_table_list", 
-        invokeParams: { tableChannel: onReceiveUpdatedTable }
+      await queryStreamAsync({
+        tables: {
+          channel: onReceiveUpdatedTable
+        }
       });
 
       if (tablesList.childElementCount > 0) {
@@ -172,8 +173,7 @@ function loadTables() {
 function addReportToList(reportsList: HTMLElement, reportMetadata: BasicMetadata) {
   async function openReportAsync() {
     await openDialogAsync({
-      invokeAction: 'dialog_report_data',
-      invokeParams: {
+      report: {
         reportOid: reportMetadata.oid,
         reportName: reportMetadata.name
       }
@@ -188,8 +188,7 @@ function addReportToList(reportsList: HTMLElement, reportMetadata: BasicMetadata
 
   async function editReportMetadataAsync() {
     await openDialogAsync({
-      invokeAction: 'dialog_edit_report',
-      invokeParams: {
+      editReportMetadata: {
         reportOid: reportMetadata.oid
       }
     })
@@ -288,9 +287,10 @@ function loadReports() {
       };
 
       // Send a command to Rust to get the list of reports from the database
-      await queryAsync({
-        invokeAction: "get_report_list", 
-        invokeParams: { reportChannel: onReceiveReport }
+      await queryStreamAsync({
+        reports: {
+          channel: onReceiveReport
+        }
       });
 
       if (reportsList.childElementCount > 0) {
@@ -320,8 +320,7 @@ function loadReports() {
 function addObjectTypeToList(objTypeList: HTMLElement, objTypeMetadata: BasicHierarchicalMetadata) {
   async function openObjTypeAsync() {
     await openDialogAsync({
-      invokeAction: 'dialog_table_data',
-      invokeParams: {
+      table: {
         tableOid: objTypeMetadata.oid,
         tableName: objTypeMetadata.name
       }
@@ -336,8 +335,7 @@ function addObjectTypeToList(objTypeList: HTMLElement, objTypeMetadata: BasicHie
 
   async function editObjTypeMetadataAsync() {
     await openDialogAsync({
-      invokeAction: 'dialog_edit_object_type',
-      invokeParams: {
+      editObjectTypeMetadata: {
         objTypeOid: objTypeMetadata.oid
       }
     })
@@ -436,9 +434,10 @@ function loadObjectTypes() {
       };
 
       // Send a command to Rust to get the list of types from the database
-      await queryAsync({
-        invokeAction: "get_object_type_list", 
-        invokeParams: { objectTypeChannel: onReceiveObjectType }
+      await queryStreamAsync({
+        objectTypes: {
+          channel: onReceiveObjectType
+        }
       });
 
       if (objectTypesList.childElementCount > 0) {
@@ -464,8 +463,7 @@ function loadObjectTypes() {
 window.addEventListener("DOMContentLoaded", () => {
   document.getElementById('new-table-button')?.addEventListener('click', async (_) => {
     await openDialogAsync({
-      invokeAction: "dialog_create_table", 
-      invokeParams: {}
+      createTable: null
     })
     .catch(async (e) => {
       await message(e, {
@@ -476,8 +474,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   document.getElementById('new-report-button')?.addEventListener('click', async (_) => {
     await openDialogAsync({
-      invokeAction: "dialog_create_report", 
-      invokeParams: {}
+      createReport: null
     })
     .catch(async (e) => {
       await message(e, {
@@ -488,8 +485,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   document.getElementById('new-object-type-button')?.addEventListener('click', async (_) => {
     await openDialogAsync({
-      invokeAction: "dialog_create_object_type", 
-      invokeParams: {}
+      createObjectType: null
     })
     .catch(async (e) => {
       await message(e, {

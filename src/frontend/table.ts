@@ -139,14 +139,15 @@ if (urlParamTableOid) {
     };
 
     // Send a command to Rust to get the list of rows from the database
-    await queryStreamAsync([{
+    await queryStreamAsync({
       tablePageCells: {
         tableOid: tableOid, 
         parentRowOid: parentRowOid,
         pageNum: pageNum,
-        pageSize: pageSize
+        pageSize: pageSize,
+        channel: onReceiveCell
       }
-    }, onReceiveCell]);
+    });
 
     // Set the scrolling position back to what it was previously
     pageNode.scrollLeft = scrollHorizontalPosition;
@@ -207,11 +208,12 @@ if (urlParamTableOid) {
     };
 
     // Send a command to Rust to get the list of table columns from the database
-    await queryStreamAsync([{
+    await queryStreamAsync({
       tableColumns: {
-        tableOid: tableOid
+        tableOid: tableOid,
+        channel: onReceiveColumn
       }
-    }, onReceiveColumn]);
+    });
 
     // Allow columns to be reordered
     if (tableHeaderRowNode) {
@@ -308,14 +310,15 @@ if (urlParamTableOid) {
     };
 
     // Send a command to Rust to get the list of rows from the database
-    await queryStreamAsync([{
+    await queryStreamAsync({
       tablePageCells: {
         tableOid: tableOid, 
         parentRowOid: parentRowOid,
         pageNum: pageNum,
-        pageSize: pageSize
+        pageSize: pageSize,
+        channel: onReceiveCell
       }
-    }, onReceiveCell]);
+    });
 
     // Make the columns of the table resizable
     makeColumnsResizable(
@@ -379,12 +382,13 @@ if (urlParamTableOid) {
     };
 
     // Send a command to Rust to get the list of rows from the database
-    await queryStreamAsync([{
+    await queryStreamAsync({
       tableRowCells: {
         tableOid: tableOid, 
-        rowOid: rowOid
+        rowOid: rowOid,
+        channel: onReceiveCell
       }
-    }, onReceiveCell]);
+    });
   }
 
 

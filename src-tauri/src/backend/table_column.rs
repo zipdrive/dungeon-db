@@ -1,12 +1,9 @@
-use crate::backend::{data_type, db, table};
+use crate::backend::{data_type, db, report_parameter, table};
 use crate::util::error;
 use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
 use rusqlite::{params, Error as RusqliteError, OptionalExtension, Row};
 use serde::{Deserialize, Serialize};
-use std::cell::Ref;
-use std::collections::HashMap;
-use std::sync::mpsc::channel;
-use crate::util::channel::Channel;
+use tauri::ipc::Channel;
 use regex::Regex;
 
 #[derive(Serialize)]
@@ -43,8 +40,7 @@ pub fn create(
     let trans = conn.transaction()?;
 
     // Create a report parameter
-    trans.execute("INSERT INTO METADATA_RPT_PARAMETER DEFAULT VALUES", [])?;
-    let rpt_parameter_oid: i64 = trans.last_insert_rowid();
+    let rpt_parameter_oid: i64 = report_parameter::create(&trans)?;
 
     // Adjust the ordering to fit this column
     let column_ordering: i64 = match column_ordering {
@@ -89,7 +85,7 @@ pub fn create(
         data_type::MetadataColumnType::Primitive(prim) => {
             // Add the column to the table's metadata
             trans.execute(
-                "INSERT INTO METADATA_TABLE_COLUMN (RPT_PARAMETER_OID, TABLE_OID, NAME, TYPE_OID, COLUMN_ORDERING, COLUMN_CSS_STYLE, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
+                "INSERT INTO METADATA_TABLE_COLUMN (OID, TABLE_OID, NAME, TYPE_OID, COLUMN_ORDERING, COLUMN_CSS_STYLE, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
                 params![rpt_parameter_oid, table_oid, column_name, prim.get_type_oid(), column_ordering, column_style, is_nullable_bit, is_unique_bit, is_primary_key_bit]
             )?;
             let column_oid = trans.last_insert_rowid();
@@ -113,7 +109,7 @@ pub fn create(
         | data_type::MetadataColumnType::ChildObject(referenced_table_oid) => {
             // Add the column to the table's metadata
             trans.execute(
-                "INSERT INTO METADATA_TABLE_COLUMN (RPT_PARAMETER_OID, TABLE_OID, NAME,TYPE_OID, COLUMN_ORDERING, COLUMN_CSS_STYLE, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
+                "INSERT INTO METADATA_TABLE_COLUMN (OID, TABLE_OID, NAME,TYPE_OID, COLUMN_ORDERING, COLUMN_CSS_STYLE, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
                 params![rpt_parameter_oid, table_oid, column_name, referenced_table_oid, column_ordering, column_style, is_nullable_bit, is_unique_bit, is_primary_key_bit]
             )?;
             let column_oid = trans.last_insert_rowid();
@@ -133,7 +129,7 @@ pub fn create(
         | data_type::MetadataColumnType::ChildTable(column_type_oid) => {
             // Add the column to the table's metadata
             trans.execute(
-                "INSERT INTO METADATA_TABLE_COLUMN (RPT_PARAMETER_OID, TABLE_OID, NAME,TYPE_OID, COLUMN_ORDERING, COLUMN_CSS_STYLE, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
+                "INSERT INTO METADATA_TABLE_COLUMN (OID, TABLE_OID, NAME,TYPE_OID, COLUMN_ORDERING, COLUMN_CSS_STYLE, IS_NULLABLE, IS_UNIQUE, IS_PRIMARY_KEY) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9);",
                 params![rpt_parameter_oid, table_oid, column_name, column_type_oid, column_ordering, column_style, is_nullable_bit, is_unique_bit, is_primary_key_bit]
             )?;
             let column_oid = trans.last_insert_rowid();
@@ -167,7 +163,7 @@ pub fn edit(
     trans.execute(
         "INSERT INTO METADATA_TABLE_COLUMN (
             TRASH, 
-            RPT_PARAMETER_OID,
+            OID,
             TABLE_OID, 
             NAME, 
             TYPE_OID, 
@@ -180,7 +176,7 @@ pub fn edit(
         )
         SELECT
             1 AS TRASH,
-            RPT_PARAMETER_OID,
+            OID,
             TABLE_OID,
             NAME,
             TYPE_OID,
@@ -448,7 +444,7 @@ pub fn edit_width(table_oid: i64, column_oid: i64, column_width: i64) -> Result<
     trans.execute(
         "INSERT INTO METADATA_TABLE_COLUMN (
             TRASH, 
-            RPT_PARAMETER_OID,
+            OID,
             TABLE_OID, 
             NAME, 
             TYPE_OID, 
@@ -461,7 +457,7 @@ pub fn edit_width(table_oid: i64, column_oid: i64, column_width: i64) -> Result<
         )
         SELECT
             1 AS TRASH,
-            RPT_PARAMETER_OID,
+            OID,
             TABLE_OID,
             NAME,
             TYPE_OID,
@@ -758,14 +754,14 @@ pub fn send_metadata_list(
 
     db::query_iterate(
         &trans,
-        "WITH RECURSIVE SUPERTYPE_QUERY (TYPE_OID) AS (
+        "WITH RECURSIVE SUPERTYPE_QUERY (OID) AS (
                 SELECT
                     ?1
                 UNION
                 SELECT
-                    u.MASTER_TABLE_OID AS TYPE_OID
+                    u.MASTER_TABLE_OID AS OID
                 FROM SUPERTYPE_QUERY s
-                INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.TYPE_OID
+                INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.OID
                 WHERE u.TRASH = 0
             )
             SELECT 
@@ -779,7 +775,7 @@ pub fn send_metadata_list(
                 c.IS_UNIQUE,
                 c.IS_PRIMARY_KEY
             FROM SUPERTYPE_QUERY s
-            INNER JOIN METADATA_TABLE_COLUMN c ON s.TYPE_OID = c.TABLE_OID
+            INNER JOIN METADATA_TABLE_COLUMN c ON s.OID = c.TABLE_OID
             INNER JOIN METADATA_TYPE t ON t.OID = c.TYPE_OID
             WHERE c.TRASH = 0
             ORDER BY c.COLUMN_ORDERING ASC;",
@@ -987,16 +983,16 @@ pub fn send_type_metadata_list(
     db::query_iterate(
         &trans,
         "SELECT 
-            tbl.TYPE_OID,
+            tbl.OID,
             tbl.NAME
         FROM METADATA_TABLE tbl
-        INNER JOIN METADATA_TYPE typ ON typ.OID = tbl.TYPE_OID
+        INNER JOIN METADATA_TYPE typ ON typ.OID = tbl.OID
         WHERE typ.MODE = ?1 AND tbl.TRASH = 0
         ORDER BY tbl.NAME;",
         [column_type.get_type_mode()],
         &mut |row| {
             type_channel.send(BasicTypeMetadata {
-                oid: row.get("TYPE_OID")?,
+                oid: row.get("OID")?,
                 name: row.get("NAME")?,
             })?;
             return Ok(());
