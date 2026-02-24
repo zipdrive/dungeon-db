@@ -88,7 +88,7 @@ impl Into<String> for Error {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 /// A flag for a validation check that was not passed.
 pub struct FailedValidation {

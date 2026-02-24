@@ -41,11 +41,12 @@ if (urlParamTableOid && urlParamObjOid) {
     };
 
     // Send the query to receive all possible subtypes
-    await queryStreamAsync([{
+    await queryStreamAsync({
       objectSubtypes: {
-        tableOid: tableOid
+        tableOid: tableOid,
+        channel: onReceiveSubtype
       }
-    }, onReceiveSubtype]);
+    });
 
     // Only add the subtype dropdown if there is at least one subtype
     if (subtypeDropdown.childElementCount > 1) {
@@ -109,12 +110,13 @@ if (urlParamTableOid && urlParamObjOid) {
       }
     };
 
-    await queryStreamAsync([{
+    await queryStreamAsync({
       tableObjectCells: {
         tableOid: tableOid,
-        rowOid: objOid
+        rowOid: objOid,
+        channel: onReceiveCell
       }
-    }, onReceiveCell]);
+    });
 
     // Allow field name column to be resized
     makeColumnsResizable(

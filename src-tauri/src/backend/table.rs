@@ -102,22 +102,21 @@ pub fn edit(table_oid: i64, name: String, master_table_oid_list: &Vec<i64>) -> R
     // Add inheritance from each master table
     for master_table_oid in master_table_oid_list.iter() {
         // Check if a row in the inheritance table already exists
-        match trans.query_one("SELECT RPT_PARAMETER_OID FROM METADATA_TABLE_INHERITANCE WHERE INHERITOR_TABLE_OID = ?1 AND MASTER_TABLE_OID = ?2", params![table_oid, master_table_oid], |row| row.get::<_, i64>(0)).optional()? {
+        match trans.query_one("SELECT OID FROM METADATA_TABLE_INHERITANCE WHERE INHERITOR_TABLE_OID = ?1 AND MASTER_TABLE_OID = ?2", params![table_oid, master_table_oid], |row| row.get::<_, i64>(0)).optional()? {
             Some(inheritance_row_oid) => {
                 // Update the inheritance table to indicate that the inheritance is not trash
                 trans.execute(
-                    "UPDATE METADATA_TABLE_INHERITANCE SET TRASH = 0 WHERE RPT_PARAMETER_OID = ?1",
+                    "UPDATE METADATA_TABLE_INHERITANCE SET TRASH = 0 WHERE OID = ?1",
                     params![inheritance_row_oid]
                 )?;
             },
             None => {
                 // Get new parameter OID
-                trans.execute("INSERT INTO METADATA_RPT_PARAMETER DEFAULT VALUES", [])?;
-                let rpt_parameter_oid: i64 = trans.last_insert_rowid();
+                let rpt_parameter_oid: i64 = report_parameter::create(&trans)?;
 
                 // Insert a new row into the inheritance table
                 trans.execute(
-                    "INSERT INTO METADATA_TABLE_INHERITANCE (RPT_PARAMETER_OID, INHERITOR_TABLE_OID, MASTER_TABLE_OID) VALUES (?1, ?2, ?3)",
+                    "INSERT INTO METADATA_TABLE_INHERITANCE (OID, INHERITOR_TABLE_OID, MASTER_TABLE_OID) VALUES (?1, ?2, ?3)",
                     params![rpt_parameter_oid, table_oid, master_table_oid]
                 )?;
                 
@@ -156,9 +155,11 @@ impl Ord for TableDependency {
 
 /// Update the surrogate view for the table.
 pub fn update_surrogate_view(trans: &Transaction, table_oid: i64) -> Result<(), error::Error> {
+    println!("Updating surrogate view TABLE{table_oid}...");
+
     // Drop the surrogate view and build up a directed graph of dependencies between the primary keys
     let empty_chain: Vec<i64> = Vec::new();
-    let dependencies = drop_surrogate_view(trans, table_oid, &empty_chain)?;
+    let dependencies = drop_surrogate_view(trans, table_oid, &empty_chain, true)?;
 
     // Create a priority queue of dependencies
     let mut heap: BinaryHeap<TableDependency> = BinaryHeap::new();
@@ -188,18 +189,78 @@ fn drop_surrogate_view(
     trans: &Transaction,
     table_oid: i64,
     above_table_oid: &Vec<i64>,
+    drop_related_tables: bool
 ) -> Result<HashMap<i64, i32>, error::Error> {
     println!("Dropping surrogate view for table TABLE{table_oid}");
 
     let mut found_dependencies: HashMap<i64, i32> = HashMap::new();
     found_dependencies.insert(table_oid, 0);
+
+    if drop_related_tables {
+        // Drop every related table
+        for related_table_oid_result in trans.prepare(
+                "
+                WITH RECURSIVE SUBTYPE_QUERY (TABLE_OID) AS (
+                    SELECT
+                        u.INHERITOR_TABLE_OID AS TABLE_OID
+                    FROM METADATA_TABLE_INHERITANCE u
+                    WHERE u.TRASH = 0 AND u.INHERITOR_TABLE_OID = ?1
+                    UNION
+                    SELECT
+                        u.INHERITOR_TABLE_OID AS TABLE_OID
+                    FROM SUBTYPE_QUERY s
+                    INNER JOIN METADATA_TABLE_INHERITANCE u ON u.MASTER_TABLE_OID = s.TABLE_OID
+                    WHERE u.TRASH = 0
+                ),
+                SUPERTYPE_QUERY (TABLE_OID) AS (
+                    SELECT
+                        u.MASTER_TABLE_OID AS TABLE_OID
+                    FROM METADATA_TABLE_INHERITANCE u
+                    WHERE u.TRASH = 0 AND u.INHERITOR_TABLE_OID = ?1
+                    UNION
+                    SELECT
+                        u.MASTER_TABLE_OID AS TABLE_OID
+                    FROM SUPERTYPE_QUERY s
+                    INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.TABLE_OID
+                    WHERE u.TRASH = 0
+                )
+                SELECT TABLE_OID FROM SUBTYPE_QUERY
+                UNION
+                SELECT TABLE_OID FROM SUPERTYPE_QUERY
+                "
+            )?.query_map(
+                params![table_oid], 
+                |row| {
+                    row.get::<_, i64>("TABLE_OID")
+                }
+            )? {
+
+            let related_table_oid: i64 = related_table_oid_result?;
+            let mut above_table_oid = above_table_oid.clone();
+            above_table_oid.push(related_table_oid);
+
+            for (found_dependent_table_oid, found_dependent_table_depth) in drop_surrogate_view(trans, related_table_oid, &above_table_oid, false)? {
+                match found_dependencies.get_mut(&found_dependent_table_oid) {
+                    Some(previously_found_dependent_table_maxdepth) => {
+                        *previously_found_dependent_table_maxdepth = std::cmp::max(*previously_found_dependent_table_maxdepth, found_dependent_table_depth);
+                    },
+                    None => {
+                        found_dependencies.insert(found_dependent_table_oid, found_dependent_table_depth);
+                    }
+                }
+            }
+        }
+    }
+
     let mut above_table_oid = above_table_oid.clone();
     above_table_oid.push(table_oid);
 
     // Query to find all tables dependent on the one being dropped
     for dependent_table_oid_result in trans.prepare(
-        "SELECT TABLE_OID FROM METADATA_TABLE_COLUMN WHERE OID = ?1 AND IS_PRIMARY_KEY = 1"
-        )?.query_and_then(
+        "
+        SELECT TABLE_OID FROM METADATA_TABLE_COLUMN WHERE OID = ?1 AND IS_PRIMARY_KEY = 1
+        "
+        )?.query_map(
             params![table_oid], 
             |row| {
                 row.get::<_, i64>("TABLE_OID")
@@ -217,7 +278,7 @@ fn drop_surrogate_view(
                 },
                 None => {
                     // Recurse deeper
-                    for (found_dependent_table_oid, found_dependent_table_depth) in drop_surrogate_view(&trans, dependent_table_oid, &above_table_oid)? {
+                    for (found_dependent_table_oid, found_dependent_table_depth) in drop_surrogate_view(&trans, dependent_table_oid, &above_table_oid, true)? {
                         match found_dependencies.get_mut(&found_dependent_table_oid) {
                             Some(previously_found_dependent_table_maxdepth) => {
                                 *previously_found_dependent_table_maxdepth = std::cmp::max(*previously_found_dependent_table_maxdepth, found_dependent_table_depth + 1);
@@ -240,13 +301,78 @@ fn drop_surrogate_view(
     return Ok(found_dependencies);
 }
 
+
 fn create_surrogate_view(trans: &Transaction, table_oid: i64) -> Result<(), error::Error> {
     println!("Creating surrogate view for table TABLE{table_oid}");
 
-    let mut select_tbls_cmd: String = format!("FROM TABLE{table_oid} t");
+    let mut select_tbls_cmd: String = format!("FROM TABLE{table_oid} m{table_oid}");
+    let mut related_table_oids: HashSet<i64> = HashSet::new();
+    related_table_oids.insert(table_oid.clone());
+    db::query_iterate(
+        trans,
+        "
+        WITH RECURSIVE SUPERTYPE_QUERY (TABLE_OID, INHERITOR_TABLE_OID) AS (
+            SELECT
+                u.MASTER_TABLE_OID AS TABLE_OID,
+                ?1 AS INHERITOR_TABLE_OID
+            FROM METADATA_TABLE_INHERITANCE u
+            WHERE u.TRASH = 0 AND u.INHERITOR_TABLE_OID = ?1
+            UNION
+            SELECT
+                u.MASTER_TABLE_OID AS TABLE_OID,
+                s.TABLE_OID AS INHERITOR_TABLE_OID
+            FROM SUPERTYPE_QUERY s
+            INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.TABLE_OID
+            WHERE u.TRASH = 0
+        )
+        SELECT * FROM SUPERTYPE_QUERY
+        ",
+        params![table_oid],
+        &mut |row| {
+            let master_table_oid: i64 = row.get("TABLE_OID")?;
+            let inheritor_table_oid: i64 = row.get("INHERITOR_TABLE_OID")?;
+            if !related_table_oids.contains(&master_table_oid) {
+                select_tbls_cmd = format!("{select_tbls_cmd} INNER JOIN TABLE{master_table_oid} m{master_table_oid} ON m{master_table_oid}.OID = m{inheritor_table_oid}.MASTER{master_table_oid}_OID");
+                related_table_oids.insert(master_table_oid);
+            }
+            return Ok(());
+        }
+    )?;
+    db::query_iterate(
+        trans,
+        "
+        WITH RECURSIVE SUBTYPE_QUERY (TABLE_OID, MASTER_TABLE_OID) AS (
+            SELECT
+                u.INHERITOR_TABLE_OID AS TABLE_OID,
+                ?1 AS MASTER_TABLE_OID
+            FROM METADATA_TABLE_INHERITANCE u
+            WHERE u.TRASH = 0 AND u.INHERITOR_TABLE_OID = ?1
+            UNION
+            SELECT
+                u.INHERITOR_TABLE_OID AS TABLE_OID,
+                s.TABLE_OID AS MASTER_TABLE_OID
+            FROM SUBTYPE_QUERY s
+            INNER JOIN METADATA_TABLE_INHERITANCE u ON u.MASTER_TABLE_OID = s.TABLE_OID
+            WHERE u.TRASH = 0
+        )
+        SELECT * FROM SUBTYPE_QUERY
+        ",
+        params![table_oid],
+        &mut |row| {
+            let inheritor_table_oid: i64 = row.get("TABLE_OID")?;
+            let master_table_oid: i64 = row.get("INHERITOR_TABLE_OID")?;
+            if !related_table_oids.contains(&inheritor_table_oid) {
+                select_tbls_cmd = format!("{select_tbls_cmd} LEFT JOIN TABLE{inheritor_table_oid} m{inheritor_table_oid} ON m{master_table_oid}.OID = m{inheritor_table_oid}.MASTER{master_table_oid}_OID");
+                related_table_oids.insert(inheritor_table_oid);
+            }
+            return Ok(());
+        }
+    )?;
+
     struct PrimaryKey {
         single_expr: String,
-        json_expr: String,
+        json_value_expr: String,
+        json_expr: String
     }
     let mut select_display_value: Vec<PrimaryKey> = Vec::new(); // The primary key (column name, value, needs to be enclosed in quotes?) tuple
     let mut tbl_count: i64 = 1;
@@ -254,17 +380,56 @@ fn create_surrogate_view(trans: &Transaction, table_oid: i64) -> Result<(), erro
     // Iterate over all columns of the table, building up the table's view
     db::query_iterate(
         trans,
-        "SELECT
+        "
+        WITH RECURSIVE SUPERTYPE_QUERY (TYPE_OID) AS (
+            SELECT
+                ?1
+            UNION
+            SELECT
+                u.MASTER_TABLE_OID AS TYPE_OID
+            FROM SUPERTYPE_QUERY s
+            INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.TYPE_OID
+            WHERE u.TRASH = 0
+        ),
+        SUBTYPE_QUERY (TYPE_OID) AS (
+            SELECT
+                u.INHERITOR_TABLE_OID AS TYPE_OID
+            FROM METADATA_TABLE_INHERITANCE u
+            WHERE u.MASTER_TABLE_OID = ?1 AND u.TRASH = 0
+            UNION
+            SELECT
+                u.INHERITOR_TABLE_OID AS TYPE_OID
+            FROM SUBTYPE_QUERY s
+            INNER JOIN METADATA_TABLE_INHERITANCE u ON u.MASTER_TABLE_OID = s.TYPE_OID
+            WHERE u.TRASH = 0
+        )
+        SELECT
+            c.COLUMN_ORDERING,
             c.OID,
             c.NAME,
+            c.TABLE_OID,
             c.TYPE_OID,
-            t.MODE
+            t.MODE,
+            0 AS IS_OPTIONAL
         FROM METADATA_TABLE_COLUMN c
         INNER JOIN METADATA_TYPE t ON t.OID = c.TYPE_OID
-        WHERE c.TABLE_OID = ?1 AND c.TRASH = 0 AND c.IS_PRIMARY_KEY = 1
-        ORDER BY c.COLUMN_ORDERING;",
+        WHERE c.TABLE_OID IN (SELECT * FROM SUPERTYPE_QUERY) AND c.TRASH = 0 AND c.IS_PRIMARY_KEY = 1
+        UNION
+        SELECT
+            c.COLUMN_ORDERING,
+            c.OID,
+            c.NAME,
+            c.TABLE_OID,
+            c.TYPE_OID,
+            t.MODE,
+            1 AS IS_OPTIONAL
+        FROM METADATA_TABLE_COLUMN c
+        INNER JOIN METADATA_TYPE t ON t.OID = c.TYPE_OID
+        WHERE c.TABLE_OID IN (SELECT * FROM SUBTYPE_QUERY) AND c.TRASH = 0 AND c.IS_PRIMARY_KEY = 1
+        ORDER BY 1",
         params![table_oid],
         &mut |row| {
+            let column_table_oid: i64 = row.get("TABLE_OID")?;
             let column_oid: i64 = row.get("OID")?;
             let column_name: String = row.get("NAME")?;
             let json_column_name: String = match serde_json::to_string(&column_name) {
@@ -277,97 +442,196 @@ fn create_surrogate_view(trans: &Transaction, table_oid: i64) -> Result<(), erro
             };
             let column_type: data_type::MetadataColumnType =
                 data_type::MetadataColumnType::from_database(
-                    row.get("OID")?,
+                    row.get("TYPE_OID")?,
                     row.get("MODE")?,
                 );
+            let column_is_optional: bool = row.get("IS_OPTIONAL")?;
 
             match column_type {
                 data_type::MetadataColumnType::Primitive(prim) => match prim {
                     data_type::Primitive::Boolean => {
-                        select_display_value.push(PrimaryKey {
-                                single_expr: format!("CASE WHEN t.COLUMN{column_oid} = 1 THEN 'True' ELSE 'False' END"),
-                                json_expr: format!("'{json_column_name}: ' || CASE WHEN t.COLUMN{column_oid} = 1 THEN 'true' ELSE 'false' END")
+                        if column_is_optional {
+                            select_display_value.push(PrimaryKey {
+                                single_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN NULL WHEN m{column_table_oid}.COLUMN{column_oid} = 1 THEN 'True' ELSE 'False' END"),
+                                json_value_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN 'null' WHEN m{column_table_oid}.COLUMN{column_oid} = 1 THEN 'true' ELSE 'false' END"),
+                                json_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN '' ELSE ', {json_column_name}: ' || CASE WHEN m{column_table_oid}.COLUMN{column_oid} = 1 THEN 'true' ELSE 'false' END END")
                             });
+                        } else {
+                            select_display_value.push(PrimaryKey {
+                                single_expr: format!("CASE WHEN m{column_table_oid}.COLUMN{column_oid} = 1 THEN 'True' ELSE 'False' END"),
+                                json_value_expr: format!("CASE WHEN m{column_table_oid}.COLUMN{column_oid} = 1 THEN 'true' ELSE 'false' END"),
+                                json_expr: format!("', {json_column_name}: ' || CASE WHEN m{column_table_oid}.COLUMN{column_oid} = 1 THEN 'true' ELSE 'false' END")
+                            });
+                        }
                     }
                     data_type::Primitive::Text => {
-                        select_display_value.push(PrimaryKey {
-                                single_expr: format!("t.COLUMN{column_oid}"),
-                                json_expr: format!("'{json_column_name}: ' || CASE WHEN t.COLUMN{column_oid} IS NOT NULL THEN '\"' || t.COLUMN{column_oid} || '\"' ELSE 'null' END")
+                        if column_is_optional {
+                            select_display_value.push(PrimaryKey {
+                                single_expr: format!("m{column_table_oid}.COLUMN{column_oid}"),
+                                json_value_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN 'null' WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '\"' || REPLACE(REPLACE(m{column_table_oid}.COLUMN{column_oid}, '\\', '\\\\'), '\"', '\\\"') || '\"' ELSE 'null' END"),
+                                json_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN '' ELSE ', {json_column_name}: ' || CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '\"' || REPLACE(REPLACE(m{column_table_oid}.COLUMN{column_oid}, '\\', '\\\\'), '\"', '\\\"') || '\"' ELSE 'null' END END")
                             });
+                        } else {
+                            select_display_value.push(PrimaryKey {
+                                single_expr: format!("m{column_table_oid}.COLUMN{column_oid}"),
+                                json_value_expr: format!("CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '\"' || REPLACE(REPLACE(m{column_table_oid}.COLUMN{column_oid}, '\\', '\\\\'), '\"', '\\\"') || '\"' ELSE 'null' END"),
+                                json_expr: format!("', {json_column_name}: ' || CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '\"' || REPLACE(REPLACE(m{column_table_oid}.COLUMN{column_oid}, '\\', '\\\\'), '\"', '\\\"') || '\"' ELSE 'null' END")
+                            });
+                        }
                     }
                     data_type::Primitive::Any
                     | data_type::Primitive::Integer
                     | data_type::Primitive::Number
                     | data_type::Primitive::JSON => {
-                        select_display_value.push(PrimaryKey { 
-                                single_expr: format!("CAST(t.COLUMN{column_oid} AS TEXT)"), 
-                                json_expr: format!("'{json_column_name}: ' || CASE WHEN t.COLUMN{column_oid} IS NOT NULL THEN CAST(t.COLUMN{column_oid} AS TEXT) ELSE 'null' END")
+                        if column_is_optional {
+                            select_display_value.push(PrimaryKey { 
+                                single_expr: format!("CAST(m{column_table_oid}.COLUMN{column_oid} AS TEXT)"), 
+                                json_value_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN 'null' WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN CAST(m{column_table_oid}.COLUMN{column_oid} AS TEXT) ELSE 'null' END"), 
+                                json_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN '' ELSE ', {json_column_name}: ' || CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN CAST(m{column_table_oid}.COLUMN{column_oid} AS TEXT) ELSE 'null' END END")
                             });
+                        } else {
+                            select_display_value.push(PrimaryKey { 
+                                single_expr: format!("CAST(m{column_table_oid}.COLUMN{column_oid} AS TEXT)"), 
+                                json_value_expr: format!("CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN CAST(m{column_table_oid}.COLUMN{column_oid} AS TEXT) ELSE 'null' END"), 
+                                json_expr: format!("', {json_column_name}: ' || CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN CAST(m{column_table_oid}.COLUMN{column_oid} AS TEXT) ELSE 'null' END")
+                            });
+                        }
                     }
                     data_type::Primitive::Date => {
-                        select_display_value.push(PrimaryKey { 
-                                single_expr: format!("DATE(t.COLUMN{column_oid}, 'unixepoch')"), 
-                                json_expr: format!("'{json_column_name}: ' || CASE WHEN t.COLUMN{column_oid} IS NOT NULL THEN '\"' || DATE(t.COLUMN{column_oid}, 'unixepoch') || '\"' ELSE 'null' END") 
+                        if column_is_optional {
+                            select_display_value.push(PrimaryKey { 
+                                single_expr: format!("DATE(m{column_table_oid}.COLUMN{column_oid}, 'julianday')"), 
+                                json_value_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN 'null' WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '\"' || DATE(m{column_table_oid}.COLUMN{column_oid}, 'julianday') || '\"' ELSE 'null' END"), 
+                                json_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN '' ELSE ', {json_column_name}: ' || CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '\"' || DATE(m{column_table_oid}.COLUMN{column_oid}, 'julianday') || '\"' ELSE 'null' END END") 
                             });
+                        } else {
+                            select_display_value.push(PrimaryKey { 
+                                single_expr: format!("DATE(m{column_table_oid}.COLUMN{column_oid}, 'julianday')"), 
+                                json_value_expr: format!("CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '\"' || DATE(m{column_table_oid}.COLUMN{column_oid}, 'julianday') || '\"' ELSE 'null' END"), 
+                                json_expr: format!("', {json_column_name}: ' || CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '\"' || DATE(m{column_table_oid}.COLUMN{column_oid}, 'julianday') || '\"' ELSE 'null' END") 
+                            });
+                        }
                     }
                     data_type::Primitive::Timestamp => {
-                        select_display_value.push(PrimaryKey { 
-                                single_expr: format!("STRFTIME('%FT%TZ', t.COLUMN{column_oid}, 'unixepoch')"), 
-                                json_expr: format!("'{json_column_name}: ' || CASE WHEN t.COLUMN{column_oid} IS NOT NULL THEN '\"' || STRFTIME('%FT%TZ', t.COLUMN{column_oid}, 'unixepoch') || '\"' ELSE 'null' END") 
+                        if column_is_optional {
+                            select_display_value.push(PrimaryKey { 
+                                single_expr: format!("STRFTIME('%FT%TZ', m{column_table_oid}.COLUMN{column_oid}, 'julianday')"), 
+                                json_value_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN 'null' WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '\"' || STRFTIME('%FT%TZ', m{column_table_oid}.COLUMN{column_oid}, 'julianday') || '\"' ELSE 'null' END"), 
+                                json_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN '' ELSE ', {json_column_name}: ' || CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '\"' || STRFTIME('%FT%TZ', m{column_table_oid}.COLUMN{column_oid}, 'julianday') || '\"' ELSE 'null' END END") 
                             });
+                        } else {
+                            select_display_value.push(PrimaryKey { 
+                                single_expr: format!("STRFTIME('%FT%TZ', m{column_table_oid}.COLUMN{column_oid}, 'julianday')"), 
+                                json_value_expr: format!("CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '\"' || STRFTIME('%FT%TZ', m{column_table_oid}.COLUMN{column_oid}, 'julianday') || '\"' ELSE 'null' END"), 
+                                json_expr: format!("', {json_column_name}: ' || CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '\"' || STRFTIME('%FT%TZ', m{column_table_oid}.COLUMN{column_oid}, 'julianday') || '\"' ELSE 'null' END") 
+                            });
+                        }
                     }
                     data_type::Primitive::File | data_type::Primitive::Image => {
-                        select_display_value.push(PrimaryKey {
-                                single_expr: format!("CASE WHEN t.COLUMN{column_oid} IS NULL THEN NULL ELSE '{{}}' END"),
-                                json_expr: format!("'{json_column_name}: ' || CASE WHEN t.COLUMN{column_oid} IS NOT NULL THEN '{{}}' ELSE 'null' END")
+                        if column_is_optional {
+                            select_display_value.push(PrimaryKey {
+                                single_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL OR m{column_table_oid}.COLUMN{column_oid} IS NULL THEN NULL ELSE '{{}}' END"),
+                                json_value_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN 'null' WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '{{}}' ELSE 'null' END"),
+                                json_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN '' ELSE ', {json_column_name}: ' || CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '{{}}' ELSE 'null' END END")
                             });
+                        } else {
+                            select_display_value.push(PrimaryKey {
+                                single_expr: format!("CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NULL THEN NULL ELSE '{{}}' END"),
+                                json_value_expr: format!("CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '{{}}' ELSE 'null' END"),
+                                json_expr: format!("', {json_column_name}: ' || CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '{{}}' ELSE 'null' END")
+                            });
+                        }
                     }
                 },
                 data_type::MetadataColumnType::SingleSelectDropdown(column_type_oid) => {
-                    select_display_value.push(PrimaryKey {
-                        single_expr: format!("t{tbl_count}.VALUE"),
-                        json_expr: format!("'{json_column_name}: ' || CASE WHEN t.COLUMN{column_oid} IS NOT NULL THEN '\"' || t{tbl_count}.VALUE || '\"' ELSE 'null' END")
-                    });
-                    select_tbls_cmd = format!("{select_tbls_cmd} LEFT JOIN TABLE{column_type_oid} t{tbl_count} ON t{tbl_count}.OID = t.COLUMN{column_oid}");
+                    if column_is_optional {
+                        select_display_value.push(PrimaryKey {
+                            single_expr: format!("t{tbl_count}.VALUE"),
+                            json_value_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN 'null' WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '\"' || REPLACE(REPLACE(t{tbl_count}.VALUE, '\\', '\\\\'), '\"', '\\\"') || '\"' ELSE 'null' END"),
+                            json_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN '' ELSE ', {json_column_name}: ' || CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '\"' || REPLACE(REPLACE(t{tbl_count}.VALUE, '\\', '\\\\'), '\"', '\\\"') || '\"' ELSE 'null' END END")
+                        });
+                    } else {
+                        select_display_value.push(PrimaryKey {
+                            single_expr: format!("t{tbl_count}.VALUE"),
+                            json_value_expr: format!("CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '\"' || REPLACE(REPLACE(t{tbl_count}.VALUE, '\\', '\\\\'), '\"', '\\\"') || '\"' ELSE 'null' END"),
+                            json_expr: format!("', {json_column_name}: ' || CASE WHEN m{column_table_oid}.COLUMN{column_oid} IS NOT NULL THEN '\"' || REPLACE(REPLACE(t{tbl_count}.VALUE, '\\', '\\\\'), '\"', '\\\"') || '\"' ELSE 'null' END")
+                        });
+                    }
+                    select_tbls_cmd = format!("{select_tbls_cmd} LEFT JOIN TABLE{column_type_oid} t{tbl_count} ON t{tbl_count}.OID = m{column_table_oid}.COLUMN{column_oid}");
                     tbl_count += 1;
                 }
                 data_type::MetadataColumnType::MultiSelectDropdown(column_type_oid) => {
-                    select_display_value.push(PrimaryKey {
-                        single_expr: format!("(SELECT '[' || GROUP_CONCAT(b.VALUE) || ']' FROM TABLE{column_type_oid}_MULTISELECT a INNER JOIN TABLE{column_type_oid} b ON b.OID = a.VALUE_OID WHERE a.ROW_OID = t.OID GROUP BY a.ROW_OID)"),
-                        json_expr: format!("'{json_column_name}: ' || COALESCE('[' || (SELECT GROUP_CONCAT(b.VALUE) FROM TABLE{column_type_oid}_MULTISELECT a INNER JOIN TABLE{column_type_oid} b ON b.OID = a.VALUE_OID WHERE a.ROW_OID = t.OID GROUP BY a.ROW_OID) || ']', 'null')")
-                    });
+                    if column_is_optional {
+                        select_display_value.push(PrimaryKey {
+                            single_expr: format!("(SELECT '[' || GROUP_CONCAT(b.VALUE) || ']' FROM TABLE{column_type_oid}_MULTISELECT a INNER JOIN TABLE{column_type_oid} b ON b.OID = a.VALUE_OID WHERE a.ROW_OID = m{column_table_oid}.OID GROUP BY a.ROW_OID)"),
+                            json_value_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN 'null' ELSE COALESCE('[' || (SELECT GROUP_CONCAT(b.VALUE) FROM TABLE{column_type_oid}_MULTISELECT a INNER JOIN TABLE{column_type_oid} b ON b.OID = a.VALUE_OID WHERE a.ROW_OID = m{column_table_oid}.OID GROUP BY a.ROW_OID) || ']', 'null') END"),
+                            json_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN '' ELSE ', {json_column_name}: ' || COALESCE('[' || (SELECT GROUP_CONCAT(b.VALUE) FROM TABLE{column_type_oid}_MULTISELECT a INNER JOIN TABLE{column_type_oid} b ON b.OID = a.VALUE_OID WHERE a.ROW_OID = m{column_table_oid}.OID GROUP BY a.ROW_OID) || ']', 'null') END")
+                        });
+                    } else {
+                        select_display_value.push(PrimaryKey {
+                            single_expr: format!("(SELECT '[' || GROUP_CONCAT(b.VALUE) || ']' FROM TABLE{column_type_oid}_MULTISELECT a INNER JOIN TABLE{column_type_oid} b ON b.OID = a.VALUE_OID WHERE a.ROW_OID = m{column_table_oid}.OID GROUP BY a.ROW_OID)"),
+                            json_value_expr: format!("COALESCE('[' || (SELECT GROUP_CONCAT(b.VALUE) FROM TABLE{column_type_oid}_MULTISELECT a INNER JOIN TABLE{column_type_oid} b ON b.OID = a.VALUE_OID WHERE a.ROW_OID = m{column_table_oid}.OID GROUP BY a.ROW_OID) || ']', 'null')"),
+                            json_expr: format!("', {json_column_name}: ' || COALESCE('[' || (SELECT GROUP_CONCAT(b.VALUE) FROM TABLE{column_type_oid}_MULTISELECT a INNER JOIN TABLE{column_type_oid} b ON b.OID = a.VALUE_OID WHERE a.ROW_OID = m{column_table_oid}.OID GROUP BY a.ROW_OID) || ']', 'null')")
+                        });
+                    }
                 }
                 data_type::MetadataColumnType::Reference(referenced_table_oid)
                 | data_type::MetadataColumnType::ChildObject(referenced_table_oid) => {
-                    select_display_value.push(PrimaryKey {
-                        single_expr: format!("t{tbl_count}.DISPLAY_VALUE"),
-                        json_expr: format!(
-                            "'{json_column_name}: ' || t{tbl_count}.JSON_DISPLAY_VALUE"
-                        ),
-                    });
-                    select_tbls_cmd = format!("{select_tbls_cmd} LEFT JOIN TABLE{referenced_table_oid}_SURROGATE t{tbl_count} ON t{tbl_count}.OID = t.COLUMN{column_oid}");
+                    if column_is_optional {
+                        select_display_value.push(PrimaryKey {
+                            single_expr: format!("t{tbl_count}.DISPLAY_VALUE"),
+                            json_value_expr: format!(
+                                "CASE WHEN m{column_table_oid}.OID IS NULL THEN '' ELSE t{tbl_count}.JSON_DISPLAY_VALUE END"
+                            ),
+                            json_expr: format!(
+                                "CASE WHEN m{column_table_oid}.OID IS NULL THEN '' ELSE ', {json_column_name}: ' || t{tbl_count}.JSON_DISPLAY_VALUE END"
+                            ),
+                        });
+                    } else {
+                        select_display_value.push(PrimaryKey {
+                            single_expr: format!("t{tbl_count}.DISPLAY_VALUE"),
+                            json_value_expr: format!(
+                                "t{tbl_count}.JSON_DISPLAY_VALUE"
+                            ),
+                            json_expr: format!(
+                                "', {json_column_name}: ' || t{tbl_count}.JSON_DISPLAY_VALUE"
+                            ),
+                        });
+                    }
+                    select_tbls_cmd = format!("{select_tbls_cmd} LEFT JOIN TABLE{referenced_table_oid}_SURROGATE t{tbl_count} ON t{tbl_count}.OID = m{column_table_oid}.COLUMN{column_oid}");
                     tbl_count += 1;
                 }
                 data_type::MetadataColumnType::ChildTable(column_type_oid) => {
-                    select_display_value.push(PrimaryKey {
-                        single_expr: format!("'[' || (SELECT GROUP_CONCAT(a.DISPLAY_VALUE) FROM TABLE{column_type_oid}_SURROGATE a WHERE a.PARENT_OID = t.OID GROUP BY a.PARENT_OID) || ']'"),
-                        json_expr: format!("'{json_column_name}: [' || (SELECT GROUP_CONCAT(a.JSON_DISPLAY_VALUE) FROM TABLE{column_type_oid}_SURROGATE a WHERE a.PARENT_OID = t.OID GROUP BY a.PARENT_OID) || ']'")
-                    });
+                    if column_is_optional {
+                        select_display_value.push(PrimaryKey {
+                            single_expr: format!("'[' || (SELECT GROUP_CONCAT(a.DISPLAY_VALUE) FROM TABLE{column_type_oid}_SURROGATE a WHERE a.PARENT_OID = m{column_table_oid}.OID GROUP BY a.PARENT_OID) || ']'"),
+                            json_value_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN 'null' ELSE '[' || (SELECT GROUP_CONCAT(a.JSON_DISPLAY_VALUE) FROM TABLE{column_type_oid}_SURROGATE a WHERE a.PARENT_OID = m{column_table_oid}.OID GROUP BY a.PARENT_OID) || ']' END"),
+                            json_expr: format!("CASE WHEN m{column_table_oid}.OID IS NULL THEN '' ELSE ', {json_column_name}: [' || (SELECT GROUP_CONCAT(a.JSON_DISPLAY_VALUE) FROM TABLE{column_type_oid}_SURROGATE a WHERE a.PARENT_OID = m{column_table_oid}.OID GROUP BY a.PARENT_OID) || ']' END")
+                        });
+                    } else {
+                        select_display_value.push(PrimaryKey {
+                            single_expr: format!("'[' || (SELECT GROUP_CONCAT(a.DISPLAY_VALUE) FROM TABLE{column_type_oid}_SURROGATE a WHERE a.PARENT_OID = m{column_table_oid}.OID GROUP BY a.PARENT_OID) || ']'"),
+                            json_value_expr: format!("'[' || (SELECT GROUP_CONCAT(a.JSON_DISPLAY_VALUE) FROM TABLE{column_type_oid}_SURROGATE a WHERE a.PARENT_OID = m{column_table_oid}.OID GROUP BY a.PARENT_OID) || ']'"),
+                            json_expr: format!("', {json_column_name}: [' || (SELECT GROUP_CONCAT(a.JSON_DISPLAY_VALUE) FROM TABLE{column_type_oid}_SURROGATE a WHERE a.PARENT_OID = m{column_table_oid}.OID GROUP BY a.PARENT_OID) || ']'")
+                        });
+                    }
                 }
             }
             return Ok(());
         },
     )?;
 
-    let json_display_value: String = if select_display_value.len() > 0 {
+    let json_display_value: String = if select_display_value.len() > 1 {
         format!(
-            "'{{ ' || {} || ' }}'",
+            "'{{ ' || SUBSTR({}, 3) || ' }}'",
             select_display_value
                 .iter()
                 .map(|primary_key| primary_key.json_expr.clone())
                 .collect::<Vec<String>>()
-                .join(" || ', ' || ")
+                .join(" || ")
         )
+    } else if select_display_value.len() == 1 {
+        format!("{}", select_display_value[0].json_value_expr)
     } else {
         String::from("'{}'")
     };
@@ -385,13 +649,13 @@ fn create_surrogate_view(trans: &Transaction, table_oid: i64) -> Result<(), erro
         CREATE VIEW TABLE{table_oid}_SURROGATE 
         AS 
         SELECT
-            t.OID,
+            m{table_oid}.OID,
             CASE
-                WHEN t.TRASH = 0 THEN COALESCE({standard_display_value}, '— NULL PRIMARY KEY —')
+                WHEN m{table_oid}.TRASH = 0 THEN COALESCE({standard_display_value}, '— NULL PRIMARY KEY —')
                 ELSE '— DELETED —'
             END AS DISPLAY_VALUE,
             CASE
-                WHEN t.TRASH = 0 THEN {json_display_value}
+                WHEN m{table_oid}.TRASH = 0 THEN {json_display_value}
                 ELSE 'null'
             END AS JSON_DISPLAY_VALUE
         {select_tbls_cmd}"

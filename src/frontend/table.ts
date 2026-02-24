@@ -3,7 +3,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { listen } from '@tauri-apps/api/event';
 import { message } from "@tauri-apps/plugin-dialog";
 import { TableCellChannelPacket, TableColumnMetadata, TableRowCellChannelPacket, executeAsync, openDialogAsync, queryAsync, queryStreamAsync } from './backendutils';
-import { attachColumnContextMenu, updateTableColumnCell } from "./tableutils";
+import { attachColumnContextMenu, startListening, updateTableColumnCell } from "./tableutils";
 import { makeColumnsReorderable, makeColumnsResizable } from "./frontendutils";
 
 const urlParams = new URLSearchParams(window.location.search);
@@ -54,7 +54,7 @@ if (urlParamTableOid) {
           text: 'Edit Row',
           action: async () => {
             await openDialogAsync({
-              object: {
+              tableObject: {
                 tableOid: tableOid,
                 rowOid: rowOid,
                 objectName: 'Edit Row'
@@ -397,7 +397,7 @@ if (urlParamTableOid) {
     refreshTableAsync();
   });
 
-  listen<number>("update-table-data-deep", (e) => {
+  listen<number>("update-table-data", (e) => {
     navigator.locks.request('table-content', async () => {
       const updateTableOid = e.payload;
       if (updateTableOid == tableOid) {
@@ -405,20 +405,6 @@ if (urlParamTableOid) {
       }
     });
   });
-  listen<number>("update-table-data-shallow", (e) => {
-    navigator.locks.request('table-content', async () => {
-      const updateTableOid = e.payload;
-      if (updateTableOid == tableOid) {
-        await refreshAllCellsAsync();
-      }
-    });
-  });
-  listen<[number, number]>("update-table-row", (e) => {
-    const updateTableOid = e.payload[0];
-    const updateRowOid = e.payload[1];
-    if (updateTableOid == tableOid) {
-      navigator.locks.request('table-content', async () => await updateRowAsync(updateRowOid));
-    }
-  });
+  startListening(true);
 
 }

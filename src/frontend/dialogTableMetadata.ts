@@ -6,7 +6,7 @@ const urlParams = new URLSearchParams(window.location.search);
 const urlParamTableOid = urlParams.get('table_oid');
 const tableOid: number | null = urlParamTableOid ? parseInt(urlParamTableOid) : null;
 const urlParamMode = urlParams.get('mode');
-const mode: number | null = urlParamMode ? parseInt(urlParamMode) : null;
+const mode: 'object type' | 'table' = urlParamMode == 'obj_type' ? 'object type' : 'table';
 
 
 async function populateMetadataAsync() {
@@ -26,7 +26,7 @@ async function populateMetadataAsync() {
     })
     .catch(async (e) => {
         await message(e, {
-            title: `An error occurred while retrieving current metadata for ${(mode == 4 ? 'object type' : 'table')}.`,
+            title: `An error occurred while retrieving current metadata for ${mode}.`,
             kind: 'error'
         });
     });
@@ -94,7 +94,7 @@ async function createTableAsync() {
     });
 
     // Determine what mode of table should be created
-    if (mode == 4) {
+    if (mode == 'object type') {
         // Create an object type
         await executeAsync({
             createObjectType: {
@@ -152,7 +152,7 @@ async function editTableAsync() {
     });
 
     // Determine what mode of table should be created
-    if (mode == 4) {
+    if (mode == 'object type') {
         // Edit the metadata of an object type
         await executeAsync({
             editObjectTypeMetadata: {

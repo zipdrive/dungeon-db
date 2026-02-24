@@ -65,7 +65,7 @@ tfoot td {
 [contenteditable], .clickable-text, td:has(.cell-multiselect) {
   padding: 2px 6px;
 
-  &[placeholder]::before {
+  &[placeholder][content=""]::before {
     display: block;
     content: attr(placeholder);
     z-index: 9;
@@ -77,7 +77,7 @@ tfoot td {
     user-select: none;
   }
 
-  &[placeholder]:focus::before {
+  &[placeholder][content=""]:focus::before {
     content: "";
   }
 }
@@ -135,8 +135,9 @@ select {
   color: var(--text-color-error) !important;
 }
 
-.cell-error-tooltip {
+[tooltip-error]::after {
   visibility: hidden;
+  content: attr(tooltip-error);
   width: calc(100% + 20px);
   background-color: var(--main-color-dark);
   color: var(--text-color-light);
@@ -146,8 +147,8 @@ select {
 
   /* Position the tooltip text */
   position: absolute;
-  z-index: 1;
-  bottom: 125%;
+  z-index: 2;
+  top: 125%;
   margin-left: -10px;
   margin-right: -10px;
 
@@ -156,7 +157,7 @@ select {
   transition: opacity 0.3s;
 }
 
-.cell-error-tooltip::after {
+[tooltip-error]::after::before {
   content: "";
   position: absolute;
   top: 100%;
@@ -167,7 +168,7 @@ select {
   border-color: var(--main-color-dark) transparent transparent transparent;
 }
 
-.cell-error:hover .cell-error-tooltip {
+[tooltip-error]:hover::after {
   visibility: visible;
   opacity: 1;
 }

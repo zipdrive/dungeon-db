@@ -160,10 +160,11 @@ pub fn edit(
     let trans = conn.transaction()?;
 
     // Record the old values of the column metadata
+    let trash_column_oid: i64 = report_parameter::create(&trans)?;
     trans.execute(
         "INSERT INTO METADATA_TABLE_COLUMN (
-            TRASH, 
             OID,
+            TRASH, 
             TABLE_OID, 
             NAME, 
             TYPE_OID, 
@@ -175,8 +176,8 @@ pub fn edit(
             DEFAULT_VALUE
         )
         SELECT
+            ?1,
             1 AS TRASH,
-            OID,
             TABLE_OID,
             NAME,
             TYPE_OID,
@@ -187,10 +188,9 @@ pub fn edit(
             IS_PRIMARY_KEY,
             DEFAULT_VALUE
         FROM METADATA_TABLE_COLUMN
-        WHERE OID = ?1",
-        params![column_oid],
+        WHERE OID = ?2",
+        params![trash_column_oid, column_oid],
     )?;
-    let trash_column_oid: i64 = trans.last_insert_rowid();
 
     match trans
         .query_one(

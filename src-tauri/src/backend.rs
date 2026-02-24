@@ -9,7 +9,7 @@ mod table;
 mod table_column;
 mod table_data;
 use crate::util::error;
-use crate::util::channel::Channel;
+use crate::util::channel::Sender;
 use serde::{Deserialize};
 use std::sync::Mutex;
 use tauri::ipc::{Channel as TauriChannel, JavaScriptChannelId};
@@ -564,10 +564,10 @@ impl Action {
                             row_oid: row_oid.clone(),
                             value: old_value,
                         }, is_forward);
-                        msg_update_table_data_shallow(app, table_oid.clone());
+                        msg_update_table_data_shallow(app, table_oid.clone(), None);
                     }
                     Err(e) => {
-                        msg_update_table_data_shallow(app, table_oid.clone());
+                        msg_update_table_data_shallow(app, table_oid.clone(), None);
                         return Err(e);
                     }
                 }
@@ -590,10 +590,10 @@ impl Action {
                         }, is_forward);
 
                         // Send message to update table display
-                        msg_update_table_data_shallow(app, table_oid.clone());
+                        msg_update_table_data_shallow(app, table_oid.clone(), None);
                     },
                     Err(e) => {
-                        msg_update_table_data_shallow(app, table_oid.clone());
+                        msg_update_table_data_shallow(app, table_oid.clone(), None);
                         return Err(e);
                     }
                 }
@@ -605,10 +605,10 @@ impl Action {
                         // (for now)
 
                         // Send message to update table display
-                        msg_update_table_data_shallow(app, table_oid.clone());
+                        msg_update_table_data_shallow(app, table_oid.clone(), None);
                     },
                     Err(e) => {
-                        msg_update_table_data_shallow(app, table_oid.clone());
+                        msg_update_table_data_shallow(app, table_oid.clone(), None);
                         return Err(e);
                     }
                 }
@@ -635,10 +635,10 @@ impl Action {
                             obj_type_oid,
                             obj_row_oid,
                         }, is_forward);
-                        msg_update_table_data_shallow(app, table_oid.clone());
+                        msg_update_table_data_shallow(app, table_oid.clone(), None);
                     }
                     Err(e) => {
-                        msg_update_table_data_shallow(app, table_oid.clone());
+                        msg_update_table_data_shallow(app, table_oid.clone(), None);
                         return Err(e);
                     }
                 }
@@ -665,10 +665,10 @@ impl Action {
                             obj_type_oid: Some(obj_type_oid.clone()),
                             obj_row_oid: Some(obj_row_oid.clone()),
                         }, is_forward);
-                        msg_update_table_data_shallow(app, table_oid.clone());
+                        msg_update_table_data_shallow(app, table_oid.clone(), None);
                     }
                     Err(e) => {
-                        msg_update_table_data_shallow(app, table_oid.clone());
+                        msg_update_table_data_shallow(app, table_oid.clone(), None);
                         return Err(e);
                     }
                 }
@@ -725,7 +725,7 @@ pub enum Dialog {
     TableObject {
         table_oid: i64,
         row_oid: i64,
-        title: String
+        object_name: String
     },
     Report {
         report_oid: i64,
@@ -733,9 +733,15 @@ pub enum Dialog {
     }
 }
 
+/// Unique index for a window.
+static WINDOW_IDX: Mutex<i64> = Mutex::new(1);
+
 impl Dialog {
     pub async fn open(&self, app: &AppHandle) -> Result<(), error::Error> {
-        let label: String = format!("window{}", app.webview_windows().len());
+        let mut window_idx = WINDOW_IDX.lock().unwrap();
+        let label: String = format!("window{}", *window_idx);
+        *window_idx += 1;
+
         match &self {
             Self::CreateTable => {
                 WebviewWindowBuilder::new(app, label,
@@ -866,14 +872,14 @@ impl Dialog {
                 .inner_size(800.0, 600.0)
                 .build()?;
             },
-            Self::TableObject { table_oid, row_oid, title } => {
+            Self::TableObject { table_oid, row_oid, object_name } => {
                 WebviewWindowBuilder::new(app, label,
                     WebviewUrl::App(
                         format!("/src/frontend/table_object.html?table_oid={table_oid}&obj_oid={row_oid}")
                             .into(),
                     ),
                 )
-                .title(&*title)
+                .title(&*object_name)
                 .inner_size(800.0, 600.0)
                 .build()?;
             },
@@ -1000,11 +1006,19 @@ impl QueryStream {
                 report_column::send_metadata_list(report_oid.clone(), channel.channel_on(webview)),
 
             Self::TablePageCells { table_oid, parent_row_oid, page_num, page_size, channel } =>
-                table_data::send_table_data(table_oid.clone(), parent_row_oid.clone(), page_num.clone(), page_size.clone(), channel.channel_on(webview)),
+                table_data::send_table_data(
+                    table_oid.clone(), 
+                    parent_row_oid.clone(), 
+                    Some(table_data::Page {
+                        num: page_num.clone(), 
+                        size: page_size.clone()
+                    }), 
+                    Sender::Channel(channel.channel_on(webview))
+                ),
             Self::TableRowCells { table_oid, row_oid, channel } =>
-                table_data::send_table_row(table_oid.clone(), row_oid.clone(), channel.channel_on(webview)),
+                table_data::send_table_row(table_oid.clone(), row_oid.clone(), Sender::Channel(channel.channel_on(webview))),
             Self::TableObjectCells { table_oid, row_oid, channel } =>
-                obj_type::send_obj_data(table_oid.clone(), row_oid.clone(), channel.channel_on(webview)),
+                obj_type::send_obj_data(table_oid.clone(), row_oid.clone(), Sender::Channel(channel.channel_on(webview))),
         }
     }
 }
@@ -1042,12 +1056,16 @@ fn msg_update_obj_type_list(app: &AppHandle) {
 
 /// Sends a message to the frontend that the currently-displayed table needs to be deep refreshed.
 fn msg_update_table_data_deep(app: &AppHandle, table_oid: i64) {
-    app.emit("update-table-data-deep", table_oid).unwrap();
+    app.emit("update-table-data", table_oid).unwrap();
 }
 
 /// Sends a message to the frontend that the currently-displayed table needs to be shallow refreshed.
-fn msg_update_table_data_shallow(app: &AppHandle, table_oid: i64) {
-    app.emit("update-table-data-shallow", table_oid).unwrap();
+fn msg_update_table_data_shallow(app: &AppHandle, table_oid: i64, parent_row_oid: Option<i64>) -> Result<(), error::Error> {
+    table_data::send_table_data(table_oid, 
+        parent_row_oid, 
+        None, 
+        crate::util::channel::Sender::Event(app, "update-table-cell")
+    )
 }
 
 /// Sends a message to the frontend that the values for a specific row need to be shallow refreshed.

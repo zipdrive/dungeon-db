@@ -3,6 +3,7 @@ import { message, save, open } from "@tauri-apps/plugin-dialog";
 import { DropdownValue, TableColumnCell, executeAsync, openDialogAsync, queryAsync, queryStreamAsync } from './backendutils';
 import { Channel } from "@tauri-apps/api/core";
 import { fileTypeFromBlob, fileTypeFromBuffer, FileTypeResult } from "file-type";
+import { listen } from "@tauri-apps/api/event";
 
 
 export async function attachColumnContextMenu(tableHeaderNode: HTMLElement, tableOid: number, columnOid: number, columnOrdering: number) {
@@ -60,10 +61,18 @@ export async function attachColumnContextMenu(tableHeaderNode: HTMLElement, tabl
   });
 }
 
+/**
+ * Updates a particular cell of the table.
+ * @param node 
+ * @param cell 
+ * @param isTable 
+ * @returns 
+ */
 export async function updateTableColumnCell(node: HTMLTableCellElement, cell: TableColumnCell, isTable: boolean = true) {
   const tableOid = cell.tableOid;
   const rowOid = cell.rowOid;
   const columnOid = cell.columnOid;
+  node.id = `table${tableOid}-column${columnOid}-row${rowOid}`;
 
   // Clear the contents and event listeners of the node
   let clonedNode: HTMLTableCellElement = node.cloneNode() as HTMLTableCellElement;
@@ -456,11 +465,12 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
       optionNode.innerText = dropdownValue.displayValue ?? '';
       selectNode.insertAdjacentElement('beforeend', optionNode);
     };
-    await queryStreamAsync([{
+    await queryStreamAsync({
       tableColumnDropdownValues: {
-        columnOid: columnOid
+        columnOid: columnOid,
+        channel: onReceiveDropdownValue
       }
-    }, onReceiveDropdownValue])
+    })
     .catch(async (e) => {
       await message(e, {
         title: 'An error occurred while retrieving dropdown values from database.',
@@ -522,11 +532,12 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
       labelNode.innerHTML = `<input type="checkbox" value="${dropdownValue.trueValue}" ${(dropdownValue.trueValue && selectedOidList.includes(dropdownValue.trueValue) ? 'checked' : '')}>${labelNode.innerHTML}`;
       multiselectNode.appendChild(labelNode);
     };
-    await queryStreamAsync([{
+    await queryStreamAsync({
       tableColumnDropdownValues: {
-        columnOid: columnOid
+        columnOid: columnOid,
+        channel: onReceiveDropdownValue
       }
-    }, onReceiveDropdownValue])
+    })
     .catch(async (e) => {
       await message(e, {
         title: 'An error occurred while retrieving dropdown values from database.',
@@ -581,7 +592,7 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
       if (objectRowOid) {
         // Open existing object
         openDialogAsync({
-          object: {
+          tableObject: {
             tableOid: objectTableOid,
             rowOid: objectRowOid,
             objectName: cell.columnName
@@ -637,15 +648,28 @@ export async function updateTableColumnCell(node: HTMLTableCellElement, cell: Ta
   // Add validation errors
   if (cell.failedValidations.length > 0) {
     node.classList.add('cell-error');
-
-    let failureMsgTooltipNode = document.createElement('div');
-    failureMsgTooltipNode.classList.add('cell-error-tooltip');
-    failureMsgTooltipNode.innerText = cell.failedValidations.map((failure) => failure.description).join('\n');
-    node.appendChild(failureMsgTooltipNode);
+    node.setAttribute('tooltip-error', cell.failedValidations.map((failure) => failure.description).join('\n'));
   } else {
     node.classList.remove('cell-error');
   }
 
   inputNode.classList.add('focusable');
   return inputNode;
+}
+
+
+/**
+ * Starts listening for any updates called to a particular cell in the table.
+ * @param isTable True if the page is representing data in a table. False if the page is representing data in a form.
+ */
+export function startListening(isTable: boolean) {
+  listen<TableColumnCell>("update-table-cell", (e) => {
+    let cell: TableColumnCell = e.payload;
+    let node: HTMLTableCellElement | null = document.getElementById(`table${cell.tableOid}-column${cell.columnOid}-row${cell.rowOid}`) as HTMLTableCellElement;
+    if (node) {
+      navigator.locks.request('table-content', async () => {
+        await updateTableColumnCell(node, cell, isTable);
+      });
+    }
+  });
 }

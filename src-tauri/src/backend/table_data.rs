@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::{Result as SerdeJsonResult, Value};
 use std::collections::{HashMap, HashSet, LinkedList};
 use std::path::Path;
-use tauri::ipc::Channel;
+use crate::util::channel::Sender;
 use time::format_description::well_known;
 use time::macros::time;
 use time::{Date, PrimitiveDateTime, UtcDateTime};
@@ -18,7 +18,13 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use base64::Engine;
 use base64::prelude::{BASE64_STANDARD as base64standard};
 
-#[derive(Serialize)]
+/// A page of a query.
+pub struct Page {
+    pub num: i64,
+    pub size: i64
+}
+
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", untagged)]
 pub enum Cell {
     RowStart {
@@ -37,7 +43,7 @@ pub enum Cell {
     },
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase", untagged)]
 pub enum RowCell {
     RowExists {
@@ -944,6 +950,7 @@ fn construct_data_query(
     table_oid: i64,
     include_row_oid_clause: bool,
     include_parent_row_oid_clause: bool,
+    include_page_clause: bool
 ) -> Result<(String, LinkedList<Column>), error::Error> {
     // Build the SELECT query
     let (mut select_cols_cmd, mut select_tbls_cmd) = trans.query_one(
@@ -1230,9 +1237,15 @@ fn construct_data_query(
             if include_row_oid_clause {
                 "AND t.OID = ?1"
             } else if include_parent_row_oid_clause {
-                "AND t.PARENT_OID = ?1 LIMIT ?2 OFFSET ?3"
-            } else {
+                if include_page_clause {
+                    "AND t.PARENT_OID = ?1 LIMIT ?2 OFFSET ?3"
+                } else {
+                    "AND t.PARENT_OID = ?1"
+                }
+            } else if include_page_clause {
                 "LIMIT ?1 OFFSET ?2"
+            } else {
+                ""
             }
         ),
         columns,
@@ -1243,9 +1256,8 @@ fn construct_data_query(
 pub fn send_table_data(
     table_oid: i64,
     parent_row_oid: Option<i64>,
-    page_num: i64,
-    page_size: i64,
-    cell_channel: Channel<Cell>,
+    page: Option<Page>,
+    cell_channel: Sender<Cell>,
 ) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
@@ -1257,10 +1269,24 @@ pub fn send_table_data(
             Some(_) => true,
             None => false,
         },
+        match page {
+            Some(_) => true,
+            None => false
+        }
     )?;
     let table_select_cmd_params = match parent_row_oid {
-        Some(o) => params![o.clone(), page_size, page_size * (page_num - 1)],
-        None => params![page_size, page_size * (page_num - 1)],
+        Some(o) => {
+            match page {
+                Some(p) => params![o.clone(), p.size.clone(), p.size * (p.num - 1)],
+                None => params![o.clone()]
+            }
+        }
+        None => {
+            match page {
+                Some(p) => params![p.size.clone(), p.size * (p.num - 1)],
+                None => &[]
+            }
+        }
     };
 
     // Iterate over the results, sending each cell to the frontend
@@ -1335,11 +1361,11 @@ pub fn send_table_data(
 pub fn send_table_row(
     table_oid: i64,
     row_oid: i64,
-    cell_channel: Channel<RowCell>,
+    cell_channel: Sender<RowCell>,
 ) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;
-    let (table_select_cmd, columns) = construct_data_query(&trans, table_oid, true, false)?;
+    let (table_select_cmd, columns) = construct_data_query(&trans, table_oid, true, false, false)?;
 
     println!("{table_select_cmd}");
 

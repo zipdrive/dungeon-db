@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::backend::{data_type, db, table, table_data};
+use crate::util::channel::Sender;
 use crate::util::error;
 use rusqlite::{params, OptionalExtension, Statement, ToSql, Transaction};
 use serde::{Deserialize, Serialize};
@@ -12,8 +13,12 @@ pub fn create(name: String, master_table_oid_list: &Vec<i64>) -> Result<i64, err
     let trans = conn.transaction()?;
 
     // Add metadata for the table
-    trans.execute("INSERT INTO METADATA_TYPE (MODE) VALUES (4);", [])?;
+    trans.execute("INSERT INTO METADATA_DATASOURCE DEFAULT VALUES", [])?;
     let table_oid: i64 = trans.last_insert_rowid();
+    trans.execute(
+        "INSERT INTO METADATA_TYPE (OID, MODE) VALUES (?1, 4);", 
+        params![table_oid]
+    )?;
     trans.execute(
         "INSERT INTO METADATA_TABLE (OID, NAME) VALUES (?1, ?2);",
         params![table_oid, &name],
@@ -160,7 +165,7 @@ pub fn send_metadata_list(
 pub fn send_obj_data(
     obj_type_oid: i64,
     obj_row_oid: i64,
-    obj_data_channel: Channel<table_data::RowCell>,
+    obj_data_channel: Sender<table_data::RowCell>,
 ) -> Result<(), error::Error> {
     let mut conn = db::open()?;
     let trans = conn.transaction()?;

@@ -1,5 +1,5 @@
 import { message } from "@tauri-apps/plugin-dialog";
-import { BasicHierarchicalMetadata, BasicMetadata, closeDialogAsync, ColumnType, DropdownValue, executeAsync, queryAsync, TableColumnMetadata } from "./backendutils";
+import { BasicHierarchicalMetadata, BasicMetadata, closeDialogAsync, ColumnType, DropdownValue, executeAsync, queryAsync, queryStreamAsync, TableColumnMetadata } from "./backendutils";
 import { Channel } from "@tauri-apps/api/core";
 
 
@@ -92,7 +92,6 @@ async function loadMetadataFromFields(): Promise<TableColumnMetadata & { dropdow
             }
             columnType = { childObject: parseInt(objTableOid) };
             isUnique = false;
-            isPrimaryKey = false;
             break;
         case 'ChildTable':
             columnType = { childTable: 0 };
@@ -158,10 +157,9 @@ window.addEventListener("DOMContentLoaded", async () => {
             columnReferenceOption.value = referenceType.oid.toString();
             columnReferenceInput.insertAdjacentElement('beforeend', columnReferenceOption);
         };
-        await queryAsync({
-            invokeAction: 'get_table_column_reference_values',
-            invokeParams: {
-                referenceTypeChannel: referenceTypeChannel
+        await queryStreamAsync({
+            referenceColumnTypes: {
+                channel: referenceTypeChannel
             }
         });
     }
@@ -176,10 +174,9 @@ window.addEventListener("DOMContentLoaded", async () => {
             columnObjDataTypeOption.value = objDataType.oid.toString();
             columnObjDataTypeInput.insertAdjacentElement('beforeend', columnObjDataTypeOption);
         };
-        await queryAsync({
-            invokeAction: 'get_table_column_object_values',
-            invokeParams: {
-                objectTypeChannel: objDataTypeChannel
+        await queryStreamAsync({
+            objectColumnTypes: {
+                channel: objDataTypeChannel
             }
         });
     }
@@ -236,11 +233,10 @@ window.addEventListener("DOMContentLoaded", async () => {
                     valueNode.innerText = dropdownValue.displayValue ?? '';
                     rowNode.appendChild(valueNode);
                 };
-                await queryAsync({
-                    invokeAction: 'get_table_column_dropdown_values',
-                    invokeParams: {
+                await queryStreamAsync({
+                    tableColumnDropdownValues: {
                         columnOid: columnOid,
-                        dropdownValueChannel: onReceiveDropdownValue
+                        channel: onReceiveDropdownValue
                     }
                 })
                 .catch(async (e) => {

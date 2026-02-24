@@ -360,7 +360,7 @@ export type Dialog = {
         tableName: string
     }
 } | {
-    object: {
+    tableObject: {
         tableOid: number,
         rowOid: number,
         objectName: string
