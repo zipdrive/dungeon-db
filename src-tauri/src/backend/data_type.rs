@@ -59,12 +59,32 @@ impl Primitive {
 #[derive(Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum MetadataColumnType {
-    Primitive(Primitive),      // Mode = 0
-    SingleSelectDropdown(i64), // Mode = 1
-    MultiSelectDropdown(i64),  // Mode = 2
-    Reference(i64),            // Mode = 3
-    ChildObject(i64),          // Mode = 4
-    ChildTable(i64),           // Mode = 5
+    /// A basic primitive type.
+    Primitive(Primitive),       // Mode = 0
+
+    /// (Deprecated) A single value selected from a list of dropdown values.
+    SingleSelectDropdown(i64),  // Mode = 1 (deprecated)
+
+    /// (Deprecated?) Multiple values selected from a list of dropdown values.
+    MultiSelectDropdown(i64),   // Mode = 2
+
+    /// A reference to a single row in another table.
+    Reference(i64),             // Mode = 3
+
+    /// An adhoc instance of an object type.
+    ChildObject(i64),           // Mode = 4
+
+    /// (Deprecated) A table whose rows are related to a specific row in the parent table.
+    ChildTable(i64),            // Mode = 5 (deprecated)
+
+    /// A formula.
+    Formula(i64),               // Mode = 6
+
+    /// A report (whose datasources can be linked to the current row of this table).
+    Report(i64),                // Mode = 7
+
+    /// A reference to multiple rows in another table. ???
+
 }
 
 impl MetadataColumnType {
@@ -240,6 +260,12 @@ impl MetadataColumnType {
                 return Ok(Self::MultiSelectDropdown(column_type_oid));
             }
             Self::ChildTable(_) => {
+                // Create a table
+                let child_table_oid = table::create(Self::ChildTable(0));
+
+                // Add a column referencing this table
+                let 
+
                 // Create the column type, use that as the OID for the type
                 trans.execute(
                     "INSERT INTO METADATA_TYPE (MODE) VALUES (?1);",
