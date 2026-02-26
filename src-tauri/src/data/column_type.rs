@@ -178,6 +178,11 @@ impl ColumnType {
                     params![oid, formula]
                 )?;
 
+                // Create a view for the formula, in case the formula is ever used as a parameter
+                let formula_query = String::from("");
+                let cmd_formula_view: String = format!("CREATE VIEW FORMULA{oid} AS ({formula_query})");
+                trans.execute(&cmd_formula_view, [])?;
+
                 // Commit the transaction
                 trans.commit()?;
                 return Ok(Self::Formula {

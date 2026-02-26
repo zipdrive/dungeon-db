@@ -5,14 +5,26 @@ use crate::data::schema;
 use crate::data::parameter;
 use rusqlite::{Transaction, OptionalExtension, params};
 use serde::Serialize;
+use std::hash::{Hash, Hasher};
 
 /// Data structure representing the table metadata
 #[derive(Serialize, Clone)]
 #[serde(rename_all="camelCase")]
 pub struct Metadata {
     pub schema: schema::Metadata,
-    pub datasource_oid: i64,
-    pub master_table_oid_list: Vec<i64>
+    pub master_tables: HashSet<Metadata>
+}
+
+impl Hash for Metadata {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.schema.hash(state)
+    }
+}
+
+impl Borrow<schema::Metadata> for Metadata {
+    fn borrow(&self) -> &schema::Metadata {
+        &self.schema
+    }
 }
 
 impl Metadata {
@@ -27,7 +39,7 @@ impl Metadata {
         let datasource_oid: i64 = conn.query_one("SELECT DATASOURCE_OID FROM METADATA_TABLE WHERE OID = ?1", params![oid], |row| row.get("DATASOURCE_OID"))?;
 
         // Get the OIDs of every table that this table inherits from
-        let mut master_table_oid_list: Vec<i64> = Vec::new();
+        let mut master_tables: HashSet<Metadata> = HashSet::new();
         {
             let mut master_table_oid_statement = conn.prepare(
                 "
@@ -45,7 +57,7 @@ impl Metadata {
                 |row| row.get::<_, i64>(0)
             )?;
             for master_table_oid_result in master_table_oid_rows {
-                master_table_oid_list.push(master_table_oid_result?);
+                master_tables.insert(Metadata::get(master_table_oid_result?));
             }
         }
 
@@ -53,7 +65,7 @@ impl Metadata {
         Ok(Self {
             schema: schema_metadata,
             datasource_oid,
-            master_table_oid_list
+            master_tables
         })
     }
 
@@ -114,11 +126,11 @@ impl Metadata {
         )?;
 
         // Add inheritance from each master table
-        for master_table_oid in self.master_table_oid_list.iter() {
+        for master_table in self.master_tables.iter() {
             // Check if a row in the inheritance table already exists
             match trans.query_one(
                 "SELECT OID FROM METADATA_TABLE_INHERITANCE WHERE INHERITOR_TABLE_OID = ?1 AND MASTER_TABLE_OID = ?2", 
-                params![self.schema.oid, master_table_oid], 
+                params![self.schema.oid, master_table.schema.oid], 
                 |row| row.get::<_, i64>(0)
             ).optional()? {
                 Some(datasource_oid) => {
@@ -135,7 +147,7 @@ impl Metadata {
                     // Insert a new row into the inheritance table
                     trans.execute(
                         "INSERT INTO METADATA_TABLE_INHERITANCE (OID, INHERITOR_TABLE_OID, MASTER_TABLE_OID) VALUES (?1, ?2, ?3)",
-                        params![datasource_oid, self.schema.oid, master_table_oid]
+                        params![datasource_oid, self.schema.oid, master_table.schema.oid]
                     )?;
                     
                     // Add a column to the table that references a row in the master list

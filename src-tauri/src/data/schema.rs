@@ -2,6 +2,7 @@ use crate::util::error::Error;
 use crate::data::datasource;
 use rusqlite::{Connection, Transaction, params};
 use serde::Serialize;
+use std::hash::{Hash, Hasher};
 
 /// Data structure representing the schema metadata.
 #[derive(Serialize, Clone)]
@@ -9,6 +10,18 @@ use serde::Serialize;
 pub struct Metadata {
     pub oid: i64,
     pub name: String
+}
+
+impl Hash for Metadata {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.oid.hash(state)
+    }
+}
+
+impl Borrow<i64> for Metadata {
+    fn borrow(&self) -> &i64 {
+        &self.oid
+    }
 }
 
 impl Metadata {

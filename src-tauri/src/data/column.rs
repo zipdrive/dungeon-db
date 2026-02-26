@@ -5,6 +5,7 @@ use crate::data::schema;
 use crate::data::column_type;
 use rusqlite::{params};
 use serde::Serialize;
+use std::hash::{Hash, Hasher};
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all="camelCase")]
@@ -20,6 +21,12 @@ pub struct Metadata {
     pub is_nullable: bool,
     pub is_unique: bool,
     pub is_primary_key: bool
+}
+
+impl Hash for Metadata {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.oid.hash(state)
+    }
 }
 
 impl Metadata {

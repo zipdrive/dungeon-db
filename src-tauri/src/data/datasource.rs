@@ -4,6 +4,7 @@ use crate::data::table;
 use rusqlite::OptionalExtension;
 use rusqlite::types::Value;
 use rusqlite::{Transaction, params, vtab::array::Array};
+use std::hash::{Hash, Hasher};
 
 pub enum Datasource {
     Table {
@@ -29,6 +30,24 @@ pub enum Datasource {
         oid: i64,
         parent_datasource: Box<Datasource>,
         column: column::Metadata 
+    }
+}
+
+impl Hash for Datasource {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.get_oid().hash(state)
+    }
+}
+
+impl Borrow<i64> for Datasource {
+    fn borrow(&self) -> &i64 {
+        match self {
+            Self::Table { oid, .. }
+            | Self::Inheritance { oid, .. } 
+            | Self::Object { oid, .. }
+            | Self::Select { oid, .. }
+            | Self::Multiselect { oid, .. } => oid
+        }
     }
 }
 
@@ -334,6 +353,17 @@ impl Datasource {
             | Self::Object { parent_datasource, .. }
             | Self::Select { parent_datasource, .. }
             | Self::Multiselect { parent_datasource, .. } => parent_datasource.get_root_datasource_oid()
+        }
+    }
+
+    /// Gets the metadata for the schema of the datasource.
+    pub fn get_schema(&self) -> schema::Metadata {
+        match self {
+            Self::Table { table, .. }
+            | Self::Inheritance { table, .. } => table.schema.clone(),
+            Self::Object { column, .. }
+            | Self::Select { column, .. }
+            | Self::Multiselect { column, .. } => column.schema.clone()
         }
     }
 }

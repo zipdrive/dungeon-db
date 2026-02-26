@@ -275,6 +275,18 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
             ON UPDATE CASCADE
     );
 
+    
+
+    -- METADATA_SCHEMA_ORDERBY stores what columns (if any) the schema is sorted by, in what order, and in what direction.
+    CREATE TABLE IF NOT EXISTS METADATA_SCHEMA_ORDERBY (
+        COLUMN_OID INTEGER NOT NULL REFERENCES METADATA_COLUMN (OID)
+            ON UPDATE CASCADE
+            ON DELETE CASCADE,
+        TRASH BOOLEAN NOT NULL DEFAULT FALSE,
+        SORT_ORDERING INTEGER NOT NULL DEFAULT 0,
+        SORT_ASCENDING BOOLEAN NOT NULL DEFAULT FALSE
+    );
+
 
 
     -- METADATA_REPORT_DATASOURCE stores the datasources associated with a report.
@@ -286,6 +298,22 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
             ON UPDATE CASCADE,
         LABEL TEXT,
         PRIMARY KEY (REPORT_OID, DATASOURCE_OID)
+    );
+
+    -- METADATA_REPORT_GROUPBY stores what columns (if any) the report is aggregated over.
+    CREATE TABLE IF NOT EXISTS METADATA_REPORT_GROUPBY (
+        COLUMN_OID INTEGER PRIMARY KEY REFERENCES METADATA_COLUMN (OID)
+            ON UPDATE CASCADE
+            ON DELETE CASCADE,
+        TRASH BOOLEAN NOT NULL DEFAULT FALSE
+    );
+
+    -- METADATA_REPORT_FILTER stores what filters are applied to the report.
+    -- A filter takes the form of a boolean formula that is evaluated for each row in the report.
+    CREATE TABLE IF NOT EXISTS METADATA_REPORT_FILTER (
+        OID INTEGER PRIMARY KEY,
+        TRASH BOOLEAN NOT NULL DEFAULT FALSE,
+        FORMULA TEXT NOT NULL
     );
 
 
@@ -307,77 +335,6 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
             INNER JOIN METADATA_TABLE_INHERITANCE u ON u.MASTER_TABLE_OID = s.INHERITOR_TABLE_OID
         )
         SELECT * FROM FLATTENING
-    );
-
-    -- 
-    CREATE VIEW IF NOT EXISTS METADATA_DATASOURCE_VIEW AS (
-        WITH RECURSIVE FLATTENING (DATASOURCE_OID, DEPENDENT_DATASOURCE_OID, TABLE_OID, IS_MANY) AS (
-            SELECT
-                DATASOURCE_OID,
-                NULL AS DEPENDENT_DATASOURCE_OID,
-                OID AS TABLE_OID,
-                FALSE AS IS_MANY
-            FROM METADATA_TABLE
-
-            UNION
-
-            SELECT
-                u.OID AS DATASOURCE_OID,
-                t.DATASOURCE_OID AS DEPENDENT_DATASOURCE_OID,
-                u.INHERITOR_TABLE_OID AS TABLE_OID,
-                FALSE AS IS_MANY
-            FROM METADATA_TABLE_INHERITANCE u
-            INNER JOIN METADATA_TABLE t ON t.OID = u.MASTER_TABLE_OID
-
-            UNION
-
-            SELECT
-                u.OID AS DATASOURCE_OID,
-                t.DATASOURCE_OID AS DEPENDENT_DATASOURCE_OID,
-                u.MASTER_TABLE_OID AS TABLE_OID,
-                FALSE AS IS_MANY
-            FROM METADATA_TABLE_INHERITANCE u
-            INNER JOIN METADATA_TABLE t ON t.OID = u.INHERITOR_TABLE_OID
-
-            UNION
-
-            SELECT
-                p.OID AS DATASOURCE_OID,
-                p.DATASOURCE_OID AS DEPENDENT_DATASOURCE_OID,
-
-            FROM FLATTENING f 
-            INNER JOIN METADATA_PARAMETER p ON f.DATASOURCE_OID = p.DATASOURCE_OID
-            INNER JOIN METADATA_COLUMN c ON 
-        )
-        SELECT * FROM FLATTENING
-    );
-
-    
-
-    -- METADATA_SCHEMA_ORDERBY stores what parameters (if any) the schema is sorted by, in what order, and in what direction.
-    CREATE TABLE IF NOT EXISTS METADATA_SCHEMA_ORDERBY (
-        COLUMN_OID INTEGER NOT NULL REFERENCES METADATA_COLUMN (OID)
-            ON UPDATE CASCADE
-            ON DELETE CASCADE,
-        TRASH BOOLEAN NOT NULL DEFAULT FALSE,
-        SORT_ORDERING INTEGER NOT NULL DEFAULT 0,
-        SORT_ASCENDING BOOLEAN NOT NULL DEFAULT FALSE
-    );
-
-    -- METADATA_REPORT_GROUPBY stores what parameters (if any) the report is aggregated over.
-    CREATE TABLE IF NOT EXISTS METADATA_REPORT_GROUPBY (
-        COLUMN_OID INTEGER PRIMARY KEY REFERENCES METADATA_COLUMN (OID)
-            ON UPDATE CASCADE
-            ON DELETE CASCADE,
-        TRASH BOOLEAN NOT NULL DEFAULT FALSE
-    );
-
-    -- METADATA_REPORT_FILTER stores what filters are applied to the report.
-    -- A filter takes the form of a boolean formula that is evaluated for each row in the report.
-    CREATE TABLE IF NOT EXISTS METADATA_REPORT_FILTER (
-        OID INTEGER PRIMARY KEY,
-        TRASH BOOLEAN NOT NULL DEFAULT FALSE,
-        FORMULA TEXT NOT NULL
     );
     
 

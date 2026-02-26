@@ -1,6 +1,16 @@
 use crate::util::error::Error;
 use rusqlite::{Transaction};
 
+#[derive(PartialEq, Eq, Hash)]
+pub struct Parameter {
+    datasource: datasource::Datasource,
+    column: column::Metadata
+}
+
+impl Parameter {
+    
+}
+
 /// Creates a new parameter.
 pub fn create(trans: &Transaction) -> Result<i64, Error> {
     // Create parameter
