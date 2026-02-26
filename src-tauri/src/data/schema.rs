@@ -1,9 +1,11 @@
 use crate::util::error::Error;
 use crate::data::datasource;
 use rusqlite::{Connection, Transaction, params};
+use serde::Serialize;
 
 /// Data structure representing the schema metadata.
-#[derive(Clone)]
+#[derive(Serialize, Clone)]
+#[serde(rename_all="camelCase")]
 pub struct Metadata {
     pub oid: i64,
     pub name: String
@@ -26,10 +28,9 @@ impl Metadata {
 
     /// Creates a new schema.
     pub fn create(&mut self, trans: &Transaction) -> Result<(), Error> {
-        // Create datasource metadata
-        self.oid = datasource::create(trans)?;
         // Create schema metadata
-        trans.execute("INSERT INTO METADATA_SCHEMA (OID, NAME) VALUES (?1, ?2)", params![self.oid, &self.name])?;
+        trans.execute("INSERT INTO METADATA_SCHEMA (NAME) VALUES (?1)", params![&self.name])?;
+        self.oid = trans.last_insert_rowid();
         Ok(())
     }
 

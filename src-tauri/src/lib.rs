@@ -1,5 +1,6 @@
 mod backend;
 mod util;
+mod data;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

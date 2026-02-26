@@ -1,12 +1,17 @@
+use crate::data::datasource;
 use crate::util::error::Error;
+use crate::util::db;
 use crate::data::schema;
 use crate::data::parameter;
-use rusqlite::{Transaction, params};
+use rusqlite::{Transaction, OptionalExtension, params};
+use serde::Serialize;
 
 /// Data structure representing the table metadata
-#[derive(Clone)]
+#[derive(Serialize, Clone)]
+#[serde(rename_all="camelCase")]
 pub struct Metadata {
     pub schema: schema::Metadata,
+    pub datasource_oid: i64,
     pub master_table_oid_list: Vec<i64>
 }
 
@@ -18,10 +23,13 @@ impl Metadata {
         // Get the schema metadata
         let schema_metadata = schema::Metadata::get(&conn, oid)?;
 
+        // Get the datasource OID
+        let datasource_oid: i64 = conn.query_one("SELECT DATASOURCE_OID FROM METADATA_TABLE WHERE OID = ?1", params![oid], |row| row.get("DATASOURCE_OID"))?;
+
         // Get the OIDs of every table that this table inherits from
         let mut master_table_oid_list: Vec<i64> = Vec::new();
         {
-            let mut master_table_oid_statement = trans.prepare(
+            let mut master_table_oid_statement = conn.prepare(
                 "
                 SELECT 
                     u.MASTER_TABLE_OID 
@@ -32,7 +40,10 @@ impl Metadata {
                     AND tbl.TRASH = 0
                 "
             )?;
-            let master_table_oid_rows = master_table_oid_statement.query_and_then(params![table_oid], |row| row.get::<_, i64>(0))?;
+            let master_table_oid_rows = master_table_oid_statement.query_and_then(
+                params![schema_metadata.oid], 
+                |row| row.get::<_, i64>(0)
+            )?;
             for master_table_oid_result in master_table_oid_rows {
                 master_table_oid_list.push(master_table_oid_result?);
             }
@@ -41,6 +52,7 @@ impl Metadata {
         // Return the metadata
         Ok(Self {
             schema: schema_metadata,
+            datasource_oid,
             master_table_oid_list
         })
     }
@@ -51,23 +63,26 @@ impl Metadata {
         let trans = conn.transaction()?;
 
         // Create schema
-        self.oid = self.schema.create(trans)?;
+        self.schema.create(&trans)?;
         // Create the table metadata
-        trans.execute("INSERT INTO METADATA_TABLE (OID) VALUES (?1)", params![self.oid])?;
+        trans.execute("INSERT INTO METADATA_TABLE (OID) VALUES (?1)", params![self.schema.oid])?;
+        // Create a datasource for the table
+        datasource::Datasource::Table { oid: 0, table: self.clone() }.find(&trans, Vec::new())?;
 
         // Create the table
         let create_table_cmd: String = format!(
             "
-            CREATE TABLE TABLE{table_oid} (
+            CREATE TABLE TABLE{} (
                 OID INTEGER PRIMARY KEY, 
                 TRASH INTEGER NOT NULL DEFAULT 0
             ) STRICT;
-            "
+            ",
+            self.schema.oid
         );
         trans.execute(&create_table_cmd, [])?;
         
         // Set inheritance from each master table
-        self.set_inheritance(master_table_oid_list)?;
+        self.set_inheritance(&trans)?;
 
         // Commit the transaction
         trans.commit()?;
@@ -80,10 +95,10 @@ impl Metadata {
         let trans = conn.transaction()?;
 
         // Overwrite the schema metadata
-        self.schema.set()?;
+        self.schema.set(&trans)?;
 
         // Set inheritance from each master table
-        self.set_inheritance(master_table_oid_list)?;
+        self.set_inheritance(&trans)?;
 
         // Commit the transaction
         trans.commit()?;
@@ -101,26 +116,39 @@ impl Metadata {
         // Add inheritance from each master table
         for master_table_oid in self.master_table_oid_list.iter() {
             // Check if a row in the inheritance table already exists
-            match trans.query_one("SELECT OID FROM METADATA_TABLE_INHERITANCE WHERE INHERITOR_TABLE_OID = ?1 AND MASTER_TABLE_OID = ?2", params![table_oid, master_table_oid], |row| row.get::<_, i64>(0)).optional()? {
-                Some(parameter_oid) => {
+            match trans.query_one(
+                "SELECT OID FROM METADATA_TABLE_INHERITANCE WHERE INHERITOR_TABLE_OID = ?1 AND MASTER_TABLE_OID = ?2", 
+                params![self.schema.oid, master_table_oid], 
+                |row| row.get::<_, i64>(0)
+            ).optional()? {
+                Some(datasource_oid) => {
                     // Update the inheritance table to indicate that the inheritance is not trash
                     trans.execute(
                         "UPDATE METADATA_TABLE_INHERITANCE SET TRASH = 0 WHERE OID = ?1",
-                        params![parameter_oid]
+                        params![datasource_oid]
                     )?;
                 },
                 None => {
                     // Get new parameter OID
-                    let parameter_oid: i64 = parameter::create(trans)?;
+                    let datasource_oid: i64 = datasource::create(trans)?;
 
                     // Insert a new row into the inheritance table
                     trans.execute(
                         "INSERT INTO METADATA_TABLE_INHERITANCE (OID, INHERITOR_TABLE_OID, MASTER_TABLE_OID) VALUES (?1, ?2, ?3)",
-                        params![parameter_oid, table_oid, master_table_oid]
+                        params![datasource_oid, self.schema.oid, master_table_oid]
                     )?;
                     
                     // Add a column to the table that references a row in the master list
-                    let alter_table_cmd: String = format!("ALTER TABLE TABLE{table_oid} ADD COLUMN MASTER{master_table_oid}_OID INTEGER NOT NULL REFERENCES TABLE{master_table_oid} (OID) ON UPDATE CASCADE ON DELETE CASCADE;");
+                    let alter_table_cmd: String = format!(
+                        "
+                        ALTER TABLE TABLE{} 
+                            ADD COLUMN MASTER{master_table_oid}_OID INTEGER NOT NULL 
+                            REFERENCES TABLE{master_table_oid} (OID) 
+                            ON UPDATE CASCADE 
+                            ON DELETE CASCADE
+                        ",
+                        self.schema.oid
+                    );
                     trans.execute(&alter_table_cmd, [])?;
                 }
             }
