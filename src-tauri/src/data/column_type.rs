@@ -3,7 +3,7 @@ use crate::util::db;
 use rusqlite::{params};
 use serde::Serialize;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum Primitive {
     Text,
@@ -34,7 +34,7 @@ impl Primitive {
     }
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum ColumnType {
     Formula {

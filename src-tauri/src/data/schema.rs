@@ -1,11 +1,42 @@
+use crate::util::db;
 use crate::util::error::Error;
-use crate::data::datasource;
-use rusqlite::{Connection, Transaction, params};
+use crate::data::{datasource, table, report};
+use rusqlite::{Connection, Transaction, OptionalExtension, params};
 use serde::Serialize;
 use std::hash::{Hash, Hasher};
+use std::borrow::Borrow;
+
+pub enum Schema {
+    Table(table::Metadata),
+    Report(report::Metadata)
+}
+
+impl Schema {
+    /// Gets the type of schema from the OID.
+    pub fn get(oid: i64) -> Result<Self, Error> {
+        let conn: Connection = db::open()?;
+
+        let schema_type: String = conn.query_one(
+            "
+            SELECT 'table' AS SCHEMA_TYPE FROM METADATA_TABLE WHERE OID = ?1
+            UNION
+            SELECT 'report' AS SCHEMA_TYPE FROM METADATA_REPORT WHERE OID = ?1
+            ", 
+            params![oid], 
+            |row| row.get::<_, String>("SCHEMA_TYPE")
+        )?;
+        if schema_type == "table" {
+            Ok(Self::Table(table::Metadata::get(oid)?))
+        } else {
+            Ok(Self::Report(report::Metadata::get(oid)?))
+        }
+    }
+}
+
+
 
 /// Data structure representing the schema metadata.
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, Eq, PartialEq)]
 #[serde(rename_all="camelCase")]
 pub struct Metadata {
     pub oid: i64,

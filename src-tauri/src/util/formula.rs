@@ -1,11 +1,12 @@
 use regex::Regex;
 use crate::util::error;
 
-
-
 #[derive(Clone)]
 pub enum Formula {
-    Param(i64),
+    Param {
+        datasource_oid: i64,
+        column_oid: i64
+    },
     Null,
     LiteralBool(bool),
     LiteralInt(i64),
@@ -96,7 +97,74 @@ pub enum Formula {
     }
 }
 
+const OR_PRECEDENCE: usize = 0;
+const AND_PRECEDENCE: usize = 1;
+const NOT_PRECEDENCE: usize = 2;
+const EQ_PRECEDENCE: usize = 3;
+const IN_PRECEDENCE: usize = 3;
+const LT_PRECEDENCE: usize = 4;
+const LTEQ_PRECEDENCE: usize = 4;
+const ADD_PRECEDENCE: usize = 7;
+const SUBTRACT_PRECEDENCE: usize = 7;
+const MULTIPLY_PRECEDENCE: usize = 8;
+const DIVIDE_PRECEDENCE: usize = 8;
+const MODULO_PRECEDENCE: usize = 8;
+const CONCAT_PRECEDENCE: usize = 9;
+
+
 impl Formula {
+    /// Checks for precedence of a binary operator. Returns None if the formula is not a binary operator.
+    /// For a formula like "[exprA] [binary1] [exprB] [binary2] [exprC]" (where binary1 and binary2 are binary operators), 
+    /// the formula is normally evaluated as Binary1(exprA, Binary2(exprB, exprC)).
+    /// However, if the precedence of the binary1 operator is greater than the precedence of the binary2 operator, 
+    /// the order of evaluation is rotated to Binary2(Binary1(exprA, exprB), exprC).
+    fn binary_operator_precedence(&self) -> Option<usize> {
+        match self {
+            Self::Or(_, _) => Some(OR_PRECEDENCE),
+            Self::And(_, _) => Some(AND_PRECEDENCE),
+            Self::Not(_) => Some(NOT_PRECEDENCE),
+            Self::Eq(_, _) => Some(EQ_PRECEDENCE),
+            Self::In { .. } => Some(IN_PRECEDENCE),
+            Self::LessThan(_, _) => Some(LT_PRECEDENCE),
+            Self::LessThanOrEq(_, _) => Some(LTEQ_PRECEDENCE),
+            Self::Add(_, _) => Some(ADD_PRECEDENCE),
+            Self::Subtract(_, _) => Some(SUBTRACT_PRECEDENCE),
+            Self::Multiply(_, _) => Some(MULTIPLY_PRECEDENCE),
+            Self::Divide(_, _) => Some(DIVIDE_PRECEDENCE),
+            Self::Modulo(_, _) => Some(MODULO_PRECEDENCE),
+            Self::Concat(_, _) => Some(CONCAT_PRECEDENCE),
+            _ => None
+        }
+    }
+
+    /// Rotates the order of evaluation of binary operations, according to the rules laid out in Formula::binary_operator_precedence().
+    fn binary_operator_rotate<F: FnOnce(Self, Self) -> Self>(self, outer_precedence: usize, lhs: Self, construct_operator: F) -> Self {
+        if let Some(self_precedence) = self.binary_operator_precedence() {
+            if self_precedence < outer_precedence {
+                // Do the rotation
+                match self {
+                    Self::Or(mid, rhs) => { return Self::Or(Box::new(construct_operator(lhs, *mid)), rhs); },
+                    Self::And(mid, rhs) => { return Self::And(Box::new(construct_operator(lhs, *mid)), rhs); },
+                    Self::Not(rhs) => { return Self::Not(Box::new(construct_operator(lhs, *rhs))); }
+                    Self::Eq(mid, rhs) => { return Self::Eq(Box::new(construct_operator(lhs, *mid)), rhs); },
+                    Self::In { value: mid, collection: rhs } => { return Self::In { value: Box::new(construct_operator(lhs, *mid)), collection: rhs }; },
+                    Self::LessThan(mid, rhs) => { return Self::LessThan(Box::new(construct_operator(lhs, *mid)), rhs); },
+                    Self::LessThanOrEq(mid, rhs) => { return Self::LessThanOrEq(Box::new(construct_operator(lhs, *mid)), rhs); },
+                    Self::Add(mid, rhs) => { return Self::Add(Box::new(construct_operator(lhs, *mid)), rhs); },
+                    Self::Subtract(mid, rhs) => { return Self::Subtract(Box::new(construct_operator(lhs, *mid)), rhs); },
+                    Self::Multiply(mid, rhs) => { return Self::Multiply(Box::new(construct_operator(lhs, *mid)), rhs); },
+                    Self::Divide(mid, rhs) => { return Self::Divide(Box::new(construct_operator(lhs, *mid)), rhs); },
+                    Self::Modulo(mid, rhs) => { return Self::Modulo(Box::new(construct_operator(lhs, *mid)), rhs); },
+                    Self::Concat(mid, rhs) => { return Self::Concat(Box::new(construct_operator(lhs, *mid)), rhs); },
+                    _ => { /* This case shouldn't occur, but if it does then do not rotate */ }
+                }
+            } else {
+                // Do not do rotation
+            }
+        }
+        construct_operator(lhs, self)
+    }
+
     /// Parses a fixed-length list of arguments.
     fn parse_fixed_args<const N: usize>(full_str: &String, remaining_str: &str, fn_name: String, arg_end_regex: &Regex) -> Result<([Self; N], String), error::Error> {
         let arg_divider_regex: Regex = Regex::new(r#"(?s)\s*,(.*)"#).unwrap();
@@ -212,6 +280,202 @@ impl Formula {
 
     /// Parses a single expression with an antecedent formula.
     fn parse_dependent_expr(full_str: &String, remaining_str: &str, lhs: Self) -> Result<(Self, String), error::Error> {
+
+        // Check for OR operator
+        let or_regex: Regex = Regex::new(r#"(?is)^\s*or\b(.*)"#).unwrap();
+        if let Some(or_cap) = or_regex.captures(remaining_str) {
+            let (_, [following]) = or_cap.extract();
+            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
+
+            // Apply binary order precedence
+            return Ok((
+                rhs.binary_operator_rotate(OR_PRECEDENCE, lhs, |lhs, rhs| Formula::Or(Box::new(lhs), Box::new(rhs))), 
+                following_rhs
+            ));
+        }
+
+        // Check for AND operator
+        let and_regex: Regex = Regex::new(r#"(?is)^\s*and\b(.*)"#).unwrap();
+        if let Some(and_cap) = and_regex.captures(remaining_str) {
+            let (_, [following]) = and_cap.extract();
+            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
+
+            // Apply binary order precedence
+            return Ok((
+                rhs.binary_operator_rotate(AND_PRECEDENCE, lhs, |lhs, rhs| Formula::And(Box::new(lhs), Box::new(rhs))), 
+                following_rhs
+            ));
+        }
+
+        // Check for equals operator
+        let equals_regex: Regex = Regex::new(r#"(?s)^\s*=(.*)"#).unwrap();
+        if let Some(equals_cap) = equals_regex.captures(remaining_str) {
+            let (_, [following]) = equals_cap.extract();
+            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
+
+            // Apply binary order precedence
+            return Ok((
+                rhs.binary_operator_rotate(EQ_PRECEDENCE, lhs, |lhs, rhs| Formula::Eq(Box::new(lhs), Box::new(rhs))), 
+                following_rhs
+            ));
+        }
+
+        // Check for not equals operator
+        let neq_regex: Regex = Regex::new(r#"(?s)^\s*<>(.*)"#).unwrap();
+        if let Some(neq_cap) = neq_regex.captures(remaining_str) {
+            let (_, [following]) = neq_cap.extract();
+            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
+
+            // Apply binary order precedence
+            return Ok((
+                rhs.binary_operator_rotate(EQ_PRECEDENCE, lhs, |lhs, rhs| Formula::Not(Box::new(Formula::Eq(Box::new(lhs), Box::new(rhs))))), 
+                following_rhs
+            ));
+        }
+
+        // Check for IN operator
+        let in_regex: Regex = Regex::new(r#"(?is)^\s*in\b(.*)"#).unwrap();
+        if let Some(in_cap) = in_regex.captures(remaining_str) {
+            let (_, [following]) = in_cap.extract();
+            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
+
+            // Apply binary order precedence
+            return Ok((
+                rhs.binary_operator_rotate(IN_PRECEDENCE, lhs, |lhs, rhs| Formula::In { value: Box::new(lhs), collection: Box::new(rhs) }), 
+                following_rhs
+            ));
+        }
+
+        // Check for less-than-or-equals operator
+        let leq_regex: Regex = Regex::new(r#"(?s)^\s*<=(.*)"#).unwrap();
+        if let Some(leq_cap) = leq_regex.captures(remaining_str) {
+            let (_, [following]) = leq_cap.extract();
+            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
+
+            // Apply binary order precedence
+            return Ok((
+                rhs.binary_operator_rotate(LTEQ_PRECEDENCE, lhs, |lhs, rhs| Formula::LessThanOrEq(Box::new(lhs), Box::new(rhs))), 
+                following_rhs
+            ));
+        }
+
+        // Check for greater-than-or-equals operator
+        let geq_regex: Regex = Regex::new(r#"(?s)^\s*>=(.*)"#).unwrap();
+        if let Some(geq_cap) = geq_regex.captures(remaining_str) {
+            let (_, [following]) = geq_cap.extract();
+            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
+
+            // Apply binary order precedence
+            return Ok((
+                rhs.binary_operator_rotate(LTEQ_PRECEDENCE, lhs, |lhs, rhs| Formula::Not(Box::new(Formula::LessThan(Box::new(lhs), Box::new(rhs))))), 
+                following_rhs
+            ));
+        }
+
+        // Check for less-than operator
+        let lt_regex: Regex = Regex::new(r#"(?s)^\s*<(.*)"#).unwrap();
+        if let Some(lt_cap) = lt_regex.captures(remaining_str) {
+            let (_, [following]) = lt_cap.extract();
+            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
+
+            // Apply binary order precedence
+            return Ok((
+                rhs.binary_operator_rotate(LT_PRECEDENCE, lhs, |lhs, rhs| Formula::LessThan(Box::new(lhs), Box::new(rhs))), 
+                following_rhs
+            ));
+        }
+
+        // Check for greater-than operator
+        let gt_regex: Regex = Regex::new(r#"(?s)^\s*>(.*)"#).unwrap();
+        if let Some(gt_cap) = gt_regex.captures(remaining_str) {
+            let (_, [following]) = gt_cap.extract();
+            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
+
+            // Apply binary order precedence
+            return Ok((
+                rhs.binary_operator_rotate(LT_PRECEDENCE, lhs, |lhs, rhs| Formula::Not(Box::new(Formula::LessThanOrEq(Box::new(lhs), Box::new(rhs))))), 
+                following_rhs
+            ));
+        }
+        
+        // Check for addition operator
+        let addition_regex: Regex = Regex::new(r#"(?s)^\s*\+(.*)"#).unwrap();
+        if let Some(addition_cap) = addition_regex.captures(remaining_str) {
+            let (_, [following]) = addition_cap.extract();
+            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
+
+            // Apply binary order precedence
+            return Ok((
+                rhs.binary_operator_rotate(ADD_PRECEDENCE, lhs, |lhs, rhs| Formula::Add(Box::new(lhs), Box::new(rhs))), 
+                following_rhs
+            ));
+        }
+
+        // Check for subtraction operator
+        let subtraction_regex: Regex = Regex::new(r#"(?s)^\s*-(.*)"#).unwrap();
+        if let Some(subtraction_cap) = subtraction_regex.captures(remaining_str) {
+            let (_, [following]) = subtraction_cap.extract();
+            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
+
+            // Apply binary order precedence
+            return Ok((
+                rhs.binary_operator_rotate(SUBTRACT_PRECEDENCE, lhs, |lhs, rhs| Formula::Subtract(Box::new(lhs), Box::new(rhs))), 
+                following_rhs
+            ));
+        }
+
+        // Check for multiplication operator
+        let multiplication_regex: Regex = Regex::new(r#"(?s)^\s*\*(.*)"#).unwrap();
+        if let Some(multiplication_cap) = multiplication_regex.captures(remaining_str) {
+            let (_, [following]) = multiplication_cap.extract();
+            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
+
+            // Apply binary order precedence
+            return Ok((
+                rhs.binary_operator_rotate(MULTIPLY_PRECEDENCE, lhs, |lhs, rhs| Formula::Multiply(Box::new(lhs), Box::new(rhs))), 
+                following_rhs
+            ));
+        }
+
+        // Check for division operator
+        let division_regex: Regex = Regex::new(r#"(?s)^\s*/(.*)"#).unwrap();
+        if let Some(division_cap) = division_regex.captures(remaining_str) {
+            let (_, [following]) = division_cap.extract();
+            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
+
+            // Apply binary order precedence
+            return Ok((
+                rhs.binary_operator_rotate(DIVIDE_PRECEDENCE, lhs, |lhs, rhs| Formula::Divide(Box::new(lhs), Box::new(rhs))), 
+                following_rhs
+            ));
+        }
+
+        // Check for modulo operator
+        let modulo_regex: Regex = Regex::new(r#"(?s)^\s*%(.*)"#).unwrap();
+        if let Some(modulo_cap) = modulo_regex.captures(remaining_str) {
+            let (_, [following]) = modulo_cap.extract();
+            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
+
+            // Apply binary order precedence
+            return Ok((
+                rhs.binary_operator_rotate(MODULO_PRECEDENCE, lhs, |lhs, rhs| Formula::Modulo(Box::new(lhs), Box::new(rhs))), 
+                following_rhs
+            ));
+        }
+
+        // Check for concatenation operator
+        let concat_regex: Regex = Regex::new(r#"(?s)^\s*&(.*)"#).unwrap();
+        if let Some(concat_cap) = concat_regex.captures(remaining_str) {
+            let (_, [following]) = concat_cap.extract();
+            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
+
+            // Apply binary order precedence
+            return Ok((
+                rhs.binary_operator_rotate(CONCAT_PRECEDENCE, lhs, |lhs, rhs| Formula::Concat(Box::new(lhs), Box::new(rhs))), 
+                following_rhs
+            ));
+        }
+
         // Check for nth-value operator
         // For simplicity, nth-value operator only allows for literal integer indices, since on the backend it is implemented by LIMIT {length} OFFSET {start}
         let indexer_regex: Regex = Regex::new(r#"(?s)^\s*\{(\d+)(?::(\d+))?\}(.*)"#).unwrap();
@@ -265,156 +529,6 @@ impl Formula {
                     );
                 }
             }
-        }
-
-        // Check for AND operator
-        let and_regex: Regex = Regex::new(r#"(?is)^\s*and\b(.*)"#).unwrap();
-        if let Some(and_cap) = and_regex.captures(remaining_str) {
-            let (_, [following]) = and_cap.extract();
-            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
-            return Ok((Formula::And(Box::from(lhs), Box::from(rhs)), following_rhs));
-        }
-
-        // Check for OR operator
-        let or_regex: Regex = Regex::new(r#"(?is)^\s*or\b(.*)"#).unwrap();
-        if let Some(or_cap) = or_regex.captures(remaining_str) {
-            let (_, [following]) = or_cap.extract();
-            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
-            return Ok((Formula::Or(Box::from(lhs), Box::from(rhs)), following_rhs));
-        }
-
-        // Check for equals operator
-        let equals_regex: Regex = Regex::new(r#"(?s)^\s*=(.*)"#).unwrap();
-        if let Some(equals_cap) = equals_regex.captures(remaining_str) {
-            let (_, [following]) = equals_cap.extract();
-            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
-            return Ok((Formula::Eq(Box::from(lhs), Box::from(rhs)), following_rhs));
-        }
-
-        // Check for not equals operator
-        let neq_regex: Regex = Regex::new(r#"(?s)^\s*<>(.*)"#).unwrap();
-        if let Some(neq_cap) = neq_regex.captures(remaining_str) {
-            let (_, [following]) = neq_cap.extract();
-            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
-            return Ok((Formula::Not(Box::from(Formula::Eq(Box::from(lhs), Box::from(rhs)))), following_rhs));
-        }
-
-        // Check for less-than-or-equals operator
-        let leq_regex: Regex = Regex::new(r#"(?s)^\s*<=(.*)"#).unwrap();
-        if let Some(leq_cap) = leq_regex.captures(remaining_str) {
-            let (_, [following]) = leq_cap.extract();
-            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
-            return Ok((Formula::LessThanOrEq(Box::from(lhs), Box::from(rhs)), following_rhs));
-        }
-
-        // Check for greater-than-or-equals operator
-        let geq_regex: Regex = Regex::new(r#"(?s)^\s*>=(.*)"#).unwrap();
-        if let Some(geq_cap) = geq_regex.captures(remaining_str) {
-            let (_, [following]) = geq_cap.extract();
-            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
-            return Ok((Formula::Not(Box::from(Formula::LessThan(Box::from(lhs), Box::from(rhs)))), following_rhs));
-        }
-
-        // Check for less-than operator
-        let leq_regex: Regex = Regex::new(r#"(?s)^\s*<(.*)"#).unwrap();
-        if let Some(leq_cap) = leq_regex.captures(remaining_str) {
-            let (_, [following]) = leq_cap.extract();
-            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
-            return Ok((Formula::LessThan(Box::from(lhs), Box::from(rhs)), following_rhs));
-        }
-
-        // Check for greater-than operator
-        let geq_regex: Regex = Regex::new(r#"(?s)^\s*>(.*)"#).unwrap();
-        if let Some(geq_cap) = geq_regex.captures(remaining_str) {
-            let (_, [following]) = geq_cap.extract();
-            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
-            return Ok((Formula::Not(Box::from(Formula::LessThanOrEq(Box::from(lhs), Box::from(rhs)))), following_rhs));
-        }
-
-        // Check for IN operator
-        let in_regex: Regex = Regex::new(r#"(?is)^\s*in\b(.*)"#).unwrap();
-        if let Some(in_cap) = in_regex.captures(remaining_str) {
-            let (_, [following]) = in_cap.extract();
-            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
-            return Ok((
-                Formula::In {
-                    value: Box::from(lhs), 
-                    collection: Box::from(rhs)
-                }, 
-                following_rhs
-            ));
-        }
-
-        // Check for addition operator
-        let addition_regex: Regex = Regex::new(r#"(?s)^\s*\+(.*)"#).unwrap();
-        if let Some(addition_cap) = addition_regex.captures(remaining_str) {
-            let (_, [following]) = addition_cap.extract();
-            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
-            return Ok((Formula::Add(Box::from(lhs), Box::from(rhs)), following_rhs));
-        }
-
-        // Check for subtraction operator
-        let subtraction_regex: Regex = Regex::new(r#"(?s)^\s*-(.*)"#).unwrap();
-        if let Some(subtraction_cap) = subtraction_regex.captures(remaining_str) {
-            let (_, [following]) = subtraction_cap.extract();
-            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
-            return Ok((Formula::Subtract(Box::from(lhs), Box::from(rhs)), following_rhs));
-        }
-
-        // Check for multiplication operator
-        let multiplication_regex: Regex = Regex::new(r#"(?s)^\s*\*(.*)"#).unwrap();
-        if let Some(multiplication_cap) = multiplication_regex.captures(remaining_str) {
-            let (_, [following]) = multiplication_cap.extract();
-            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
-
-            // For sake of order of operations, make sure multiplication is evaluated before addition or subtraction!
-            match rhs {
-                Formula::Add(rhs_arg0, rhs_arg1) => {
-                    return Ok((Formula::Add(Box::from(Formula::Multiply(Box::from(lhs), Box::from(rhs_arg0))), Box::from(rhs_arg1)), following_rhs));
-                }
-                Formula::Subtract(rhs_arg0, rhs_arg1) => {
-                    return Ok((Formula::Subtract(Box::from(Formula::Multiply(Box::from(lhs), Box::from(rhs_arg0))), Box::from(rhs_arg1)), following_rhs));
-                }
-                _ => {
-                    return Ok((Formula::Multiply(Box::from(lhs), Box::from(rhs)), following_rhs));
-                }
-            }
-        }
-
-        // Check for division operator
-        let division_regex: Regex = Regex::new(r#"(?s)^\s*/(.*)"#).unwrap();
-        if let Some(division_cap) = division_regex.captures(remaining_str) {
-            let (_, [following]) = division_cap.extract();
-            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
-
-            // For sake of order of operations, make sure division is evaluated before addition or subtraction!
-            match rhs {
-                Formula::Add(rhs_arg0, rhs_arg1) => {
-                    return Ok((Formula::Add(Box::from(Formula::Divide(Box::from(lhs), Box::from(rhs_arg0))), Box::from(rhs_arg1)), following_rhs));
-                }
-                Formula::Subtract(rhs_arg0, rhs_arg1) => {
-                    return Ok((Formula::Subtract(Box::from(Formula::Divide(Box::from(lhs), Box::from(rhs_arg0))), Box::from(rhs_arg1)), following_rhs));
-                }
-                _ => {
-                    return Ok((Formula::Divide(Box::from(lhs), Box::from(rhs)), following_rhs));
-                }
-            }
-        }
-
-        // Check for modulo operator
-        let modulo_regex: Regex = Regex::new(r#"(?s)^\s*%(.*)"#).unwrap();
-        if let Some(modulo_cap) = modulo_regex.captures(remaining_str) {
-            let (_, [following]) = modulo_cap.extract();
-            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
-            return Ok((Formula::Modulo(Box::from(lhs), Box::from(rhs)), following_rhs));
-        }
-
-        // Check for concatenation operator
-        let concat_regex: Regex = Regex::new(r#"(?s)^\s*&(.*)"#).unwrap();
-        if let Some(concat_cap) = concat_regex.captures(remaining_str) {
-            let (_, [following]) = concat_cap.extract();
-            let (rhs, following_rhs) = Self::parse_expr(full_str, following)?;
-            return Ok((Formula::Concat(Box::from(lhs), Box::from(rhs)), following_rhs));
         }
 
         // If no known operator was appended, return the antecedent alone
@@ -539,17 +653,24 @@ impl Formula {
         }
 
         // Check for a parameter
-        let param_regex: Regex = Regex::new(r#"(?is)^\s*param(\d+)(.*)"#).unwrap();
+        let param_regex: Regex = Regex::new(r#"(?is)^\s*@\{(\d+),(\d+)\}(.*)"#).unwrap();
         if let Some(param_cap) = param_regex.captures(remaining_str) {
-            let (_, [param_content, following]) = param_cap.extract();
-            let Ok(param_oid) = param_content.parse::<i64>() else { 
+            let (_, [datasource_oid_content, column_oid_content, following]) = param_cap.extract();
+            let Ok(datasource_oid) = datasource_oid_content.parse::<i64>() else { 
                 return Err(error::Error::FormulaParseError { 
                     msg: String::from("Unable to parse formula parameter."), 
                     full_formula: full_str.clone(), 
                     substring_with_error: String::from(remaining_str.trim_start()) 
                 }); 
             };
-            return Self::parse_dependent_expr(full_str, following, Formula::Param(param_oid));
+            let Ok(column_oid) = column_oid_content.parse::<i64>() else { 
+                return Err(error::Error::FormulaParseError { 
+                    msg: String::from("Unable to parse formula parameter."), 
+                    full_formula: full_str.clone(), 
+                    substring_with_error: String::from(remaining_str.trim_start()) 
+                }); 
+            };
+            return Self::parse_dependent_expr(full_str, following, Formula::Param { datasource_oid, column_oid });
         }
 
         // Check for a function call
@@ -1042,7 +1163,7 @@ impl Formula {
             Self::Length(_) => String::from("length"),
             Self::LessThan(_, _) => String::from("operator<"),
             Self::LessThanOrEq(_, _) => String::from("operator<="),
-            Self::LiteralArray(_) => String::from("[...]"),
+            Self::LiteralArray(items) => String::from("array"),
             Self::LiteralBool(b) => String::from(if *b { "true" } else { "false" }),
             Self::LiteralFloat(lit) => format!("{lit}"),
             Self::LiteralInt(lit) => format!("{lit}"),
@@ -1056,7 +1177,7 @@ impl Formula {
             Self::Null => String::from("null"),
             Self::NullIf { .. } => String::from("nullif"),
             Self::Or(_, _) => String::from("or"),
-            Self::Param(_) => String::from("parameter"),
+            Self::Param { .. } => String::from("parameter"),
             Self::RandomInt => String::from("random"),
             Self::Replace { .. } => String::from("replace"),
             Self::Round(_) => String::from("round"),

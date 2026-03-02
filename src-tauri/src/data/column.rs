@@ -7,7 +7,7 @@ use rusqlite::{params};
 use serde::Serialize;
 use std::hash::{Hash, Hasher};
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, PartialEq, Eq)]
 #[serde(rename_all="camelCase")]
 pub struct Metadata {
     pub oid: i64,
@@ -93,7 +93,7 @@ impl Metadata {
     }
 
     /// Queries all columns belonging to a particular schema.
-    pub fn query_by_schema(sender: Sender<Self>, schema_oid: i64) -> Result<(), Error> {
+    pub fn query_by_schema(mut sender: Sender<Self>, schema_oid: i64) -> Result<(), Error> {
         let conn = db::open()?;
 
         let mut select_statement = conn.prepare(
@@ -281,8 +281,11 @@ impl Metadata {
                 );
                 trans.execute(&cmd, [])?;
             }
+            column_type::ColumnType::Formula { oid, formula } => {
+                // If the column is a formula, make a view for the values therein
+            }
             _ => {
-                // Virtual column, so do nothing
+                // Otherwise, a virtual column that requires nothing to be done
             }
         }
 
@@ -330,7 +333,14 @@ impl Metadata {
 
         // Drop any existing non-virtual columns
         {
-            let cmd: String = format!("DROP TABLE IF EXISTS MULTISELECT{}", self.oid);
+            let cmd: String = format!(
+                "
+                DROP TABLE IF EXISTS MULTISELECT{};
+                DROP VIEW IF EXISTS FORMULA{};
+                ", 
+                self.oid,
+                self.oid
+            );
             trans.execute(&cmd, [])?;
         }
         {

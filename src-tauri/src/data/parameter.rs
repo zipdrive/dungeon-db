@@ -1,10 +1,11 @@
 use crate::util::error::Error;
+use crate::data::{datasource, column};
 use rusqlite::{Transaction};
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Clone)]
 pub struct Parameter {
-    datasource: datasource::Datasource,
-    column: column::Metadata
+    pub datasource: datasource::Datasource,
+    pub column: column::Metadata
 }
 
 impl Parameter {
