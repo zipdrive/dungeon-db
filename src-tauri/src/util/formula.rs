@@ -653,7 +653,7 @@ impl Formula {
         }
 
         // Check for a parameter
-        let param_regex: Regex = Regex::new(r#"(?is)^\s*@\{(\d+),(\d+)\}(.*)"#).unwrap();
+        let param_regex: Regex = Regex::new(r#"(?is)^\s*@\{(\d+):(\d+)\}(.*)"#).unwrap();
         if let Some(param_cap) = param_regex.captures(remaining_str) {
             let (_, [datasource_oid_content, column_oid_content, following]) = param_cap.extract();
             let Ok(datasource_oid) = datasource_oid_content.parse::<i64>() else { 

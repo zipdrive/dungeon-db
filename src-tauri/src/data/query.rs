@@ -9,6 +9,41 @@ use std::collections::{HashSet,HashMap};
 
 
 
+enum ScalarType {
+    Any,
+    Boolean,
+    Integer,
+    Number,
+    Date,
+    Datetime,
+    Text,
+    JSON,
+    Blob,
+    Null
+}
+
+/// Represents an expression returning a scalar value.
+struct ScalarExpression {
+    /// The SQL expression resulting in a scalar value that can be used as an argument to an operator or function.
+    arg_expr: String,
+
+    /// The SQL expression resulting in a scalar value representing the true value of the parameter.
+    /// This will typically be the same as arg_expr, with the exception that Select/Multiselect/Object columns will have their primary keys 
+    /// returned by arg_expr and their referenced row OIDs returned by value_expr.
+    value_expr: String,
+
+    /// The SQL expression for the label of that scalar value (e.g. primary key of the row referenced by a Select column).
+    label_expr: String,
+
+    /// The SQL expression for the parameter returned by the expression, if it returns the value of an unmodified parameter.
+    param_expr: String,
+
+    /// The scalar type returned by the expression.
+    return_type: ScalarType
+}
+
+
+
 #[derive(PartialEq, Eq)]
 enum Join {
     Root(datasource::Datasource),
@@ -512,27 +547,150 @@ impl QueryBuilder {
         self.cmd_cols.insert(col_definition);
     }
 
-    fn formula_to_expression(&self, formula: Formula) -> Result<String, Error> {
+    fn formula_to_scalar_expression(&self, formula: Formula) -> Result<ScalarExpression, Error> {
         Ok(match formula {
-            Formula::Wrap(inner) => format!("({})", self.formula_to_expression(*inner)),
-            Formula::Null => String::from("NULL"),
-            Formula::LiteralInt(num) => format!("{num}"),
-            Formula::LiteralFloat(num) => format!("{num}"),
-            Formula::LiteralBool(b) => format!("{}", if b { "TRUE" } else { "FALSE" }),
-            Formula::LiteralString(text) => format!("'{}'", text.replace("'", "''")),
+            Formula::Wrap(inner) => {
+                let inner_expression = self.formula_to_scalar_expression(*inner)?;
+                ScalarExpression {
+                    arg_expr: format!("({})", inner_expression.arg_expr),
+                    value_expr: format!("({})", inner_expression.value_expr),
+                    label_expr: format!("({})", inner_expression.label_expr),
+                    param_expr: format!("({})", inner_expression.param_expr),
+                    return_type: inner_expression.return_type
+                }
+            },
+            Formula::Null => ScalarExpression { 
+                arg_expr: String::from("NULL"), 
+                value_expr: String::from("NULL"), 
+                label_expr: String::from("NULL"),
+                param_expr: String::from("NULL"),
+                return_type: ScalarType::Null 
+            },
+            Formula::LiteralInt(num) => ScalarExpression { 
+                arg_expr: format!("{num}"), 
+                value_expr: format!("{num}"), 
+                label_expr: format!("CAST({num} AS TEXT)"),
+                param_expr: String::from("NULL"),
+                return_type: ScalarType::Integer 
+            },
+            Formula::LiteralFloat(num) => ScalarExpression { 
+                arg_expr: format!("{num}"), 
+                value_expr: format!("{num}"), 
+                label_expr: format!("CAST({num} AS TEXT)"),
+                param_expr: String::from("NULL"),
+                return_type: ScalarType::Number 
+            },
+            Formula::LiteralBool(b) => ScalarExpression { 
+                arg_expr: format!("{}", if b { "TRUE" } else { "FALSE" }),
+                value_expr: format!("{}", if b { "TRUE" } else { "FALSE" }), 
+                label_expr: format!("{}", if b { "'True'" } else { "'False'" }),
+                param_expr: String::from("NULL"), 
+                return_type: ScalarType::Boolean 
+            },
+            Formula::LiteralString(text) => ScalarExpression { 
+                arg_expr: format!("'{}'", text.replace("'", "''")),  
+                value_expr: format!("'{}'", text.replace("'", "''")), 
+                label_expr: format!("'{}'", text.replace("'", "''")), 
+                param_expr: String::from("NULL"), 
+                return_type: ScalarType::Text 
+            },
             Formula::Param { datasource_oid, column_oid } => {
                 let datasource: datasource::Datasource = datasource::Datasource::get(datasource_oid)?;
-                format!("{}+{}", self.formula_to_expression(*lhs), self.formula_to_expression(*rhs))
-            },
-            Formula::Or(lhs, rhs) => format!("{} OR {}", self.formula_to_expression(*lhs), self.formula_to_expression(*rhs)),
-            Formula::And(lhs, rhs) => format!("{} AND {}", self.formula_to_expression(*lhs), self.formula_to_expression(*rhs)),
-            Formula::Not(inner) => format!("NOT ({})", self.formula_to_expression(*inner)),
-            Formula::Add(lhs, rhs) => format!("{}+{}", self.formula_to_expression(*lhs), self.formula_to_expression(*rhs)),
-            Formula::Subtract(lhs, rhs) => format!("{}-{}", self.formula_to_expression(*lhs), self.formula_to_expression(*rhs)),
-            Formula::Multiply(lhs, rhs) => format!("{}*{}", self.formula_to_expression(*lhs), self.formula_to_expression(*rhs)),
-            Formula::Divide(lhs, rhs) => format!("{}/{}", self.formula_to_expression(*lhs), self.formula_to_expression(*rhs)),
-            Formula::Modulo(lhs, rhs) => format!("{}%{}", self.formula_to_expression(*lhs), self.formula_to_expression(*rhs)),
-            Formula::Concat(lhs, rhs) => format!("{}||{}", self.formula_to_expression(*lhs), self.formula_to_expression(*rhs))
+                let column_metadata: column::Metadata = column::Metadata::get(column_oid)?;
+                match self.param_cte.insert_param(parameter::Parameter {
+                    datasource,
+                    column: column_metadata.clone()
+                })? {
+                    SimpleQueryBuilderColumn::Primitive { param, value_ord } => {
+                        let (label_expr, return_type) = match param.column.column_type {
+                            column_type::ColumnType::Primitive(prim) => match prim {
+                                column_type::Primitive::Text => (value_ord.clone(), ScalarType::Text),
+                                column_type::Primitive::JSON => (value_ord.clone(), ScalarType::JSON),
+                                column_type::Primitive::Integer => (format!("CAST({value_ord} AS TEXT)"), ScalarType::Integer),
+                                column_type::Primitive::Number => (format!("CAST({value_ord} AS TEXT)"), ScalarType::Number),
+                                column_type::Primitive::Checkbox => (format!("IF({value_ord}, 'True', 'False')"), ScalarType::Boolean),
+                                column_type::Primitive::Date => (format!("DATE({value_ord}, 'julianday')"), ScalarType::Date),
+                                column_type::Primitive::Datetime => (format!("STRFTIME('%FT%TZ', {value_ord}, 'julianday')"), ScalarType::Datetime),
+                                column_type::Primitive::File
+                                | column_type::Primitive::Image => (
+                                    format!("
+                                    CASE 
+                                        WHEN {value_ord} IS NULL THEN NULL 
+                                        WHEN LENGTH({value_ord}) > 1000000000 THEN FORMAT('%.1f GB', LENGTH({value_ord}) * 0.000000001)
+                                        WHEN LENGTH({value_ord}) > 1000000 THEN FORMAT('%.1f MB', LENGTH({value_ord}) * 0.000001)
+                                        ELSE FORMAT('%.1f KB', LENGTH({value_ord}) * 0.001)
+                                    END
+                                    "), 
+                                    ScalarType::Blob
+                                )
+                            },
+                            _ => { return Err(Error::AdhocError("Expected primitive column type.")); }
+                        };
+                        ScalarExpression {
+                            arg_expr: value_ord.clone(),
+                            value_expr: value_ord.clone(),
+                            label_expr,
+                            param_expr: format!("'{}:{}'", param.datasource.get_oid(), param.column.oid),
+                            return_type
+                        }
+                    },
+                    SimpleQueryBuilderColumn::Select { param, value_ord } => {
+                        let referenced_table_oid: i64 = 0;
+                        ScalarExpression {
+                            arg_expr: format!("(SELECT JSON_STRINGIFY FROM TABLE{referenced_table_oid}_SURROGATE WHERE OID = p.{value_ord})"),
+                            value_expr: value_ord.clone(),
+                            label_expr: format!("(SELECT LABEL FROM TABLE{referenced_table_oid}_SURROGATE WHERE OID = p.{value_ord})"),
+                            param_expr: format!("'{}:{}'", param.datasource.get_oid(), param.column.oid),
+                            return_type: ScalarType::JSON
+                        }
+                    },
+                    SimpleQueryBuilderColumn::Multiselect { param, value_ord, label_ord } => {
+                        let referenced_table_oid: i64 = 0;
+                        ScalarExpression {
+                            arg_expr: label_ord.clone(),
+                            value_expr: value_ord.clone(),
+                            label_expr: label_ord.clone(),
+                            param_expr: format!("'{}:{}'", param.datasource.get_oid(), param.column.oid),
+                            return_type: ScalarType::JSON
+                        }
+                    },
+                    SimpleQueryBuilderColumn::Object { param, value_ord, label_ord } => {
+                        let referenced_table_oid: i64 = 0;
+                        ScalarExpression {
+                            arg_expr: format!("(SELECT JSON_STRINGIFY FROM TABLE{referenced_table_oid}_SURROGATE WHERE OID = p.{value_ord})"),
+                            value_expr: value_ord.clone(),
+                            label_expr: label_ord.clone(),
+                            param_expr: format!("'{}:{}'", param.datasource.get_oid(), param.column.oid),
+                            return_type: ScalarType::JSON
+                        }
+                    }
+                    SimpleQueryBuilderColumn::Formula { param, formula } => {
+                        let parsed_formula: Formula = Formula::parse(formula.clone())?;
+                        let inner_expression: ScalarExpression = self.formula_to_scalar_expression(parsed_formula)?;
+                        ScalarExpression {
+                            arg_expr: format!("({})", inner_expression.arg_expr),
+                            value_expr: format!("({})", inner_expression.value_expr),
+                            label_expr: format!("({})", inner_expression.label_expr),
+                            param_expr: format!("({})", inner_expression.param_expr),
+                            return_type: inner_expression.return_type
+                        }
+                    }
+                    SimpleQueryBuilderColumn::Virtual { param } => {
+                        return Err(Error::AdhocError("A subreport cannot be used as a parameter to a formula!"));
+                    }
+                }
+            }
+            /*,
+            Formula::Or(lhs, rhs) => format!("{} OR {}", self.formula_to_expression(*lhs)?, self.formula_to_expression(*rhs)?),
+            Formula::And(lhs, rhs) => format!("{} AND {}", self.formula_to_expression(*lhs)?, self.formula_to_expression(*rhs)?),
+            Formula::Not(inner) => format!("NOT ({})", self.formula_to_expression(*inner)?),
+            Formula::Add(lhs, rhs) => format!("{}+{}", self.formula_to_expression(*lhs)?, self.formula_to_expression(*rhs)?),
+            Formula::Subtract(lhs, rhs) => format!("{}-{}", self.formula_to_expression(*lhs)?, self.formula_to_expression(*rhs)?),
+            Formula::Multiply(lhs, rhs) => format!("{}*{}", self.formula_to_expression(*lhs)?, self.formula_to_expression(*rhs)?),
+            Formula::Divide(lhs, rhs) => format!("{}/{}", self.formula_to_expression(*lhs)?, self.formula_to_expression(*rhs)?),
+            Formula::Modulo(lhs, rhs) => format!("{}%{}", self.formula_to_expression(*lhs)?, self.formula_to_expression(*rhs)?),
+            Formula::Concat(lhs, rhs) => format!("{}||{}", self.formula_to_expression(*lhs)?, self.formula_to_expression(*rhs)?)
+            */
         })
     }
 
