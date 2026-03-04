@@ -417,4 +417,32 @@ impl Datasource {
             }
         }
     }
+
+    /// Gets the relationship from [the last parent datasource with a Many relationship to its parent] to this datasource.
+    pub fn get_deep_relationship(&self) -> Self {
+        match self {
+            Self::Table { .. } => {
+                // Root datasource
+                self.clone()
+            }
+            Self::Inheritance { parent_datasource, .. }
+            | Self::Object { parent_datasource, .. } => {
+                // Always has a 1-to-1 relationship with parent, so return the deep relationship of the parent
+                parent_datasource.get_deep_relationship()
+            }
+            Self::Select { parent_datasource, column, .. } => {
+                // If the column that maps from the parent to this datasource belongs to the schema of the parent datasource, 
+                // then this datasource has a 1-to-1 relationship with the parent datasource.
+                if column.schema.oid == parent_datasource.get_schema().oid {
+                    parent_datasource.get_deep_relationship()
+                // Otherwise, this datasource has a 1-to-N relationship with the parent datasource.
+                } else {
+                    self.clone()
+                }
+            }
+            Self::Multiselect { .. } => {
+                self.clone()
+            }
+        }
+    }
 }

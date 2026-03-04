@@ -10,13 +10,13 @@ pub enum Error {
         full_formula: String,
         substring_with_error: String
     },
-    /*
     FormulaTypeValidationError {
         outer_name: &'static str,
         inner_name: String,
         expected_type: String,
         received_type: String
     },
+    /*
     FormulaTypeConflictError {
         name: String,
         types: Vec<String>
