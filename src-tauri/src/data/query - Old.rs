@@ -10,7 +10,7 @@ use bitflags::bitflags;
 
 
 
-!bitflags {
+bitflags! {
     struct ScalarType: u32 {
         const Null          = 0b00000000;
         const Any           = 0b11111111;

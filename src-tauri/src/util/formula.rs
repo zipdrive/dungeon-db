@@ -1139,7 +1139,7 @@ impl Formula {
     }
     
     /// Converts formula to a basic string indicating the function name.
-    fn to_string(&self) -> String {
+    pub fn to_string(&self) -> String {
         match self {
             Self::Abs(_) => String::from("abs"),
             Self::Add(_, _) => String::from("operator+"),

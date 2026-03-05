@@ -116,7 +116,7 @@ impl Cell {
 
     /// Builds a basic query to get all columns associated with the given schema.
     /// Also sends the column information through the provided Sender object.
-    fn build_query(mut column_sender: Sender<column::Metadata>, schema_oid: i64, initial_datasources: Vec<datasource::Datasource>) -> Result<(query::QueryBuilder, Vec<query::QueryBuilderColumn>), Error> {
+    fn build_query(mut column_sender: Sender<column::Metadata>, schema_oid: i64, initial_datasources: Vec<datasource::Datasource>) -> Result<query::QueryBuilder, Error> {
         // Construct mapping from schema to default datasource
         let mut schema_to_datasource: HashMap<schema::Metadata, datasource::Datasource> = HashMap::new();
         {
@@ -137,17 +137,11 @@ impl Cell {
         
         // Build query to get data for each column in the schema
         let mut query: query::QueryBuilder = query::QueryBuilder::new(initial_datasources);
-        let mut cols: Vec<query::QueryBuilderColumn> = Vec::new();
         column::Metadata::query_by_schema(
             Sender::Callback(Box::new(|col: column::Metadata| -> Result<(), Error> {
                 // Add column to query
                 let datasource: datasource::Datasource = schema_to_datasource[&col.schema].clone();
-                cols.push(
-                    query.column(parameter::Parameter { 
-                        datasource, 
-                        column: col.clone() 
-                    })?
-                );
+                query.insert_column(datasource, col.clone())?;
 
                 // Send column metadata over the provided Sender object
                 column_sender.send(col)?;
@@ -163,68 +157,64 @@ impl Cell {
         for row_result in stmt_filter.query_and_then(params![schema_oid], |row| row.get::<_, String>("FORMULA"))? {
             let filter_formula = row_result?;
             // Insert WHERE clause
-            query.filter(filter_formula)?;
+            query.insert_filter(filter_formula)?;
         }
 
         // Group rows in the query based on the METADATA_REPORT_GROUPBY table
         let mut stmt_groupby = conn.prepare("SELECT COLUMN_OID FROM METADATA_REPORT_GROUPBY WHERE REPORT_OID = ?1 AND TRASH = 0")?;
         for row_result in stmt_groupby.query_and_then(params![schema_oid], |row| row.get::<_, i64>("COLUMN_OID"))? {
             let column_oid = row_result?;
-            let column_metadata: column::Metadata = column::Metadata::get(column_oid)?;
-            let datasource: datasource::Datasource = schema_to_datasource[&column_metadata.schema].clone();
             // Insert GROUP BY clause
-            query.group_by(
-                parameter::Parameter {
-                    datasource,
-                    column: column_metadata
-                }
-            )?;
+            query.insert_grouping(column_oid)?;
         }
 
         // Order the query based on the METADATA_SCHEMA_ORDERBY table
         let mut stmt_orderby = conn.prepare("SELECT COLUMN_OID, SORT_ASCENDING FROM METADATA_SCHEMA_ORDERBY WHERE SCHEMA_OID = ?1 AND TRASH = 0 ORDER BY ORDERING")?;
         for row_result in stmt_orderby.query_and_then(params![schema_oid], |row| { Ok::<(i64, bool), rusqlite::Error>((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, bool>("SORT_ASCENDING")?)) })? {
             let (column_oid, sort_ascending) = row_result?;
-            let column_metadata: column::Metadata = column::Metadata::get(column_oid)?;
-            let datasource: datasource::Datasource = schema_to_datasource[&column_metadata.schema].clone();
             // Insert ORDER BY clause
-            query.order_by(
-                parameter::Parameter {
-                    datasource,
-                    column: column_metadata
-                }, 
-                sort_ascending
-            )?;
+            query.insert_ordering(column_oid, sort_ascending)?;
         }
 
-        Ok((query, cols))
+        Ok(query)
     }
 
     fn run_query<P: Params>(mut cell_sender: Sender<Self>, schema_oid: i64, query: query::QueryBuilder, params: P, query_cols: Vec<query::QueryBuilderColumn>) -> Result<(), Error> {
         // Compile and run the query
         let conn: Connection = db::open()?;
-        let cmd_query: String = query.compile();
-        let mut stmt_query = conn.prepare(&cmd_query)?;
-        let mut rows_query = stmt_query.query(params)?;
-        loop {
-            let Some(row) = rows_query.next()? else { return Ok(()); };
+        if let Some((cmd_query, cols)) = query.compile()? {
+            let mut stmt_query = conn.prepare(&cmd_query)?;
+            let mut rows_query = stmt_query.query(params)?;
+            loop {
+                let Some(row) = rows_query.next()? else { return Ok(()); };
 
-            // First, send a header for the row
-            cell_sender.send(Cell::Row { 
-                schema_oid, 
-                row_oid: match row.get::<_, i64>("OID") {
-                    Ok(o) => Some(o),
-                    Err(rusqlite::Error::InvalidColumnName(_)) => None,
-                    Err(e) => {
-                        return Err(e.into());
+                // First, send a header for the row
+                cell_sender.send(Cell::Row { 
+                    schema_oid, 
+                    row_oid: match row.get::<_, i64>("OID") {
+                        Ok(o) => Some(o),
+                        Err(rusqlite::Error::InvalidColumnName(_)) => None,
+                        Err(e) => {
+                            return Err(e.into());
+                        }
+                    }, 
+                    index: row.get("ROW_INDEX")?, 
+                    validation_failures: Vec::new() 
+                })?;
+                
+                // Then, send a cell for each column
+                for c in cols.iter() {
+                    match c {
+                        query::QueryBuilderColumn::Primitive { schema_oid, schema_row_ord, column_oid, primitive_type, label_ord, label_expr, value_expr } => {
+
+                        }
                     }
-                }, 
-                index: row.get("ROW_INDEX")?, 
-                validation_failures: Vec::new() 
-            })?;
-            
-            // Then, send a cell for each column
-            for c in query_cols.iter() {
+                }
+            }
+        } else {
+            return Ok(()); // If the report doesn't have any datasources, just don't run it
+        }
+        
                 match c {
                     query::QueryBuilderColumn::Primitive { column, label_ord, row_ord } => {
                         let label: Option<String> = row.get::<&str, Option<String>>(label_ord)?;
