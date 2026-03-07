@@ -75,6 +75,9 @@ impl Into<String> for Error {
                     None => format!("{msg}\n{full_formula}")
                 };
             }
+            Self::FormulaTypeValidationError { outer_name, inner_name, expected_type, received_type } => {
+                return format!("Formula error occurred: {outer_name} expected a value of type {expected_type}, but {inner_name} returned a value of type {received_type}.")
+            }
             Self::SaveInitializationError(e) => {
                 return format!("An SQLite error occurred while attempting to save the state of the database: {}", e);
             }

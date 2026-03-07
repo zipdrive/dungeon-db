@@ -4,15 +4,23 @@ use crate::util::channel::Sender;
 use crate::data::schema;
 use crate::data::column_type;
 use rusqlite::{params};
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use std::hash::{Hash, Hasher};
 
-#[derive(Serialize, Clone, PartialEq, Eq)]
+#[derive(Serialize, Clone)]
+pub struct DropdownValue {
+    label: Option<String>,
+    value: Option<i64>
+}
+
+
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all="camelCase")]
-pub struct Metadata {
+pub struct FullMetadata {
     pub oid: i64,
     pub hidden: bool,
-    pub schema: schema::Metadata,
+    pub schema: schema::FullMetadata,
     pub name: String,
     pub column_type: column_type::ColumnType,
     pub style: String,
@@ -23,15 +31,15 @@ pub struct Metadata {
     pub is_primary_key: bool
 }
 
-impl Hash for Metadata {
+impl Hash for FullMetadata {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.oid.hash(state)
     }
 }
 
-impl Metadata {
+impl FullMetadata {
     /// Get the metadata of a column from its OID.
-    pub fn get(oid: i64) -> Result<Metadata, Error> {
+    pub fn get(oid: i64) -> Result<FullMetadata, Error> {
         let conn = db::open()?;
         let (
             hidden,
@@ -75,7 +83,7 @@ impl Metadata {
             ))}
         )?;
 
-        let schema: schema::Metadata = schema::Metadata::get(&conn, schema_oid)?;
+        let schema: schema::FullMetadata = schema::FullMetadata::get(&conn, schema_oid)?;
         let column_type: column_type::ColumnType = column_type::ColumnType::get(column_type_oid)?;
         Ok(Self {
             oid,
@@ -92,22 +100,40 @@ impl Metadata {
         })
     }
 
+    /// Flags the column for garbage collection.
+    pub fn trash(oid: i64) -> Result<(), Error> {
+        let mut conn = db::open()?;
+        let trans = conn.transaction()?;
+        trans.execute("UPDATE METADATA_COLUMN SET TRASH = TRUE WHERE OID = ?1", params![oid])?;
+        trans.commit()?;
+        Ok(())
+    }
+
+    /// Unflags the column for garbage collection.
+    pub fn untrash(oid: i64) -> Result<(), Error> {
+        let mut conn = db::open()?;
+        let trans = conn.transaction()?;
+        trans.execute("UPDATE METADATA_COLUMN SET TRASH = FALSE WHERE OID = ?1", params![oid])?;
+        trans.commit()?;
+        Ok(())
+    }
+
+    /// Simultaneously flags one column for garbage collection while unflagging another.
+    pub fn trash_and_untrash(untrash_oid: i64, trash_oid: i64) -> Result<(), Error> {
+        let mut conn = db::open()?;
+        let trans = conn.transaction()?;
+        trans.execute("UPDATE METADATA_COLUMN SET TRASH = TRUE WHERE OID = ?1", params![trash_oid])?;
+        trans.execute("UPDATE METADATA_COLUMN SET TRASH = FALSE WHERE OID = ?1", params![untrash_oid])?;
+        trans.commit()?;
+        Ok(())
+    }
+
     /// Queries all columns belonging to a particular schema.
     pub fn query_by_schema(mut sender: Sender<Self>, schema_oid: i64) -> Result<(), Error> {
         let conn = db::open()?;
 
         let mut select_statement = conn.prepare(
             "
-            WITH RECURSIVE SUPERSCHEMAS (OID) AS (
-                SELECT
-                    ?1 AS OID
-                UNION
-                SELECT
-                    u.MASTER_TABLE_OID AS OID
-                FROM SUPERSCHEMAS s
-                INNER JOIN METADATA_TABLE_INHERITANCE u ON u.INHERITOR_TABLE_OID = s.OID
-            )
-
             SELECT
                 c.OID,
                 c.HIDDEN,
@@ -155,7 +181,7 @@ impl Metadata {
                 is_primary_key
             ) = row_result?;
 
-            let schema: schema::Metadata = schema::Metadata::get(&conn, schema_oid)?;
+            let schema: schema::FullMetadata = schema::FullMetadata::get(&conn, schema_oid)?;
             let column_type: column_type::ColumnType = column_type::ColumnType::get(column_type_oid)?;
             sender.send(Self {
                 oid,
@@ -171,6 +197,21 @@ impl Metadata {
                 is_primary_key
             })?;
         }
+        Ok(())
+    }
+
+    /// Queries the values of a Select or Multiselect column for a schema.
+    pub fn query_values(mut sender: Sender<DropdownValue>, schema_oid: i64) -> Result<(), Error> {
+        let conn = db::open()?;
+
+        let sql_select = format!("SELECT OID, LABEL FROM TABLE{schema_oid}_SURROGATE");
+        let mut select_stmt = conn.prepare(&sql_select)?;
+        let select_rows = select_stmt.query_and_then([], |row| Ok::<(i64, Option<String>), rusqlite::Error>((row.get::<_, i64>("OID")?, row.get::<_, Option<String>>("LABEL")?)))?;
+        for row_result in select_rows {
+            let (value, label) = row_result?;
+            sender.send(DropdownValue { label, value: Some(value) })?;
+        }
+
         Ok(())
     }
 
@@ -299,11 +340,11 @@ impl Metadata {
         let mut conn = db::open()?;
         let mut trans = conn.transaction()?;
 
-        // Find the column OID
-        let column_type: column_type::ColumnType = self.column_type.clone();
-        self.column_type = column_type.find()?;
+        // Find the column type OID
+        self.column_type = self.column_type.clone().find()?;
 
         // Update the column metadata
+
         trans.execute(
             "
             UPDATE METADATA_COLUMN

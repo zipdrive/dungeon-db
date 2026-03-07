@@ -22,28 +22,28 @@ pub enum Relationship {
 pub enum Datasource {
     Table {
         oid: i64,
-        table: table::Metadata,
+        table: table::FullMetadata,
         label: String
     },
     Inheritance {
         oid: i64,
         parent_datasource: Box<Datasource>,
-        table: table::Metadata
+        table: table::FullMetadata
     },
     Object {
         oid: i64,
         parent_datasource: Box<Datasource>,
-        column: column::Metadata
+        column: column::FullMetadata
     },
     Select {
         oid: i64,
         parent_datasource: Box<Datasource>,
-        column: column::Metadata
+        column: column::FullMetadata
     },
     Multiselect {
         oid: i64,
         parent_datasource: Box<Datasource>,
-        column: column::Metadata
+        column: column::FullMetadata
     }
 }
 
@@ -137,24 +137,24 @@ impl Datasource {
         if mode == "table" {
             Ok(Self::Table {
                 oid,
-                table: table::Metadata::get(table_oid.expect("TABLE_OID should not be NULL if datasource is a table!"))?,
+                table: table::FullMetadata::get(table_oid.expect("TABLE_OID should not be NULL if datasource is a table!"))?,
                 label: label.expect("LABEL should not be NULL if datasource is a table!")
             })
         } else if mode == "inheritance" {
             Ok(Self::Inheritance {
                 oid,
                 parent_datasource: Box::new(Self::get(parent_datasource_oid.expect("PARENT_DATASOURCE_OID should not be NULL if datasource is an inheritance relationship!"))?),
-                table: table::Metadata::get(table_oid.expect("TABLE_OID should not be NULL if datasource is an inheritance relationship!"))?
+                table: table::FullMetadata::get(table_oid.expect("TABLE_OID should not be NULL if datasource is an inheritance relationship!"))?
             })
         } else if mode == "object" {
             Ok(Self::Object { 
                 oid, 
                 parent_datasource: Box::new(Self::get(parent_datasource_oid.expect("PARENT_DATASOURCE_OID should not be NULL if datasource is an Object column!"))?), 
-                column: column::Metadata::get(column_oid.expect("COLUMN_OID should not be NULL if datasource is an Object column!"))?
+                column: column::FullMetadata::get(column_oid.expect("COLUMN_OID should not be NULL if datasource is an Object column!"))?
             })
         } else if mode == "select" {
             let parent_datasource = Box::new(Self::get(parent_datasource_oid.expect("PARENT_DATASOURCE_OID should not be NULL if datasource is a Select column!"))?);
-            let column = column::Metadata::get(column_oid.expect("COLUMN_OID should not be NULL if datasource is a Select column!"))?;
+            let column = column::FullMetadata::get(column_oid.expect("COLUMN_OID should not be NULL if datasource is a Select column!"))?;
             Ok(Self::Select { 
                 oid, 
                 parent_datasource, 
@@ -164,7 +164,7 @@ impl Datasource {
             Ok(Self::Multiselect { 
                 oid, 
                 parent_datasource: Box::new(Self::get(parent_datasource_oid.expect("PARENT_DATASOURCE_OID should not be NULL if datasource is a Multiselect column!"))?), 
-                column: column::Metadata::get(column_oid.expect("COLUMN_OID should not be NULL if datasource is a Multiselect column!"))?
+                column: column::FullMetadata::get(column_oid.expect("COLUMN_OID should not be NULL if datasource is a Multiselect column!"))?
             })
         } else {
             Err(Error::AdhocError("Unknown datasource type."))
@@ -380,7 +380,7 @@ impl Datasource {
     }
 
     /// Gets the metadata for the schema of the datasource.
-    pub fn get_schema(&self) -> schema::Metadata {
+    pub fn get_schema(&self) -> schema::FullMetadata {
         match self {
             Self::Table { table, .. }
             | Self::Inheritance { table, .. } => table.schema.clone(),

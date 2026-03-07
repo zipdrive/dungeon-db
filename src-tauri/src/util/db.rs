@@ -66,6 +66,19 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
         NAME TEXT NOT NULL
     );
 
+    -- METADATA_SCHEMA_INHERITANCE records the inheritance of columns between tables.
+    CREATE TABLE IF NOT EXISTS METADATA_SCHEMA_INHERITANCE (
+        TRASH BOOLEAN NOT NULL DEFAULT FALSE,
+        INHERITOR_SCHEMA_OID INTEGER REFERENCES METADATA_SCHEMA (OID) 
+            ON UPDATE CASCADE 
+            ON DELETE CASCADE,
+        MASTER_SCHEMA_OID INTEGER REFERENCES METADATA_SCHEMA (OID) 
+            ON UPDATE CASCADE 
+            ON DELETE CASCADE,
+        PRIMARY KEY (MASTER_SCHEMA_OID, INHERITOR_SCHEMA_OID)
+    );
+    CREATE INDEX IF NOT EXISTS METADATA_SCHEMA_INHERITANCE_INDEX_BY_INHERITOR_SCHEMA_OID ON METADATA_SCHEMA_INHERITANCE (INHERITOR_SCHEMA_OID);
+
     -- METADATA_SCHEMA_VALIDATION represents a validation performed on a schema.
     -- A validation takes the form of a boolean validation formula that is evaluated for each row in the schema,
     -- and a text message formula which is the error message displayed if the validation formula returns FALSE.
@@ -88,20 +101,6 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
             ON UPDATE CASCADE
             ON DELETE CASCADE
     );
-
-    -- METADATA_TABLE_INHERITANCE records the inheritance of columns between tables.
-    CREATE TABLE IF NOT EXISTS METADATA_TABLE_INHERITANCE (
-        TRASH BOOLEAN NOT NULL DEFAULT FALSE,
-        INHERITOR_TABLE_OID INTEGER REFERENCES METADATA_TABLE (OID) 
-            ON UPDATE CASCADE 
-            ON DELETE CASCADE,
-        MASTER_TABLE_OID INTEGER REFERENCES METADATA_TABLE (OID) 
-            ON UPDATE CASCADE 
-            ON DELETE CASCADE,
-        PRIMARY KEY (MASTER_TABLE_OID, INHERITOR_TABLE_OID)
-    );
-    CREATE INDEX IF NOT EXISTS METADATA_TABLE_INHERITANCE_INDEX_BY_MASTER_TABLE_OID ON METADATA_TABLE_INHERITANCE (MASTER_TABLE_OID);
-    CREATE INDEX IF NOT EXISTS METADATA_TABLE_INHERITANCE_INDEX_BY_INHERITOR_TABLE_OID ON METADATA_TABLE_INHERITANCE (INHERITOR_TABLE_OID);
 
     -- METADATA_REPORT stores all user-defined schemas that do not store data, but rather pull data from other schemas.
     -- A report can only be associated with virtual columns.
@@ -324,21 +323,21 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
 
 
 
-    -- METADATA_TABLE_INHERITANCE_VIEW is a view that flattens the inheritance hierarchy.
-    CREATE VIEW IF NOT EXISTS METADATA_TABLE_INHERITANCE_VIEW AS (
+    -- METADATA_SCHEMA_INHERITANCE_VIEW is a view that flattens the inheritance hierarchy.
+    CREATE VIEW IF NOT EXISTS METADATA_SCHEMA_INHERITANCE_VIEW AS (
         WITH RECURSIVE FLATTENING (INHERITOR_TABLE_OID, MASTER_TABLE_OID) AS (
             SELECT
                 u.INHERITOR_TABLE_OID,
                 u.MASTER_TABLE_OID
-            FROM METADATA_TABLE_INHERITANCE u
+            FROM METADATA_SCHEMA_INHERITANCE u
 
             UNION
 
             SELECT
                 s.INHERITOR_TABLE_OID,
                 u.MASTER_TABLE_OID
-            FROM DOWN s
-            INNER JOIN METADATA_TABLE_INHERITANCE u ON u.MASTER_TABLE_OID = s.INHERITOR_TABLE_OID
+            FROM FLATTENING s
+            INNER JOIN METADATA_SCHEMA_INHERITANCE u ON u.MASTER_TABLE_OID = s.INHERITOR_TABLE_OID
         )
         SELECT * FROM FLATTENING
     );

@@ -1,6 +1,6 @@
 use rusqlite::{Connection, Transaction, params};
 use crate::data::datasource::Datasource;
-use crate::data::{column, column_type, datasource, parameter, schema, table};
+use crate::data::{column, column_type, datasource, schema, table};
 use crate::util::formula::Formula;
 use crate::util::db;
 use crate::util::error::Error;
@@ -320,7 +320,18 @@ impl<'a> QueryBuilder<'a> {
     }
 
     /// Compiles the query into SQL.
-    pub fn compile(mut self) -> Result<Option<(String, Vec<QueryBuilderColumn>)>, Error> {
+    /// The first element of the returned tuple is the SQL for the query.
+    /// The second element of the returned tuple is the columns returned by the query.
+    /// The third element of the returned tuple is a list of aliases for each datasource used by the query.
+    pub fn compile(mut self) -> Result<Option<(String, Vec<QueryBuilderColumn>, Vec<String>)>, Error> {
+        let datasource_aliases: Vec<String> = self.tables_and_subqueries.iter()
+            .filter_map(|table_or_subquery| match table_or_subquery {
+                TableOrSubquery::RootDatasource { alias, .. }
+                | TableOrSubquery::DerivativeDatasource { alias, .. } => Some(alias.clone()),
+                _ => None 
+            })
+            .collect();
+
         Ok(Some((
             format!(
                 "SELECT {} FROM {} {} {} {} {}",
@@ -441,12 +452,13 @@ impl<'a> QueryBuilder<'a> {
                     String::from("")
                 }
             ),
-            self.columns
+            self.columns,
+            datasource_aliases
         )))
     }
 
     /// Checks if the query already has a table or subquery with the given alias.
-    fn has_table_or_subquery_alias(&self, alias: &String) -> bool {
+    pub fn has_table_or_subquery_alias(&self, alias: &String) -> bool {
         if self.tables_and_subqueries.iter().any(|table_or_subquery| <TableOrSubquery as Borrow<String>>::borrow(table_or_subquery) == alias) {
             true
         } else if let Some(parent_query) = &self.parent_query {
@@ -483,7 +495,7 @@ impl<'a> QueryBuilder<'a> {
                 let parent_schema = parent_datasource.get_schema();
                 let parent_alias: String = self.insert_datasource(*parent_datasource.clone());
                 TableOrSubquery::DerivativeDatasource { 
-                    on_clause: if table.master_tables.contains(&parent_schema) {
+                    on_clause: if table.schema.master_schemas.contains(&parent_schema) {
                         format!(
                             "{alias}.MASTER{}_OID = {parent_alias}.OID",
                             parent_schema.oid
@@ -544,18 +556,18 @@ impl<'a> QueryBuilder<'a> {
     }
 
     /// Inserts a column definition.
-    pub fn insert_column(&mut self, column_datasource: Datasource, column_metadata: column::Metadata) -> Result<(), Error> {
+    pub fn insert_column(&mut self, column_datasource: Datasource, column_metadata: column::FullMetadata) -> Result<(), Error> {
         let column: QueryBuilderColumn = self.compile_column(column_datasource, column_metadata)?;
         self.columns.push(column);
         Ok(())
     }
 
     /// Compiles the SQL expressions for a column.
-    fn compile_column(&mut self, column_datasource: Datasource, column_metadata: column::Metadata) -> Result<QueryBuilderColumn, Error> {
+    fn compile_column(&mut self, column_datasource: Datasource, column_metadata: column::FullMetadata) -> Result<QueryBuilderColumn, Error> {
         Ok(match column_metadata.column_type {
             column_type::ColumnType::Primitive(prim) => {
                 let datasource_alias: String = self.insert_datasource(column_datasource);
-                let data_alias: String = format!(
+                let primitive_value_alias: String = format!(
                     "{}.COLUMN{}", 
                     datasource_alias,
                     column_metadata.oid
@@ -564,21 +576,21 @@ impl<'a> QueryBuilder<'a> {
                 QueryBuilderColumn::Primitive { 
                     label_expr: match &prim {
                         column_type::Primitive::Text 
-                        | column_type::Primitive::JSON => format!("{data_alias}"),
+                        | column_type::Primitive::JSON => format!("{primitive_value_alias}"),
                         column_type::Primitive::Integer
                         | column_type::Primitive::Number
-                        | column_type::Primitive::Checkbox => format!("CAST({data_alias} AS TEXT)"),
-                        column_type::Primitive::Date => format!("DATE({data_alias}, 'julianday')"),
-                        column_type::Primitive::Datetime => format!("STRFTIME('%FT%TZ', {data_alias}, 'julianday')"),
+                        | column_type::Primitive::Checkbox => format!("CAST({primitive_value_alias} AS TEXT)"),
+                        column_type::Primitive::Date => format!("DATE({primitive_value_alias}, 'julianday')"),
+                        column_type::Primitive::Datetime => format!("STRFTIME('%FT%TZ', {primitive_value_alias}, 'julianday')"),
                         column_type::Primitive::File
                         | column_type::Primitive::Image => format!("CASE 
-                            WHEN {data_alias} IS NULL THEN NULL 
-                            WHEN LENGTH({data_alias}) > 1000000000 THEN FORMAT('%.1f GB', LENGTH({data_alias}) * 0.000000001)
-                            WHEN LENGTH({data_alias}) > 1000000 THEN FORMAT('%.1f MB', LENGTH({data_alias}) * 0.000001)
-                            ELSE FORMAT('%.1f KB', LENGTH({data_alias}) * 0.001)
+                            WHEN {primitive_value_alias} IS NULL THEN NULL 
+                            WHEN LENGTH({primitive_value_alias}) > 1000000000 THEN FORMAT('%.1f GB', LENGTH({primitive_value_alias}) * 0.000000001)
+                            WHEN LENGTH({primitive_value_alias}) > 1000000 THEN FORMAT('%.1f MB', LENGTH({primitive_value_alias}) * 0.000001)
+                            ELSE FORMAT('%.1f KB', LENGTH({primitive_value_alias}) * 0.001)
                         END")
                     },
-                    value_expr: data_alias,
+                    value_expr: primitive_value_alias,
                     primitive_type: prim, 
                     label_ord,
                     schema_oid: column_metadata.schema.oid,
@@ -588,7 +600,7 @@ impl<'a> QueryBuilder<'a> {
             }
             column_type::ColumnType::Object { table_oid, .. } => {
                 let datasource_alias: String = self.insert_datasource(column_datasource);
-                let data_alias: String = format!(
+                let primitive_value_alias: String = format!(
                     "{}.COLUMN{}", 
                     datasource_alias,
                     column_metadata.oid
@@ -596,9 +608,9 @@ impl<'a> QueryBuilder<'a> {
                 let object_row_ord: String = format!("VALUE{}", self.columns.len());
                 let label_ord: String = format!("LABEL{}", self.columns.len());
                 QueryBuilderColumn::Object { 
-                    label_expr: format!("(SELECT LABEL FROM TABLE{table_oid}_SURROGATE WHERE OID = {data_alias})"),
-                    json_expr: format!("(SELECT JSON_STRINGIFY FROM TABLE{table_oid}_SURROGATE WHERE OID = {data_alias})"),
-                    object_row_expr: data_alias,
+                    label_expr: format!("(SELECT LABEL FROM TABLE{table_oid}_SURROGATE WHERE OID = {primitive_value_alias})"),
+                    json_expr: format!("(SELECT JSON_STRINGIFY FROM TABLE{table_oid}_SURROGATE WHERE OID = {primitive_value_alias})"),
+                    object_row_expr: primitive_value_alias,
                     label_ord, 
                     object_schema_oid: table_oid,
                     object_row_ord,
@@ -609,7 +621,7 @@ impl<'a> QueryBuilder<'a> {
             }
             column_type::ColumnType::Select { table_oid, .. } => {
                 let datasource_alias: String = self.insert_datasource(column_datasource);
-                let data_alias: String = format!(
+                let primitive_value_alias: String = format!(
                     "{}.COLUMN{}", 
                     datasource_alias,
                     column_metadata.oid
@@ -617,9 +629,9 @@ impl<'a> QueryBuilder<'a> {
                 let select_row_ord: String = format!("VALUE{}", self.columns.len());
                 let label_ord: String = format!("LABEL{}", self.columns.len());
                 QueryBuilderColumn::Select { 
-                    label_expr: format!("(SELECT LABEL FROM TABLE{table_oid}_SURROGATE WHERE OID = {data_alias})"),
-                    json_expr: format!("(SELECT JSON_STRINGIFY FROM TABLE{table_oid}_SURROGATE WHERE OID = {data_alias})"),
-                    select_row_expr: data_alias,
+                    label_expr: format!("(SELECT LABEL FROM TABLE{table_oid}_SURROGATE WHERE OID = {primitive_value_alias})"),
+                    json_expr: format!("(SELECT JSON_STRINGIFY FROM TABLE{table_oid}_SURROGATE WHERE OID = {primitive_value_alias})"),
+                    select_row_expr: primitive_value_alias,
                     label_ord, 
                     select_schema_oid: table_oid,
                     select_row_ord,
@@ -635,7 +647,7 @@ impl<'a> QueryBuilder<'a> {
 
                 // Construct the SQL expression
                 let datasource_alias: String = self.insert_datasource(column_datasource);
-                let data_alias: String = format!(
+                let primitive_value_alias: String = format!(
                     "{}.COLUMN{}", 
                     datasource_alias,
                     column_metadata.oid
@@ -648,7 +660,7 @@ impl<'a> QueryBuilder<'a> {
                                 SELECT '[' || GROUP_CONCAT(a.JSON_STRINGIFY) || ']' 
                                 FROM MULTISELECT{} m
                                 INNER JOIN TABLE{}_SURROGATE a ON m.TABLE{}_OID = a.OID
-                                WHERE m.TABLE{table_oid}_OID = {data_alias}
+                                WHERE m.TABLE{table_oid}_OID = {primitive_value_alias}
                             )",
                             column_metadata.schema.oid,
                             column_metadata.oid,
@@ -659,7 +671,7 @@ impl<'a> QueryBuilder<'a> {
                                 SELECT '[' || GROUP_CONCAT(a.JSON_STRINGIFY) || ']' 
                                 FROM MULTISELECT{} m 
                                 INNER JOIN TABLE{table_oid}_SURROGATE a ON m.TABLE{table_oid}_OID = a.OID
-                                WHERE m.TABLE{}_OID = {data_alias}
+                                WHERE m.TABLE{}_OID = {primitive_value_alias}
                             )",
                             column_metadata.oid,
                             column_metadata.schema.oid
@@ -669,7 +681,7 @@ impl<'a> QueryBuilder<'a> {
                         format!("(
                                 SELECT GROUP_CONCAT(TABLE{}_OID) 
                                 FROM MULTISELECT{} 
-                                WHERE TABLE{table_oid}_OID = {data_alias}
+                                WHERE TABLE{table_oid}_OID = {primitive_value_alias}
                             )",
                             column_metadata.schema.oid,
                             column_metadata.oid
@@ -678,7 +690,7 @@ impl<'a> QueryBuilder<'a> {
                         format!("(
                                 SELECT GROUP_CONCAT(TABLE{table_oid}_OID) 
                                 FROM MULTISELECT{} 
-                                WHERE TABLE{}_OID = {data_alias}
+                                WHERE TABLE{}_OID = {primitive_value_alias}
                             )",
                             column_metadata.oid,
                             column_metadata.schema.oid
@@ -753,6 +765,13 @@ impl<'a> QueryBuilder<'a> {
         // Apply the filter after GROUP BY
         self.postgroup_filters.push(compiled_formula.arg_expr);
         Ok(())
+    }
+
+    /// Applies a filter to return a specific row from a datasource.
+    pub fn insert_row_filter(&mut self, table_or_subquery_alias: String, table_or_subquery_row_oid: i64) {
+        if self.has_table_or_subquery_alias(&table_or_subquery_alias) {
+            self.pregroup_filters.push(format!("{table_or_subquery_alias}.OID = {table_or_subquery_row_oid}"));
+        }
     }
 
     /// Groups the rows returned by the query based on a column of the query.
@@ -855,7 +874,7 @@ impl<'a> QueryBuilder<'a> {
                 let param_expr: String = format!("'{datasource_oid}:{column_oid}'");
                 let (column_datasource, column_metadata) = (
                     Datasource::get(datasource_oid.clone())?,
-                    column::Metadata::get(column_oid.clone())?
+                    column::FullMetadata::get(column_oid.clone())?
                 );
                 match self.compile_column(column_datasource, column_metadata)? {
                     QueryBuilderColumn::Primitive { primitive_type, label_expr, value_expr, .. } => ScalarExpression { 

@@ -1,9 +1,347 @@
+use serde::Deserialize;
+use tauri::{AppHandle, Emitter, Webview};
+use tauri::ipc::JavaScriptChannelId;
+use std::sync::Mutex;
+use crate::util::channel::Sender;
+use crate::util::error::Error;
+use crate::util::{db, dialog};
 mod query;
 mod datasource;
 mod schema;
 mod table;
 mod report;
-mod parameter;
 mod column_type;
 mod column;
 mod cell;
+
+#[tauri::command]
+/// Initialize a connection to a StaticDB database file.
+pub fn init(path: String) -> Result<(), Error> {
+    return db::init(path);
+}
+
+
+
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase", rename_all_fields="camelCase")]
+pub enum QueryStream {
+    Tables {
+        channel: JavaScriptChannelId
+    },
+    Reports {
+        channel: JavaScriptChannelId
+    },
+    InheritorTables {
+        table_oid: i64,
+        channel: JavaScriptChannelId
+    },
+    MasterLists {
+        schema_oid: Option<i64>,
+        is_table: bool,
+        channel: JavaScriptChannelId
+    },
+    ColumnValues {
+        schema_oid: i64,
+        channel: JavaScriptChannelId
+    },
+    Cells {
+        schema_oid: i64,
+        filters: Vec<(String, i64)>,
+        limit: cell::RetrievalLimit,
+        column_channel: JavaScriptChannelId,
+        cell_channel: JavaScriptChannelId
+    }
+}
+
+impl QueryStream {
+    /// Sends data through a channel from the database to the frontend.
+    pub fn send(self, webview: Webview) -> Result<(), Error> {
+        match self {
+            Self::Tables { channel} => 
+                schema::HierarchicalListItemMetadata::query_tables(Sender::Channel(channel.channel_on(webview))),
+            Self::Reports { channel} => 
+                schema::HierarchicalListItemMetadata::query_reports(Sender::Channel(channel.channel_on(webview))),
+
+            Self::InheritorTables { channel, table_oid } => 
+                schema::HierarchicalListItemMetadata::query_inheritor_tables(Sender::Channel(channel.channel_on(webview)), table_oid),
+
+            Self::MasterLists { schema_oid, is_table, channel } => 
+                schema::ToggledHierarchicalListItemMetadata::query_master_schemas(Sender::Channel(channel.channel_on(webview)), schema_oid, is_table),
+
+            Self::ColumnValues { schema_oid, channel } => 
+                column::FullMetadata::query_values(Sender::Channel(channel.channel_on(webview)), schema_oid),
+                
+            Self::Cells { schema_oid, filters, limit, column_channel, cell_channel } =>
+                cell::Cell::query_by_schema(
+                    Sender::Channel(column_channel.channel_on(webview.clone())), 
+                    Sender::Channel(cell_channel.channel_on(webview)), 
+                    schema_oid, 
+                    filters,
+                    limit
+                )
+        }
+    }
+}
+
+#[tauri::command]
+/// Sends data through a channel from the backend to the frontend.
+pub fn query(webview: Webview, query: QueryStream) -> Result<(), Error> {
+    query.send(webview)
+}
+
+
+
+#[tauri::command]
+/// Gets the metadata for a table.
+pub fn get_table_metadata(table_oid: i64) -> Result<table::FullMetadata, Error> {
+    table::FullMetadata::get(table_oid)
+}
+
+#[tauri::command]
+/// Gets the metadata for a report.
+pub fn get_report_metadata(report_oid: i64) -> Result<report::FullMetadata, Error> {
+    report::FullMetadata::get(report_oid)
+}
+
+#[tauri::command]
+/// Get the metadata for a particular column in a table.
+pub fn get_column(column_oid: i64) -> Result<column::FullMetadata, Error> {
+    column::FullMetadata::get(column_oid)
+}
+
+#[tauri::command]
+pub fn get_blob(blob: cell::Blob) -> Result<String, Error> {
+    blob.into_base64()
+}
+
+#[tauri::command]
+pub fn download_blob(blob: cell::Blob, filepath: String) -> Result<(), Error> {
+    blob.download(filepath)
+}
+
+
+
+#[derive(Deserialize)]
+pub enum Action {
+    CreateTable(table::FullMetadata),
+    EditTable(table::FullMetadata),
+    CreateReport(report::FullMetadata),
+    EditReport(report::FullMetadata),
+    TrashSchema(i64),
+    UntrashSchema(i64),
+
+    CreateColumn(column::FullMetadata),
+    EditColumn(column::FullMetadata),
+    TrashColumn(i64),
+    UntrashColumn(i64),
+    RestoreColumn {
+        trash_column_oid: i64,
+        untrash_column_oid: i64
+    },
+
+    EditCellContents(cell::Cell),
+    UploadBlob {
+        blob: cell::Blob,
+        filepath: String
+    }
+}
+
+static REVERSE_STACK: Mutex<Vec<Action>> = Mutex::new(Vec::new());
+static FORWARD_STACK: Mutex<Vec<Action>> = Mutex::new(Vec::new());
+
+/// Records the opposite action to the one that was just performed, for undo/redo purposes.
+fn record_action(action: Action, is_forward: bool) {
+    let mut reverse_stack = if is_forward {
+        REVERSE_STACK.lock().unwrap()
+    } else {
+        FORWARD_STACK.lock().unwrap()
+    };
+    (*reverse_stack).push(action);
+}
+
+const UPDATE_SCHEMA_SIGNAL: &'static str = "schema";
+const UPDATE_TABLE_SIGNAL: &'static str = "table";
+const UPDATE_REPORT_SIGNAL: &'static str = "report";
+const UPDATE_CELL_SIGNAL: &'static str = "cell";
+
+impl Action {
+    fn execute(self, app: &AppHandle, is_forward: bool) -> Result<(), Error> {
+        match self {
+            Self::CreateTable(mut metadata) => {
+                // Create the table
+                metadata.create()?;
+                record_action(Self::TrashSchema(metadata.schema.oid), is_forward);
+
+                // Send signal to update table
+                app.emit(UPDATE_TABLE_SIGNAL, metadata.schema.oid)?;
+
+                // Open new window to view the table
+                dialog::dialog_open(app.clone(), dialog::Dialog::Schema { 
+                    title: metadata.schema.name, 
+                    query_string: format!("schema_oid={}", metadata.schema.oid)
+                });
+            }
+            Self::EditTable(metadata) => {
+                // Update the table
+                let old_metadata: table::FullMetadata = table::FullMetadata::get(metadata.schema.oid.clone())?;
+                metadata.set()?;
+                record_action(Self::EditTable(old_metadata), is_forward);
+
+                // Send signal to update table
+                app.emit(UPDATE_TABLE_SIGNAL, metadata.schema.oid)?;
+            }
+            Self::CreateReport(mut metadata) => {
+                // Create the report
+                metadata.create()?;
+                record_action(Self::TrashSchema(metadata.schema.oid), is_forward);
+
+                // Send signal to update report
+                app.emit(UPDATE_REPORT_SIGNAL, metadata.schema.oid)?;
+
+                // Open new window to view the report
+                dialog::dialog_open(app.clone(), dialog::Dialog::Schema { 
+                    title: metadata.schema.name, 
+                    query_string: format!("schema_oid={}", metadata.schema.oid)
+                });
+            }
+            Self::EditReport(metadata) => {
+                // Update the report
+                let old_metadata: report::FullMetadata = report::FullMetadata::get(metadata.schema.oid.clone())?;
+                metadata.set()?;
+                record_action(Self::EditReport(old_metadata), is_forward);
+
+                // Send signal to update report
+                app.emit(UPDATE_REPORT_SIGNAL, metadata.schema.oid)?;
+            }
+            Self::TrashSchema(schema_oid) => {
+                // Flag the schema for garbage collection
+                schema::FullMetadata::trash(schema_oid.clone())?;
+                record_action(Self::UntrashSchema(schema_oid), is_forward);
+
+                // Send signal to update schema
+                app.emit(UPDATE_SCHEMA_SIGNAL, schema_oid)?;
+            }
+            Self::UntrashSchema(schema_oid) => {
+                // Unflag the schema for garbage collection
+                schema::FullMetadata::untrash(schema_oid.clone())?;
+                record_action(Self::TrashSchema(schema_oid), is_forward);
+
+                // Send signal to update schema
+                app.emit(UPDATE_SCHEMA_SIGNAL, schema_oid)?;
+            }
+
+
+
+            Self::CreateColumn(mut metadata) => {
+                // Create the column
+                metadata.create()?;
+                record_action(Self::TrashColumn(metadata.oid), is_forward);
+
+                // Send signal to update schema
+                app.emit(UPDATE_SCHEMA_SIGNAL, metadata.schema.oid)?;
+            }
+            Self::EditColumn(mut metadata) => {
+                // Update the column
+                let old_column_oid: i64 = metadata.oid.clone();
+                metadata.set()?;
+                record_action(Self::RestoreColumn { 
+                    trash_column_oid: metadata.oid, 
+                    untrash_column_oid: old_column_oid
+                }, is_forward);
+
+                // Send signal to update schema
+                app.emit(UPDATE_SCHEMA_SIGNAL, metadata.schema.oid)?;
+            }
+            Self::TrashColumn(column_oid) => {
+                // Flag the column for garbage collection
+                column::FullMetadata::trash(column_oid.clone())?;
+                record_action(Self::UntrashColumn(column_oid), is_forward);
+
+                // Send signal to update schema
+                // TODO
+            }
+            Self::UntrashColumn(column_oid) => {
+                // Unflag the column for garbage collection
+                column::FullMetadata::untrash(column_oid.clone())?;
+                record_action(Self::TrashColumn(column_oid), is_forward);
+
+                // Send signal to update schema
+                // TODO
+            }
+            Self::RestoreColumn { trash_column_oid, untrash_column_oid } => {
+                // Unflag the old column for garbage collection, and flag the new column in its place
+                column::FullMetadata::trash_and_untrash(untrash_column_oid.clone(), trash_column_oid.clone())?;
+                record_action(Self::RestoreColumn { 
+                    trash_column_oid: untrash_column_oid, 
+                    untrash_column_oid: trash_column_oid 
+                }, is_forward);
+
+                // Send signal to update schema
+                // TODO
+            }
+
+
+
+            Self::EditCellContents(cell) => {
+                // Update the contents of the cell
+                let old_cell: cell::Cell = cell::Cell::get(cell.get_value_oid()?)?;
+                cell.set()?;
+                record_action(Self::EditCellContents(old_cell), is_forward);
+
+                // Send signal to update that cell + any dependent cells
+                app.emit(UPDATE_CELL_SIGNAL, cell.get_value_oid()?)?;
+            }
+            Self::UploadBlob { blob, filepath } => {
+                let blob_oid: cell::CellOid = blob.blob_oid.clone();
+                blob.upload(filepath)?;
+                // TODO store old BLOB value?
+
+                // Send signal to update that cell + any dependent cells
+                app.emit(UPDATE_CELL_SIGNAL, blob_oid)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[tauri::command]
+/// Executes an action that affects the state of the database.
+pub fn execute(app: AppHandle, action: Action) -> Result<(), Error> {
+    // Do something that affects the database
+    action.execute(&app, true)?;
+
+    // Clear the stack of undone actions
+    let mut forward_stack = FORWARD_STACK.lock().unwrap();
+    *forward_stack = Vec::new();
+    return Ok(());
+}
+
+/// Undoes the last action by popping the top of the reverse stack.
+pub fn undo(app: &AppHandle) -> Result<(), Error> {
+    // Get the action from the top of the stack
+    match {
+        let mut reverse_stack = REVERSE_STACK.lock().unwrap();
+        (*reverse_stack).pop()
+    } {
+        Some(reverse_action) => {
+            reverse_action.execute(app, false)?;
+        }
+        None => {}
+    }
+    return Ok(());
+}
+
+/// Redoes the last undone action by popping the top of the forward stack.
+pub fn redo(app: &AppHandle) -> Result<(), Error> {
+    // Get the action from the top of the stack
+    match {
+        let mut forward_stack = FORWARD_STACK.lock().unwrap();
+        (*forward_stack).pop()
+    } {
+        Some(forward_action) => {
+            forward_action.execute(app, true)?;
+        }
+        None => {}
+    }
+    return Ok(());
+}

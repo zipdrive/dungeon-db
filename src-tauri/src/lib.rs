@@ -1,4 +1,3 @@
-mod backend;
 mod util;
 mod data;
 
@@ -28,9 +27,9 @@ pub fn run() {
                     tauri_plugin_global_shortcut::Builder::new().with_handler(move |_app, shortcut, event| {
                         if event.state() == ShortcutState::Pressed {
                             if shortcut == &undo_shortcut {
-                                backend::undo(_app);
+                                data::undo(_app);
                             } else if shortcut == &redo_shortcut {
-                                backend::redo(_app); 
+                                data::redo(_app); 
                             }
                         }
                     })
@@ -43,16 +42,16 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            backend::init,
-            backend::dialog_open,
-            backend::dialog_close,
-            backend::query,
-            backend::get_table_metadata,
-            backend::get_report_metadata,
-            backend::get_table_column,
-            backend::get_blob_value,
-            backend::download_blob_value,
-            backend::execute
+            data::init,
+            util::dialog::dialog_open,
+            util::dialog::dialog_close,
+            data::query,
+            data::get_table_metadata,
+            data::get_report_metadata,
+            data::get_column,
+            data::get_blob,
+            data::download_blob,
+            data::execute
         ])
         .on_window_event(|window, event| {
             match event {
