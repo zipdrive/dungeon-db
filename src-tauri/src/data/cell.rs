@@ -52,6 +52,7 @@ pub enum Cell {
     },
     Subreport {
         cell_oid: CellOid,
+        label: String,
         schema_query_string: String,
         validation_failures: Vec<FailedValidation>
     },
@@ -66,7 +67,7 @@ pub enum Cell {
         cell_oid: CellOid,
         value_oid: CellOid,
         object_schema_oid: i64,
-        object_row_oid: Option<i64>,
+        object_query_string: Option<String>,
         label: Option<String>,
         validation_failures: Vec<FailedValidation>
     },
@@ -139,6 +140,8 @@ impl Cell {
             column_type::ColumnType::Object { table_oid, .. } => {
                 let conn = db::open()?;
 
+                let datasource_oid: i64 = conn.query_row("SELECT OID FROM METADATA_DATASOURCE__TABLE WHERE TABLE_OID = ?1", params![value_oid.schema_oid], |row| row.get(0))?;
+
                 let column_name: String = format!("COLUMN{}", value_oid.column_oid);
                 let table_name: String = format!("TABLE{}", value_oid.schema_oid);
                 let sql_select: String = format!(
@@ -161,7 +164,10 @@ impl Cell {
                     cell_oid: value_oid.clone(), 
                     value_oid, 
                     object_schema_oid: table_oid, 
-                    object_row_oid, 
+                    object_query_string: match object_row_oid {
+                        Some(o) => Some(format!("d{datasource_oid}={o}")), 
+                        None => None
+                    },
                     label, 
                     validation_failures: Vec::new() 
                 })
@@ -530,10 +536,10 @@ impl Cell {
                                     cell_oid, 
                                     label, 
                                     validation_failures: Vec::new() 
-                                });
+                                })?;
                             }
                         }
-                        query::QueryBuilderColumn::Subreport { schema_oid, schema_row_ord, column_oid, subreport_schema_oid } => {
+                        query::QueryBuilderColumn::Subreport { schema_oid, schema_row_ord, column_oid, subreport_metadata } => {
                             let cell_oid: CellOid = CellOid { 
                                 schema_oid: schema_oid.clone(), 
                                 row_oid: row.get::<&str, i64>(schema_row_ord)?, 
@@ -542,11 +548,12 @@ impl Cell {
 
                             cell_sender.send(Cell::Subreport { 
                                 cell_oid, 
+                                label: subreport_metadata.schema.name.clone(),
                                 schema_query_string: {
                                     // Compile the query string for the subreport
 
                                     // First key is "schema_oid", which determines the schema that's pulled up when the subreport is opened
-                                    let mut qstr: String = format!("schema_oid={subreport_schema_oid}");
+                                    let mut qstr: String = format!("schema_oid={}", subreport_metadata.schema.oid);
 
                                     // Then add a key for each non-null datasource
                                     for datasource_alias in datasource_aliases.iter() {
@@ -669,7 +676,7 @@ impl Cell {
                     multiselect_schema_oid
                 );
                 for selected_oid in multiselect_row_oid.iter() {
-                    trans.execute(&sql_insert, params![value_oid.row_oid, selected_oid]);
+                    trans.execute(&sql_insert, params![value_oid.row_oid, selected_oid])?;
                 }
             }
             _ => {

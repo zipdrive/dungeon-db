@@ -1,6 +1,6 @@
 use rusqlite::{Connection, Transaction, params};
 use crate::data::datasource::Datasource;
-use crate::data::{column, column_type, datasource, schema, table};
+use crate::data::{column, column_type, datasource, report, schema, table};
 use crate::util::formula::Formula;
 use crate::util::db;
 use crate::util::error::Error;
@@ -258,8 +258,8 @@ pub enum QueryBuilderColumn {
         schema_row_ord: String,
         column_oid: i64,
 
-        /// The schema OID of the subreport.
-        subreport_schema_oid: i64 
+        /// The metadata of the subreport.
+        subreport_metadata: report::FullMetadata,
     }
 }
 
@@ -734,11 +734,12 @@ impl<'a> QueryBuilder<'a> {
             }
             column_type::ColumnType::Subreport { report_oid, .. } => {
                 let datasource_alias: String = self.insert_datasource(column_datasource);
+                let subreport_metadata: report::FullMetadata = report::FullMetadata::get(report_oid)?;
                 QueryBuilderColumn::Subreport { 
                     schema_oid: column_metadata.schema.oid, 
                     schema_row_ord: format!("{datasource_alias}_OID"),
                     column_oid: column_metadata.oid, 
-                    subreport_schema_oid: report_oid 
+                    subreport_metadata
                 }
             }
         })

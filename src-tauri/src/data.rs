@@ -35,7 +35,7 @@ pub enum QueryStream {
         table_oid: i64,
         channel: JavaScriptChannelId
     },
-    MasterLists {
+    MasterSchemas {
         schema_oid: Option<i64>,
         is_table: bool,
         channel: JavaScriptChannelId
@@ -65,7 +65,7 @@ impl QueryStream {
             Self::InheritorTables { channel, table_oid } => 
                 schema::HierarchicalListItemMetadata::query_inheritor_tables(Sender::Channel(channel.channel_on(webview)), table_oid),
 
-            Self::MasterLists { schema_oid, is_table, channel } => 
+            Self::MasterSchemas { schema_oid, is_table, channel } => 
                 schema::ToggledHierarchicalListItemMetadata::query_master_schemas(Sender::Channel(channel.channel_on(webview)), schema_oid, is_table),
 
             Self::ColumnValues { schema_oid, channel } => 
@@ -165,7 +165,7 @@ const UPDATE_REPORT_SIGNAL: &'static str = "report";
 const UPDATE_CELL_SIGNAL: &'static str = "cell";
 
 impl Action {
-    fn execute(self, app: &AppHandle, is_forward: bool) -> Result<(), Error> {
+    async fn execute(self, app: &AppHandle, is_forward: bool) -> Result<(), Error> {
         match self {
             Self::CreateTable(mut metadata) => {
                 // Create the table
@@ -179,7 +179,7 @@ impl Action {
                 dialog::dialog_open(app.clone(), dialog::Dialog::Schema { 
                     title: metadata.schema.name, 
                     query_string: format!("schema_oid={}", metadata.schema.oid)
-                });
+                }).await?;
             }
             Self::EditTable(metadata) => {
                 // Update the table
@@ -202,7 +202,7 @@ impl Action {
                 dialog::dialog_open(app.clone(), dialog::Dialog::Schema { 
                     title: metadata.schema.name, 
                     query_string: format!("schema_oid={}", metadata.schema.oid)
-                });
+                }).await?;
             }
             Self::EditReport(metadata) => {
                 // Update the report
@@ -306,9 +306,9 @@ impl Action {
 
 #[tauri::command]
 /// Executes an action that affects the state of the database.
-pub fn execute(app: AppHandle, action: Action) -> Result<(), Error> {
+pub async fn execute(app: AppHandle, action: Action) -> Result<(), Error> {
     // Do something that affects the database
-    action.execute(&app, true)?;
+    action.execute(&app, true).await?;
 
     // Clear the stack of undone actions
     let mut forward_stack = FORWARD_STACK.lock().unwrap();
@@ -317,14 +317,14 @@ pub fn execute(app: AppHandle, action: Action) -> Result<(), Error> {
 }
 
 /// Undoes the last action by popping the top of the reverse stack.
-pub fn undo(app: &AppHandle) -> Result<(), Error> {
+pub async fn undo(app: &AppHandle) -> Result<(), Error> {
     // Get the action from the top of the stack
     match {
         let mut reverse_stack = REVERSE_STACK.lock().unwrap();
         (*reverse_stack).pop()
     } {
         Some(reverse_action) => {
-            reverse_action.execute(app, false)?;
+            reverse_action.execute(app, false).await?;
         }
         None => {}
     }
@@ -332,14 +332,14 @@ pub fn undo(app: &AppHandle) -> Result<(), Error> {
 }
 
 /// Redoes the last undone action by popping the top of the forward stack.
-pub fn redo(app: &AppHandle) -> Result<(), Error> {
+pub async fn redo(app: &AppHandle) -> Result<(), Error> {
     // Get the action from the top of the stack
     match {
         let mut forward_stack = FORWARD_STACK.lock().unwrap();
         (*forward_stack).pop()
     } {
         Some(forward_action) => {
-            forward_action.execute(app, true)?;
+            forward_action.execute(app, true).await?;
         }
         None => {}
     }
