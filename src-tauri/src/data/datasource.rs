@@ -1,6 +1,7 @@
 use crate::util::error::Error;
 use crate::util::db;
-use crate::data::{schema, table, column};
+use crate::data::{column, column_type, schema, table};
+use regex::Regex;
 use rusqlite::OptionalExtension;
 use rusqlite::types::Value;
 use rusqlite::{Transaction, params, vtab::array::Array};
@@ -22,26 +23,18 @@ pub enum Relationship {
 pub enum Datasource {
     Table {
         oid: i64,
-        table: table::FullMetadata,
+        table_oid: i64,
         label: String
     },
-    Inheritance {
-        oid: i64,
+    MasterTable {
         parent_datasource: Box<Datasource>,
-        table: table::FullMetadata
+        table_oid: i64 
     },
-    Object {
-        oid: i64,
+    InheritorTable {
         parent_datasource: Box<Datasource>,
-        column: column::FullMetadata
+        table_oid: i64 
     },
-    Select {
-        oid: i64,
-        parent_datasource: Box<Datasource>,
-        column: column::FullMetadata
-    },
-    Multiselect {
-        oid: i64,
+    Column {
         parent_datasource: Box<Datasource>,
         column: column::FullMetadata
     }
@@ -49,400 +42,119 @@ pub enum Datasource {
 
 impl Hash for Datasource {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.get_oid().hash(state)
-    }
-}
-
-impl Borrow<i64> for Datasource {
-    fn borrow(&self) -> &i64 {
-        match self {
-            Self::Table { oid, .. }
-            | Self::Inheritance { oid, .. } 
-            | Self::Object { oid, .. }
-            | Self::Select { oid, .. }
-            | Self::Multiselect { oid, .. } => oid
-        }
+        self.get_alias().hash(state)
     }
 }
 
 impl Datasource {
-    /// Retrieve a datasource by OID.
+    fn from_parent_and_path(parent: Self, path: &[String]) -> Result<Self, Error> {
+        if path.len() == 0 {
+            return Ok(parent);
+        } else {
+            let next_component: &String = &path[0];
+
+            let master_regex: Regex = Regex::new(r#"^MASTER(\d+)$"#).unwrap();
+            if let Some(master_caps) = master_regex.captures(next_component) {
+                let (_, [master_table_oid_str]) = master_caps.extract();
+                return Self::from_parent_and_path(Self::MasterTable { 
+                    parent_datasource: Box::new(parent), 
+                    table_oid: master_table_oid_str.parse::<i64>().unwrap()
+                }, &path[1..]);
+            }
+
+            let inheritor_regex: Regex = Regex::new(r#"^INHERITOR(\d+)$"#).unwrap();
+            if let Some(inheritor_caps) = inheritor_regex.captures(next_component) {
+                let (_, [inheritor_table_oid_str]) = inheritor_caps.extract();
+                return Self::from_parent_and_path(Self::InheritorTable { 
+                    parent_datasource: Box::new(parent), 
+                    table_oid: inheritor_table_oid_str.parse::<i64>().unwrap()
+                }, &path[1..]);
+            }
+
+            let column_regex: Regex = Regex::new(r#"^COLUMN(\d+)$"#).unwrap();
+            if let Some(column_caps) = column_regex.captures(next_component) {
+                let (_, [column_oid_str]) = column_caps.extract();
+                let column_oid: i64 = column_oid_str.parse::<i64>().unwrap();
+                let column: column::FullMetadata = column::FullMetadata::get(column_oid)?;
+                return Self::from_parent_and_path(Self::Column { 
+                    parent_datasource: Box::new(parent), 
+                    column
+                }, &path[1..]);
+            }
+
+            return Err(Error::AdhocError("Datasource path contains an unknown link type."));
+        }
+    }
+
+    pub fn from_path(path: Vec<String>) -> Result<Self, Error> {
+        if path.len() == 0 {
+            return Err(Error::AdhocError("Datasource cannot be empty!"));
+        }
+        let Ok(root_datasource_oid) = path[0].parse::<i64>() else {
+            return Err(Error::AdhocError("Root datasource is expected to be an OID of a row in METADATA_DATASOURCE."));
+        };
+        let root: Self = Self::get(root_datasource_oid)?;
+        Self::from_parent_and_path(root, &path[1..])
+    }
+
+    /// Retrieve a root datasource by OID.
     pub fn get(oid: i64) -> Result<Self, Error> {
         let conn = db::open()?;
-        let (mode, parent_datasource_oid, table_oid, label, column_oid) = conn.query_one(
+        let (table_oid, label) = conn.query_one(
             "
             SELECT
-                'table' AS MODE,
-                NULL AS PARENT_DATASOURCE_OID,
-                TABLE_OID,
-                LABEL,
-                NULL AS COLUMN_OID
-            FROM METADATA_DATASOURCE__TABLE
-            WHERE OID = ?1
-
-            UNION
-
-            SELECT
-                'inheritance' AS MODE,
-                PARENT_DATASOURCE_OID,
-                TABLE_OID,
-                NULL AS LABEL,
-                NULL AS COLUMN_OID
-            FROM METADATA_DATASOURCE__INHERITANCE
-            WHERE OID = ?1
-
-            UNION
-
-            SELECT
-                'object' AS MODE,
-                PARENT_DATASOURCE_OID,
-                NULL AS TABLE_OID,
-                NULL AS LABEL,
-                COLUMN_OID
-            FROM METADATA_DATASOURCE__OBJECT
-            WHERE OID = ?1
-
-            UNION
-
-            SELECT
-                'select' AS MODE,
-                PARENT_DATASOURCE_OID,
-                NULL AS TABLE_OID,
-                NULL AS LABEL,
-                COLUMN_OID
-            FROM METADATA_DATASOURCE__SELECT
-            WHERE OID = ?1
-
-            UNION
-
-            SELECT
-                'multiselect' AS MODE,
-                PARENT_DATASOURCE_OID,
-                NULL AS TABLE_OID,
-                NULL AS LABEL,
-                COLUMN_OID
-            FROM METADATA_DATASOURCE__MULTISELECT
-            WHERE OID = ?1
+                d.TABLE_OID,
+                COALESCE(d.LABEL, s.NAME) AS LABEL
+            FROM METADATA_DATASOURCE d
+            INNER JOIN METADATA_SCHEMA s ON s.OID = d.TABLE_OID
+            WHERE d.OID = ?1
             ",
             params![oid],
             |row| { Ok((
-                row.get::<_, String>("MODE")?,
-                row.get::<_, Option<i64>>("PARENT_DATASOURCE_OID")?,
-                row.get::<_, Option<i64>>("TABLE_OID")?,
-                row.get::<_, Option<String>>("LABEL")?,
-                row.get::<_, Option<i64>>("COLUMN_OID")?
+                row.get::<_, i64>("TABLE_OID")?,
+                row.get::<_, String>("LABEL")?
             )) }
         )?;
 
-        if mode == "table" {
-            Ok(Self::Table {
-                oid,
-                table: table::FullMetadata::get(table_oid.expect("TABLE_OID should not be NULL if datasource is a table!"))?,
-                label: label.expect("LABEL should not be NULL if datasource is a table!")
-            })
-        } else if mode == "inheritance" {
-            Ok(Self::Inheritance {
-                oid,
-                parent_datasource: Box::new(Self::get(parent_datasource_oid.expect("PARENT_DATASOURCE_OID should not be NULL if datasource is an inheritance relationship!"))?),
-                table: table::FullMetadata::get(table_oid.expect("TABLE_OID should not be NULL if datasource is an inheritance relationship!"))?
-            })
-        } else if mode == "object" {
-            Ok(Self::Object { 
-                oid, 
-                parent_datasource: Box::new(Self::get(parent_datasource_oid.expect("PARENT_DATASOURCE_OID should not be NULL if datasource is an Object column!"))?), 
-                column: column::FullMetadata::get(column_oid.expect("COLUMN_OID should not be NULL if datasource is an Object column!"))?
-            })
-        } else if mode == "select" {
-            let parent_datasource = Box::new(Self::get(parent_datasource_oid.expect("PARENT_DATASOURCE_OID should not be NULL if datasource is a Select column!"))?);
-            let column = column::FullMetadata::get(column_oid.expect("COLUMN_OID should not be NULL if datasource is a Select column!"))?;
-            Ok(Self::Select { 
-                oid, 
-                parent_datasource, 
-                column
-            })
-        } else if mode == "multiselect" {
-            Ok(Self::Multiselect { 
-                oid, 
-                parent_datasource: Box::new(Self::get(parent_datasource_oid.expect("PARENT_DATASOURCE_OID should not be NULL if datasource is a Multiselect column!"))?), 
-                column: column::FullMetadata::get(column_oid.expect("COLUMN_OID should not be NULL if datasource is a Multiselect column!"))?
-            })
-        } else {
-            Err(Error::AdhocError("Unknown datasource type."))
+        Ok(Self::Table {
+            oid,
+            table_oid,
+            label
+        })
+    }
+
+    /// Gets the alias of the datasource.
+    pub fn get_alias(&self) -> String {
+        match self {
+            Self::Table { oid, .. } => format!("d{oid}"),
+            Self::MasterTable { parent_datasource, table_oid } => format!("{}_MASTER{table_oid}", parent_datasource.get_alias()),
+            Self::InheritorTable { parent_datasource, table_oid } => format!("{}_INHERITOR{table_oid}", parent_datasource.get_alias()),
+            Self::Column { parent_datasource, column } => format!("{}_COLUMN{}", parent_datasource.get_alias(), column.oid)
         }
     }
 
-    /// Finds an existing datasource OID, or creates a new datasource if one does not exist in the database 
-    /// (excluding datasources whose root is one of the ones specified).
-    pub fn find(self, trans: &Transaction, exclude_root_datasources: Vec<i64>) -> Result<Self, Error> {
-        match self {
-            Self::Table { table, label, .. } => {
-                // Make sure there isn't an existing datasource that can be reused
-                match trans.query_row(
-                    "
-                    SELECT OID FROM METADATA_DATASOURCE__TABLE
-                    WHERE TABLE_OID = ?1 AND OID NOT IN ?2
-                    ", 
-                    params![table.schema.oid, Array::new(exclude_root_datasources.into_iter().map(|o| Value::Integer(o)).collect())],
-                    |row| row.get::<_, i64>("OID") 
-                ).optional()? {
-                    Some(oid) => {
-                        // Return the already-existing datasource
-                        Ok(Self::Table { oid, table, label })
-                    },
-                    None => {
-                        // If no datasource exists, or all existing datasources are excluded, create a new datasource
-                        trans.execute("INSERT INTO METADATA_DATASOURCE DEFAULT VALUES", [])?;
-                        let oid: i64 = trans.last_insert_rowid();
-                        trans.execute("INSERT INTO METADATA_DATASOURCE__TABLE (OID, TABLE_OID, LABEL) VALUES (?1, ?2, ?3)", params![oid, table.schema.oid, &label])?;
-                        Ok(Self::Table { oid, table, label })
+    /// Gets the OID of the schema that this datasource points towards.
+    pub fn get_schema_oid(&self) -> Result<i64, Error> {
+        Ok(match self {
+            Self::Table { table_oid, .. }
+            | Self::MasterTable { table_oid, .. }
+            | Self::InheritorTable { table_oid, .. } => table_oid.clone(),
+            Self::Column { parent_datasource, column } => {
+                let parent_datasource_schema_oid: i64 = parent_datasource.get_schema_oid()?;
+                if parent_datasource_schema_oid == column.schema.oid {
+                    match &column.column_type {
+                        column_type::ColumnType::Object { table_oid, .. }
+                        | column_type::ColumnType::Select { table_oid, .. }
+                        | column_type::ColumnType::Multiselect { table_oid, .. } => table_oid.clone(),
+                        _ => {
+                            return Err(Error::AdhocError("Only columns of types Object, Select, and Multiselect can be used as links to a datasource."));
+                        }
                     }
-                }
-            }
-            Self::Inheritance { parent_datasource, table, .. } => {
-                let parent_datasource: Self = parent_datasource.find(trans, exclude_root_datasources)?;
-                
-                // Make sure there isn't an existing datasource that can be reused
-                match trans.query_row(
-                    "
-                    SELECT OID FROM METADATA_DATASOURCE__INHERITANCE
-                    WHERE TABLE_OID = ?1 AND PARENT_DATASOURCE_OID = ?2
-                    ", 
-                    params![table.schema.oid, parent_datasource.get_oid()],
-                    |row| row.get::<_, i64>("OID") 
-                ).optional()? {
-                    Some(oid) => {
-                        // Return the already-existing datasource
-                        Ok(Self::Inheritance { 
-                            oid, 
-                            parent_datasource: Box::new(parent_datasource),
-                            table 
-                        })
-                    },
-                    None => {
-                        // If no datasource exists, or all existing datasources are excluded, create a new datasource
-                        trans.execute("INSERT INTO METADATA_DATASOURCE DEFAULT VALUES", [])?;
-                        let oid: i64 = trans.last_insert_rowid();
-                        trans.execute(
-                            "
-                            INSERT INTO METADATA_DATASOURCE__INHERITANCE (OID, PARENT_DATASOURCE_OID, TABLE_OID) 
-                            VALUES (?1, ?2, ?3)
-                            ", 
-                            params![oid, parent_datasource.get_oid(), table.schema.oid]
-                        )?;
-                        Ok(Self::Inheritance { 
-                            oid, 
-                            parent_datasource: Box::new(parent_datasource),
-                            table 
-                        })
-                    }
-                }
-            }
-            Self::Object { parent_datasource, column, .. } => {
-                let parent_datasource: Self = parent_datasource.find(trans, exclude_root_datasources)?;
-                
-                // Make sure there isn't an existing datasource that can be reused
-                match trans.query_row(
-                    "
-                    SELECT OID FROM METADATA_DATASOURCE__OBJECT
-                    WHERE COLUMN_OID = ?1 AND PARENT_DATASOURCE_OID = ?2
-                    ", 
-                    params![column.oid, parent_datasource.get_oid()],
-                    |row| row.get::<_, i64>("OID") 
-                ).optional()? {
-                    Some(oid) => {
-                        // Return the already-existing datasource
-                        Ok(Self::Object { 
-                            oid, 
-                            parent_datasource: Box::new(parent_datasource),
-                            column 
-                        })
-                    },
-                    None => {
-                        // If no datasource exists, or all existing datasources are excluded, create a new datasource
-                        trans.execute("INSERT INTO METADATA_DATASOURCE DEFAULT VALUES", [])?;
-                        let oid: i64 = trans.last_insert_rowid();
-                        trans.execute(
-                            "
-                            INSERT INTO METADATA_DATASOURCE__OBJECT (OID, PARENT_DATASOURCE_OID, COLUMN_OID) 
-                            VALUES (?1, ?2, ?3)
-                            ", 
-                            params![oid, parent_datasource.get_oid(), column.oid]
-                        )?;
-                        Ok(Self::Object { 
-                            oid, 
-                            parent_datasource: Box::new(parent_datasource),
-                            column 
-                        })
-                    }
-                }
-            }
-            Self::Select { parent_datasource, column, .. } => {
-                let parent_datasource: Self = parent_datasource.find(trans, exclude_root_datasources)?;
-                
-                // Make sure there isn't an existing datasource that can be reused
-                match trans.query_row(
-                    "
-                    SELECT OID FROM METADATA_DATASOURCE__SELECT
-                    WHERE COLUMN_OID = ?1 AND PARENT_DATASOURCE_OID = ?2
-                    ", 
-                    params![column.oid, parent_datasource.get_oid()],
-                    |row| row.get::<_, i64>("OID") 
-                ).optional()? {
-                    Some(oid) => {
-                        // Return the already-existing datasource
-                        Ok(Self::Object { 
-                            oid, 
-                            parent_datasource: Box::new(parent_datasource),
-                            column 
-                        })
-                    },
-                    None => {
-                        // If no datasource exists, or all existing datasources are excluded, create a new datasource
-                        trans.execute("INSERT INTO METADATA_DATASOURCE DEFAULT VALUES", [])?;
-                        let oid: i64 = trans.last_insert_rowid();
-                        trans.execute(
-                            "
-                            INSERT INTO METADATA_DATASOURCE__SELECT (OID, PARENT_DATASOURCE_OID, COLUMN_OID) 
-                            VALUES (?1, ?2, ?3)
-                            ", 
-                            params![oid, parent_datasource.get_oid(), column.oid]
-                        )?;
-                        Ok(Self::Object { 
-                            oid, 
-                            parent_datasource: Box::new(parent_datasource),
-                            column 
-                        })
-                    }
-                }
-            }
-            Self::Multiselect { parent_datasource, column, .. } => {
-                let parent_datasource: Self = parent_datasource.find(trans, exclude_root_datasources)?;
-                
-                // Make sure there isn't an existing datasource that can be reused
-                match trans.query_row(
-                    "
-                    SELECT OID FROM METADATA_DATASOURCE__MULTISELECT
-                    WHERE COLUMN_OID = ?1 AND PARENT_DATASOURCE_OID = ?2
-                    ", 
-                    params![column.oid, parent_datasource.get_oid()],
-                    |row| row.get::<_, i64>("OID") 
-                ).optional()? {
-                    Some(oid) => {
-                        // Return the already-existing datasource
-                        Ok(Self::Object { 
-                            oid, 
-                            parent_datasource: Box::new(parent_datasource),
-                            column 
-                        })
-                    },
-                    None => {
-                        // If no datasource exists, or all existing datasources are excluded, create a new datasource
-                        trans.execute("INSERT INTO METADATA_DATASOURCE DEFAULT VALUES", [])?;
-                        let oid: i64 = trans.last_insert_rowid();
-                        trans.execute(
-                            "
-                            INSERT INTO METADATA_DATASOURCE__MULTISELECT (OID, PARENT_DATASOURCE_OID, COLUMN_OID) 
-                            VALUES (?1, ?2, ?3)
-                            ", 
-                            params![oid, parent_datasource.get_oid(), column.oid]
-                        )?;
-                        Ok(Self::Object { 
-                            oid, 
-                            parent_datasource: Box::new(parent_datasource),
-                            column 
-                        })
-                    }
-                }
-            }
-        }
-    }
-
-    /// Gets the OID of the datasource.
-    pub fn get_oid(&self) -> i64 {
-        match self {
-            Self::Table { oid, .. }
-            | Self::Inheritance { oid, .. } 
-            | Self::Object { oid, .. }
-            | Self::Select { oid, .. }
-            | Self::Multiselect { oid, .. } => *oid
-        }
-    }
-
-    /// Gets the OID of the root datasource.
-    pub fn get_root_datasource_oid(&self) -> i64 {
-        match self {
-            Self::Table { oid, .. } => oid.clone(),
-            Self::Inheritance { parent_datasource, .. }
-            | Self::Object { parent_datasource, .. }
-            | Self::Select { parent_datasource, .. }
-            | Self::Multiselect { parent_datasource, .. } => parent_datasource.get_root_datasource_oid()
-        }
-    }
-
-    /// Gets the metadata for the schema of the datasource.
-    pub fn get_schema(&self) -> schema::FullMetadata {
-        match self {
-            Self::Table { table, .. }
-            | Self::Inheritance { table, .. } => table.schema.clone(),
-            Self::Object { column, .. }
-            | Self::Select { column, .. }
-            | Self::Multiselect { column, .. } => column.schema.clone()
-        }
-    }
-
-    /// Gets the relationship from the parent datasource to this datasource.
-    pub fn get_relationship(&self) -> Relationship {
-        match self {
-            Self::Table { .. } => {
-                // Root datasource
-                Relationship::One
-            }
-            Self::Inheritance { .. }
-            | Self::Object { .. } => {
-                // Always has a 1-to-1 relationship with parent
-                Relationship::One
-            }
-            Self::Select { parent_datasource, column, .. } => {
-                // If the column that maps from the parent to this datasource belongs to the schema of the parent datasource, 
-                // then this datasource has a 1-to-1 relationship with the parent datasource.
-                if column.schema.oid == parent_datasource.get_schema().oid {
-                    Relationship::One
-                // Otherwise, this datasource has a 1-to-N relationship with the parent datasource.
                 } else {
-                    Relationship::Many
+                    // Normal relationship is reversed, and the column points back to the schema it is contained in
+                    column.schema.oid.clone()
                 }
             }
-            Self::Multiselect { .. } => {
-                Relationship::Many
-            }
-        }
-    }
-
-    /// Gets the relationship from [the last parent datasource with a Many relationship to its parent] to this datasource.
-    pub fn get_deep_relationship(&self) -> Self {
-        match self {
-            Self::Table { .. } => {
-                // Root datasource
-                self.clone()
-            }
-            Self::Inheritance { parent_datasource, .. }
-            | Self::Object { parent_datasource, .. } => {
-                // Always has a 1-to-1 relationship with parent, so return the deep relationship of the parent
-                parent_datasource.get_deep_relationship()
-            }
-            Self::Select { parent_datasource, column, .. } => {
-                // If the column that maps from the parent to this datasource belongs to the schema of the parent datasource, 
-                // then this datasource has a 1-to-1 relationship with the parent datasource.
-                if column.schema.oid == parent_datasource.get_schema().oid {
-                    parent_datasource.get_deep_relationship()
-                // Otherwise, this datasource has a 1-to-N relationship with the parent datasource.
-                } else {
-                    self.clone()
-                }
-            }
-            Self::Multiselect { .. } => {
-                self.clone()
-            }
-        }
+        })
     }
 }
