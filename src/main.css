@@ -84,7 +84,7 @@
   background-color: var(--main-color-semidark);
   border: 1px solid var(--accent-color);
 }
-:checked + .list-item {
+.list-item:has(:checked) {
   background-color: var(--main-color-dark) !important;
 }
 
