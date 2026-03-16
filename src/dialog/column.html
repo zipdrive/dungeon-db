@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <link rel="stylesheet" href="/src/styles.css" />
+        <link rel="stylesheet" href="./dialog.css" />
+        <link rel="stylesheet" href="../form.css" />
+        <link rel="stylesheet" href="./column.css" />
+        <title>Create New Column</title>
+        <script type="module" src="./column.ts" defer></script>
+    </head>
+
+    <body>
+        <div class="tab-bar">
+            <label for="general-tab-button" id="general-tab" class="input tab" tabindex="0">
+                <input type="radio" name="tabs" id="general-tab-button" class="hidden" checked>
+                General
+            </label>
+            <div class="container">
+                <table class="form">
+                    <colgroup>
+                        <col span="1" class="field-name-cell">
+                        <col span="1" class="field-input-cell">
+                    </colgroup>
+                    <tbody>
+                        <tr>
+                            <td><label for="column-name">Column Name:</label></td>
+                            <td><input name="column-name" id="column-name" type="text" class="input" /></td>
+                        </tr>
+                        <tr>
+                            <td><label for="column-type">Column Type:</label></td>
+                            <td>
+                                <select name="column-type" id="column-type" class="input">
+                                    <option class="exclusive-table" value="primitive-text">Text</option>
+                                    <option class="exclusive-table" value="primitive-checkbox">Checkbox</option>
+                                    <option class="exclusive-table" value="primitive-integer">Integer</option>
+                                    <option class="exclusive-table" value="primitive-number">Number</option>
+                                    <option class="exclusive-table" value="primitive-date">Date</option>
+                                    <option class="exclusive-table" value="primitive-datetime">Datetime</option>
+                                    <option class="exclusive-table" value="object">Object</option>
+                                    <option class="exclusive-table" value="select">Select</option>
+                                    <option class="exclusive-table" value="multiselect">Multiselect</option>
+                                    <option class="exclusive-table" value="primitive-file">File</option>
+                                    <option class="exclusive-table" value="primitive-image">Image</option>
+                                    <option class="exclusive-table" value="primitive-jSON">JSON</option>
+                                    <option value="formula">Formula</option>
+                                    <option value="subreport">Subreport</option>
+                                </select>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><label for="column-hidden">Is Hidden?</label></td>
+                            <td>
+                                <input name="column-hidden" id="column-hidden" type="checkbox" />
+                            </td>
+                        </tr>
+                        <tr class="
+                            parameter-primitive-text 
+                            parameter-primitive-checkbox 
+                            parameter-primitive-integer
+                            parameter-primitive-number
+                            parameter-primitive-date
+                            parameter-primitive-datetime
+                            parameter-primitive-file
+                            parameter-primitive-image
+                            parameter-primitive-jSON
+                            parameter-object
+                            parameter-select
+                            parameter-multiselect 
+                        ">
+                            <td><label for="column-is-primary-key">Is Key Column?</label></td>
+                            <td>
+                                <input name="column-is-primary-key" id="column-is-primary-key" type="checkbox" />
+                            </td>
+                        </tr>
+                        <tr class="
+                            parameter-primitive-text 
+                            parameter-primitive-checkbox 
+                            parameter-primitive-integer
+                            parameter-primitive-number
+                            parameter-primitive-date
+                            parameter-primitive-datetime
+                            parameter-primitive-jSON
+                        ">
+                            <td><label for="column-default-value">Default Value:</label></td>
+                            <td>
+                                <input name="column-default-value" id="column-default-value" type="text" class="input" />
+                            </td>
+                        </tr>
+                        <tr class="
+                            parameter-object 
+                            parameter-select 
+                            parameter-multiselect
+                        ">
+                            <td><label for="column-associated-table">Table:</label></td>
+                            <td>
+                                <select name="column-associated-table" id="column-associated-table" class="input">
+                                </select>
+                            </td>
+                        </tr>
+                        <tr class="
+                            parameter-formula
+                        ">
+                            <td><label for="column-formula">Formula:</label></td>
+                            <td>
+                                <textarea name="column-formula" id="column-formula" class="input">
+                                </textarea>
+                                <button id="add-parameter-button">Insert Parameter</button>
+                                <button id="validate-formula-button">Error Check</button>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td colspan="2">
+                                <label for="parameter-advanced-toggle" id="parameter-advanced-toggle-label" class="clickable-text">
+                                    <input type="checkbox" id="parameter-advanced-toggle">
+                                    Advanced
+                                </label>
+                            </td>
+                        </tr>
+                        <tr class="parameter-advanced">
+                            <td><label for="column-style">Column Style:</label></td>
+                            <td>
+                                <textarea name="column-style" id="column-style" class="input" rows="20">
+width: 180px;
+
+/**
+*  This CSS rule changes the style of the currently-highlighted cell.
+*/
+&:focus, &:has(:focus) {
+    border-color: var(--accent-color);
+}
+
+/**
+*  This CSS rule changes the style of cells with NULL value.
+*/
+&.cell-null {
+    background-color: var(--main-color-dark);
+    color: var(--text-color-light);
+    content: "— NULL —";
+}
+
+/**
+*  This CSS rule changes the style of cells with one or more validation errors.
+*/
+&.cell-error {
+    background-color: var(--main-color-error);
+    color: var(--text-color-error);
+
+    &:focus, &:has(:focus) {
+        border-color: var(--text-color-error);
+    }
+}
+
+/**
+*  This CSS rule changes the style of cells with a readonly value.
+*  Readonly values are only applicable to formulas.
+*/
+&.cell-readonly {
+    background-color: var(--main-color-dark);
+}
+                                </textarea>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <label for="validation-tab-button" id="validation-tab" class="input tab" tabindex="0">
+                <input type="radio" name="tabs" id="validation-tab-button" class="hidden">
+                Validation
+            </label>
+            <div class="container">
+                <table class="form">
+                    <colgroup>
+                        <col span="1" class="field-name-cell">
+                        <col span="1" class="field-input-cell">
+                    </colgroup>
+                    <tbody>
+                        
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="dialog-buttons">
+            <button id="confirm-button">OK</button>
+            <button id="cancel-button">Cancel</button>
+        </div>
+    </body>
+</html>

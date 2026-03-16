@@ -10,5 +10,5 @@ export type Schema = {
 export type FullMetadata = {
     oid: number,
     name: string,
-    masterSchemas: Schema[]
+    masterSchemaOids: number[]
 };

@@ -3,18 +3,21 @@ import { FullMetadata as TableFullMetadata } from "./table";
 import { FullMetadata as ReportFullMetadata } from "./report";
 import { FullMetadata as ColumnFullMetadata } from "./column";
 import { Blob, Cell } from "./cell";
+import { message } from "@tauri-apps/plugin-dialog";
 
-export type HierarchicalListItemMetadata = {
+export type FlatListItemMetadata = {
     oid: number,
-    name: string,
+    name: string
+};
+export type HierarchicalListItemMetadata = FlatListItemMetadata & {
     masterOid: number | null,
     level: number
 };
 export type ToggledHierarchicalListItemMetadata = HierarchicalListItemMetadata & { disabled: boolean };
 
 export type DropdownValue = {
-    value: number | null,
-    label: string | null
+    value: number,
+    label: string
 };
 
 export type Limit = {
@@ -46,6 +49,10 @@ export type Query = {
         channel: Channel<ToggledHierarchicalListItemMetadata>
     }
 } | {
+    columnReferences: {
+        channel: Channel<DropdownValue>
+    }
+} | {
     columnValues: {
         schemaOid: number,
         channel: Channel<DropdownValue>
@@ -56,12 +63,18 @@ export type Query = {
         filters: [string, number][],
         limit: Limit,
         columnChannel: Channel<ColumnFullMetadata>,
-        cellChannel: Channel<Cell>
+        cellChannel: Channel<Cell & { maxIndex: number }>
     }
 };
 
 export async function queryAsync(query: Query): Promise<void> {
-    await invoke('query', { query: query });
+    await invoke('query', { query: query })
+        .catch(async (e) => {
+            await message(e, {
+                title: 'An error occurred while querying database.',
+                kind: 'error'
+            })
+        });
 }
 
 export async function getTableMetadataAsync(oid: number): Promise<TableFullMetadata> {

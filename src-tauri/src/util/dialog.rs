@@ -47,7 +47,7 @@ impl Dialog {
         match &self {
             Self::CreateTable => {
                 WebviewWindowBuilder::new(app, label,
-                    WebviewUrl::App("/src/frontend/dialogTableMetadata.html?mode=table".into()),
+                    WebviewUrl::App("/src/dialog/schema.html?mode=table".into()),
                 )
                 .title("Create New Table")
                 .inner_size(400.0, 250.0)
@@ -56,7 +56,7 @@ impl Dialog {
             },
             Self::EditTable { table_oid } => {
                 WebviewWindowBuilder::new(app, label,
-                    WebviewUrl::App(format!("/src/frontend/dialogTableMetadata.html?table_oid={table_oid}&mode=table").into()),
+                    WebviewUrl::App(format!("/src/dialog/schema.html?schema_oid={table_oid}&mode=table").into()),
                 )
                 .title("Edit Table")
                 .inner_size(400.0, 250.0)
@@ -65,7 +65,7 @@ impl Dialog {
             },
             Self::CreateReport => {
                 WebviewWindowBuilder::new(app, label,
-                    WebviewUrl::App("/src/frontend/dialogReportMetadata.html".into()),
+                    WebviewUrl::App("/src/dialog/schema.html?mode=report".into()),
                 )
                 .title("Create New Report")
                 .inner_size(400.0, 250.0)
@@ -74,7 +74,7 @@ impl Dialog {
             },
             Self::EditReport { report_oid } => {
                 WebviewWindowBuilder::new(app, label,
-                    WebviewUrl::App(format!("/src/frontend/dialogReportMetadata.html?report_oid={report_oid}").into()),
+                    WebviewUrl::App(format!("/src/dialog/schema.html?schema_oid={report_oid}&mode=report").into()),
                 )
                 .title("Edit Report")
                 .inner_size(400.0, 250.0)
@@ -85,7 +85,7 @@ impl Dialog {
                 WebviewWindowBuilder::new(app, label,
                     WebviewUrl::App(
                         format!(
-                            "/src/frontend/dialogTableColumnMetadata.html?schema_oid={schema_oid}{}",
+                            "/src/dialog/column.html?schema_oid={schema_oid}{}",
                             match column_ordering {
                                 Some(o) => format!("&column_ordering={o}"),
                                 None => String::from(""),
@@ -95,22 +95,22 @@ impl Dialog {
                     ),
                 )
                 .title("Add New Column")
-                .inner_size(400.0, 200.0)
+                .inner_size(400.0, 500.0)
                 .maximizable(false)
                 .build()?;
             },
             Self::EditColumn { column_oid } => {
                 WebviewWindowBuilder::new(app, label,
-                    WebviewUrl::App(format!("/src/frontend/dialogTableColumnMetadata.html?column_oid={column_oid}").into()),
+                    WebviewUrl::App(format!("/src/dialog/column.html?column_oid={column_oid}").into()),
                 )
                 .title("Edit Column")
-                .inner_size(400.0, 200.0)
+                .inner_size(400.0, 500.0)
                 .maximizable(false)
                 .build()?;
             },
             Self::Schema { title, query_string } => {
                 WebviewWindowBuilder::new(app, label,
-                    WebviewUrl::App(format!("/src/frontend/table.html?{query_string}").into()),
+                    WebviewUrl::App(format!("/src/schema.html?{query_string}").into()),
                 )
                 .title(&*title)
                 .inner_size(800.0, 600.0)

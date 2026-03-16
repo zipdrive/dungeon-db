@@ -48,10 +48,6 @@ impl DbAction<'_> {
 
 /// Applies the metadata schema to the database at the given path.
 fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
-    if path.as_ref().exists() {
-        return Ok(());
-    }
-
     let conn = Connection::open(path)?;
     conn.execute_batch("
     PRAGMA foreign_keys = ON;
@@ -121,7 +117,7 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
     -- METADATA_COLUMN_TYPE__FORMULA stores all Formula column types.
     -- Formulas are a virtual column that can be part of any schema.
     CREATE TABLE IF NOT EXISTS METADATA_COLUMN_TYPE__FORMULA (
-        OID INTEGER PRIMARY KEY REFERENCES METADATA_TYPE (OID)
+        OID INTEGER PRIMARY KEY REFERENCES METADATA_COLUMN_TYPE (OID)
             ON UPDATE CASCADE
             ON DELETE CASCADE,
         FORMULA TEXT NOT NULL
@@ -130,7 +126,7 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
     -- METADATA_COLUMN_TYPE__SUBREPORT stores all user-defined sub-report types.
     -- Subreports are a virtual column that can be part of any schema.
     CREATE TABLE IF NOT EXISTS METADATA_COLUMN_TYPE__SUBREPORT (
-        OID INTEGER PRIMARY KEY REFERENCES METADATA_TYPE (OID)
+        OID INTEGER PRIMARY KEY REFERENCES METADATA_COLUMN_TYPE (OID)
             ON UPDATE CASCADE
             ON DELETE CASCADE,
         REPORT_OID INTEGER NOT NULL REFERENCES METADATA_REPORT (OID) 
@@ -143,7 +139,7 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
     -- Primitives are a storage column with a primitive type (e.g. number, text, file).
     -- Primitive types are predefined with negative OIDs to prevent conflict with user-defined types.
     CREATE TABLE IF NOT EXISTS METADATA_COLUMN_TYPE__PRIMITIVE (
-        OID INTEGER PRIMARY KEY REFERENCES METADATA_TYPE (OID)
+        OID INTEGER PRIMARY KEY REFERENCES METADATA_COLUMN_TYPE (OID)
             ON UPDATE CASCADE
             ON DELETE CASCADE,
         MODE TEXT NOT NULL
@@ -153,7 +149,7 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
     -- Objects are a storage column that represent an injective relationship to at most one row in another table.
     -- This is represented in UI by a clickable link with the primary key of the linked row.
     CREATE TABLE IF NOT EXISTS METADATA_COLUMN_TYPE__OBJECT (
-        OID INTEGER PRIMARY KEY REFERENCES METADATA_TYPE (OID)
+        OID INTEGER PRIMARY KEY REFERENCES METADATA_COLUMN_TYPE (OID)
             ON UPDATE CASCADE
             ON DELETE CASCADE,
         TABLE_OID INTEGER NOT NULL REFERENCES METADATA_TABLE (OID)
@@ -165,7 +161,7 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
     -- Selects are a storage column that selects a single row from another table.
     -- This is represented in UI by a dropdown.
     CREATE TABLE IF NOT EXISTS METADATA_COLUMN_TYPE__SELECT (
-        OID INTEGER PRIMARY KEY REFERENCES METADATA_TYPE (OID)
+        OID INTEGER PRIMARY KEY REFERENCES METADATA_COLUMN_TYPE (OID)
             ON UPDATE CASCADE
             ON DELETE CASCADE,
         TABLE_OID INTEGER NOT NULL REFERENCES METADATA_TABLE (OID)
@@ -177,7 +173,7 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
     -- Multiselects are a storage column that selects multiple rows from another table.
     -- This is represented in UI by a checkbox dropdown.
     CREATE TABLE IF NOT EXISTS METADATA_COLUMN_TYPE__MULTISELECT (
-        OID INTEGER PRIMARY KEY REFERENCES METADATA_TYPE (OID)
+        OID INTEGER PRIMARY KEY REFERENCES METADATA_COLUMN_TYPE (OID)
             ON UPDATE CASCADE
             ON DELETE CASCADE,
         TABLE_OID INTEGER NOT NULL REFERENCES METADATA_TABLE (OID)
@@ -212,74 +208,17 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
 
 
 
-    -- METADATA_DATASOURCE stores datasources for a schema.
+    -- METADATA_DATASOURCE stores root datasources for a schema.
     CREATE TABLE IF NOT EXISTS METADATA_DATASOURCE (
-        OID INTEGER PRIMARY KEY
-    );
-
-    -- METADATA_DATASOURCE__TABLE stores datasources that pull data directly from a table.
-    CREATE TABLE IF NOT EXISTS METADATA_DATASOURCE__TABLE (
-        OID INTEGER PRIMARY KEY REFERENCES METADATA_DATASOURCE (OID)
-            ON UPDATE CASCADE
-            ON DELETE CASCADE,
-        TABLE_OID INTEGER NOT NULL REFERENCES METADATA_TABLE (OID)
-            ON UPDATE CASCADE,
-        LABEL TEXT NOT NULL
-    );
-
-    -- METADATA_DATASOURCE__INHERITOR stores datasources linked through an inheritance relationship.
-    CREATE TABLE IF NOT EXISTS METADATA_DATASOURCE__INHERITANCE (
-        OID INTEGER PRIMARY KEY REFERENCES METADATA_DATASOURCE (OID)
-            ON UPDATE CASCADE
-            ON DELETE CASCADE,
-        PARENT_DATASOURCE_OID INTEGER NOT NULL REFERENCES METADATA_DATASOURCE (OID)
-            ON UPDATE CASCADE
-            ON DELETE CASCADE,
+        OID INTEGER PRIMARY KEY,
         TABLE_OID INTEGER NOT NULL REFERENCES METADATA_TABLE (OID)
             ON UPDATE CASCADE
+            ON DELETE CASCADE,
+        LABEL TEXT
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS METADATA_DATASOURCE__INHERITANCE_INDEX_BY_PARENT_AND_TABLE ON METADATA_DATASOURCE__INHERITANCE (PARENT_DATASOURCE_OID, TABLE_OID);
-
-    -- METADATA_DATASOURCE__OBJECT stores datasources linked through an Object column.
-    CREATE TABLE IF NOT EXISTS METADATA_DATASOURCE__OBJECT (
-        OID INTEGER PRIMARY KEY REFERENCES METADATA_DATASOURCE (OID)
-            ON UPDATE CASCADE
-            ON DELETE CASCADE,
-        PARENT_DATASOURCE_OID INTEGER NOT NULL REFERENCES METADATA_DATASOURCE (OID)
-            ON UPDATE CASCADE
-            ON DELETE CASCADE,
-        COLUMN_OID INTEGER NOT NULL REFERENCES METADATA_COLUMN__OBJECT (OID)
-            ON UPDATE CASCADE
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS METADATA_DATASOURCE__OBJECT_INDEX_BY_PARENT_AND_COLUMN ON METADATA_DATASOURCE__OBJECT (PARENT_DATASOURCE_OID, COLUMN_OID);
-
-    -- METADATA_DATASOURCE__SELECT stores datasources linked through a Select column.
-    CREATE TABLE IF NOT EXISTS METADATA_DATASOURCE__SELECT (
-        OID INTEGER PRIMARY KEY REFERENCES METADATA_DATASOURCE (OID)
-            ON UPDATE CASCADE
-            ON DELETE CASCADE,
-        PARENT_DATASOURCE_OID INTEGER NOT NULL REFERENCES METADATA_DATASOURCE (OID)
-            ON UPDATE CASCADE
-            ON DELETE CASCADE,
-        COLUMN_OID INTEGER NOT NULL REFERENCES METADATA_COLUMN__SELECT (OID)
-            ON UPDATE CASCADE
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS METADATA_DATASOURCE__SELECT_INDEX_BY_PARENT_AND_COLUMN ON METADATA_DATASOURCE__SELECT (PARENT_DATASOURCE_OID, COLUMN_OID);
-
-    -- METADATA_DATASOURCE__MULTISELECT stores datasources linked through a Multiselect column.
-    CREATE TABLE IF NOT EXISTS METADATA_DATASOURCE__MULTISELECT (
-        OID INTEGER PRIMARY KEY REFERENCES METADATA_DATASOURCE (OID)
-            ON UPDATE CASCADE
-            ON DELETE CASCADE,
-        PARENT_DATASOURCE_OID INTEGER NOT NULL REFERENCES METADATA_DATASOURCE (OID)
-            ON UPDATE CASCADE
-            ON DELETE CASCADE,
-        COLUMN_OID INTEGER NOT NULL REFERENCES METADATA_COLUMN__MULTISELECT (OID)
-            ON UPDATE CASCADE
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS METADATA_DATASOURCE__MULTISELECT_INDEX_BY_PARENT_AND_COLUMN ON METADATA_DATASOURCE__MULTISELECT (PARENT_DATASOURCE_OID, COLUMN_OID);
-
+    CREATE INDEX IF NOT EXISTS METADATA_DATASOURCE_INDEX_BY_TABLE_OID ON METADATA_DATASOURCE (TABLE_OID);
     
+
 
     -- METADATA_SCHEMA_ORDERBY stores what columns (if any) the schema is sorted by, in what order, and in what direction.
     CREATE TABLE IF NOT EXISTS METADATA_SCHEMA_ORDERBY (
@@ -324,23 +263,23 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
 
 
     -- METADATA_SCHEMA_INHERITANCE_VIEW is a view that flattens the inheritance hierarchy.
-    CREATE VIEW IF NOT EXISTS METADATA_SCHEMA_INHERITANCE_VIEW AS (
-        WITH RECURSIVE FLATTENING (INHERITOR_TABLE_OID, MASTER_TABLE_OID) AS (
+    CREATE VIEW IF NOT EXISTS METADATA_SCHEMA_INHERITANCE_VIEW AS 
+        WITH RECURSIVE FLATTENING (INHERITOR_SCHEMA_OID, MASTER_SCHEMA_OID) AS (
             SELECT
-                u.INHERITOR_TABLE_OID,
-                u.MASTER_TABLE_OID
+                u.INHERITOR_SCHEMA_OID,
+                u.MASTER_SCHEMA_OID
             FROM METADATA_SCHEMA_INHERITANCE u
 
             UNION
 
             SELECT
-                s.INHERITOR_TABLE_OID,
-                u.MASTER_TABLE_OID
+                s.INHERITOR_SCHEMA_OID,
+                u.MASTER_SCHEMA_OID
             FROM FLATTENING s
-            INNER JOIN METADATA_SCHEMA_INHERITANCE u ON u.MASTER_TABLE_OID = s.INHERITOR_TABLE_OID
+            INNER JOIN METADATA_SCHEMA_INHERITANCE u ON u.MASTER_SCHEMA_OID = s.INHERITOR_SCHEMA_OID
         )
         SELECT * FROM FLATTENING
-    );
+    ;
     
 
 

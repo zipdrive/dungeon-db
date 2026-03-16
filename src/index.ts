@@ -7,9 +7,9 @@ import { open, save, message } from "@tauri-apps/plugin-dialog";
  */
 function initialize(filePath: string) {
   // Initialize the database connection
-  invoke("init", {
+  invoke('init', {
     path: filePath
-  }).catch(async e => {
+  }).catch(async (e) => {
     await message(e, {
       title: 'Error while connecting to DungeonDB file.',
       kind: 'error'
@@ -17,14 +17,14 @@ function initialize(filePath: string) {
   });
 
   // GOTO main page
-  window.location.replace('/src/frontend/main.html');
+  window.location.replace('/src/main.html');
 }
 
 
 window.addEventListener("DOMContentLoaded", () => {
   // Set up the main menu listeners
   let newDbButton: HTMLInputElement | null = document.querySelector('#new-db-button');
-  newDbButton?.addEventListener("click", async (e) => {
+  newDbButton?.addEventListener("click", async () => {
     const filePath = await save({
       filters: [{
         name: "DungeonDB (*.db)",
@@ -32,12 +32,12 @@ window.addEventListener("DOMContentLoaded", () => {
       }]
     });
     if (filePath != null) {
-        initialize(filePath);
+      initialize(filePath);
     }
   });
 
   let loadDbButton: HTMLInputElement | null = document.querySelector('#load-db-button');
-  loadDbButton?.addEventListener("click", async (e) => {
+  loadDbButton?.addEventListener("click", async () => {
     const filePath = await open({
       filters: [{
         name: "DungeonDB (*.db)",

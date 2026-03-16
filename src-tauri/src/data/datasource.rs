@@ -86,15 +86,22 @@ impl Datasource {
         }
     }
 
+    /// Construct a datasource from a path.
     pub fn from_path(path: Vec<String>) -> Result<Self, Error> {
         if path.len() == 0 {
             return Err(Error::AdhocError("Datasource cannot be empty!"));
         }
-        let Ok(root_datasource_oid) = path[0].parse::<i64>() else {
+
+        // Check for root datasource
+        let root_regex: Regex = Regex::new(r#"^ROOT(\d+)$"#).unwrap();
+        if let Some(root_caps) = root_regex.captures(&path[0]) {
+            let (_, [root_datasource_oid_str]) = root_caps.extract();
+            let root_datasource_oid: i64 = root_datasource_oid_str.parse().unwrap();
+            let root: Self = Self::get(root_datasource_oid)?;
+            return Self::from_parent_and_path(root, &path[1..]);
+        } else {
             return Err(Error::AdhocError("Root datasource is expected to be an OID of a row in METADATA_DATASOURCE."));
         };
-        let root: Self = Self::get(root_datasource_oid)?;
-        Self::from_parent_and_path(root, &path[1..])
     }
 
     /// Retrieve a root datasource by OID.
@@ -126,7 +133,7 @@ impl Datasource {
     /// Gets the alias of the datasource.
     pub fn get_alias(&self) -> String {
         match self {
-            Self::Table { oid, .. } => format!("d{oid}"),
+            Self::Table { oid, .. } => format!("ROOT{oid}"),
             Self::MasterTable { parent_datasource, table_oid } => format!("{}_MASTER{table_oid}", parent_datasource.get_alias()),
             Self::InheritorTable { parent_datasource, table_oid } => format!("{}_INHERITOR{table_oid}", parent_datasource.get_alias()),
             Self::Column { parent_datasource, column } => format!("{}_COLUMN{}", parent_datasource.get_alias(), column.oid)
@@ -153,6 +160,30 @@ impl Datasource {
                 } else {
                     // Normal relationship is reversed, and the column points back to the schema it is contained in
                     column.schema.oid.clone()
+                }
+            }
+        })
+    }
+
+    /// Seeks the deepest parent which is either (a) a Table datasource, or (b) has a 1-to-* relationship with its parent.
+    pub fn seek_basis(&self) -> Result<Datasource, Error> {
+        Ok(match self {
+            Self::Table { .. } => self.clone(),
+            Self::MasterTable { parent_datasource, .. }
+            | Self::InheritorTable { parent_datasource, .. } => parent_datasource.seek_basis()?,
+            Self::Column { parent_datasource, column } => {
+                let parent_datasource_schema_oid: i64 = parent_datasource.get_schema_oid()?;
+                match &column.column_type {
+                    column_type::ColumnType::Object { .. } => parent_datasource.seek_basis()?,
+                    | column_type::ColumnType::Select { .. } => if parent_datasource_schema_oid == column.schema.oid {
+                        parent_datasource.seek_basis()?
+                    } else {
+                        self.clone()
+                    },
+                    | column_type::ColumnType::Multiselect { .. } => self.clone(),
+                    _ => {
+                        return Err(Error::AdhocError("Only columns of types Object, Select, and Multiselect can be used as links to a datasource."));
+                    }
                 }
             }
         })

@@ -1,0 +1,113 @@
+/**
+ *  Change how the advanced parameter toggle displays depending on whether or not it is toggled.
+ */
+#parameter-advanced-toggle {
+    display: none;
+}
+#parameter-advanced-toggle-label {
+    &:has(:checked)::before {
+        content: "⊕";
+    }
+    &:not(:has(:checked))::before {
+        content: "⊖";
+    }
+}
+
+/**
+ *  Change whether advanced parameters are displayed depending on whether or not advanced parameters are toggled to be displayed.
+ */
+tr.parameter-advanced {
+    display: none;
+}
+tr:has(#parameter-advanced-toggle:checked) ~ tr.parameter-advanced {
+    display: table-row;
+}
+
+
+/**
+ *  Toggle parameters that only display for certain column types, when those column types are picked.
+ */
+tr.parameter-primitive-text {
+    display: none;
+    :has(#column-type option[value="primitive-text"]:checked) ~ & {
+        display: table-row;
+    }
+}
+tr.parameter-primitive-checkbox {
+    display: none;
+    :has(#column-type option[value="primitive-checkbox"]:checked) ~ & {
+        display: table-row;
+    }
+}
+tr.parameter-primitive-integer {
+    display: none;
+    :has(#column-type option[value="primitive-integer"]:checked) ~ & {
+        display: table-row;
+    }
+}
+tr.parameter-primitive-number {
+    display: none;
+    :has(#column-type option[value="primitive-number"]:checked) ~ & {
+        display: table-row;
+    }
+}
+tr.parameter-primitive-date {
+    display: none;
+    :has(#column-type option[value="primitive-date"]:checked) ~ & {
+        display: table-row;
+    }
+}
+tr.parameter-primitive-datetime {
+    display: none;
+    :has(#column-type option[value="primitive-datetime"]:checked) ~ & {
+        display: table-row;
+    }
+}
+tr.parameter-primitive-file {
+    display: none;
+    :has(#column-type option[value="primitive-file"]:checked) ~ & {
+        display: table-row;
+    }
+}
+tr.parameter-primitive-image {
+    display: none;
+    :has(#column-type option[value="primitive-image"]:checked) ~ & {
+        display: table-row;
+    }
+}
+tr.parameter-primitive-jSON {
+    display: none;
+    :has(#column-type option[value="primitive-jSON"]:checked) ~ & {
+        display: table-row;
+    }
+}
+tr.parameter-object {
+    display: none;
+    :has(#column-type option[value="object"]:checked) ~ & {
+        display: table-row;
+    }
+}
+tr.parameter-select {
+    display: none;
+    :has(#column-type option[value="select"]:checked) ~ & {
+        display: table-row;
+    }
+}
+tr.parameter-multiselect {
+    display: none;
+    :has(#column-type option[value="multiselect"]:checked) ~ & {
+        display: table-row;
+    }
+}
+tr.parameter-formula {
+    display: none;
+    :has(#column-type option[value="formula"]:checked) ~ & {
+        display: table-row;
+    }
+}
+tr.parameter-subreport {
+    display: none;
+    :has(#column-type option[value="subreport"]:checked) ~ & {
+        display: table-row;
+    }
+}

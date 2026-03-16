@@ -171,10 +171,10 @@ pub enum QueryBuilderColumn {
         object_schema_oid: i64,
 
         /// The ordinal pointing to the row OID of the Object.
-        object_row_ord: String,
+        object_query_string_ord: String,
 
         /// The SQL expression returning the row OID of the Object.
-        object_row_expr: String 
+        object_query_string_expr: String 
     },
     Select {
         schema_oid: i64,
@@ -324,6 +324,7 @@ impl<'a> QueryBuilder<'a> {
     /// The second element of the returned tuple is the columns returned by the query.
     /// The third element of the returned tuple is a list of aliases for each datasource used by the query.
     pub fn compile(mut self) -> Result<Option<(String, Vec<QueryBuilderColumn>, Vec<String>)>, Error> {
+        // Compile list of datasource aliases
         let datasource_aliases: Vec<String> = self.tables_and_subqueries.iter()
             .filter_map(|table_or_subquery| match table_or_subquery {
                 TableOrSubquery::RootDatasource { alias, .. }
@@ -332,9 +333,24 @@ impl<'a> QueryBuilder<'a> {
             })
             .collect();
 
+        // Compile ORDER BY expression
+        let orderby_expression: String = if self.order_by_indices.len() > 0 {
+            self.order_by_indices.into_iter()
+                .fold(
+                    String::from("ORDER BY"),
+                    |acc, (e, sort_ascending)| if acc == "ORDER BY" { 
+                        format!("ORDER BY {} {}", e + 1, if sort_ascending { "ASC" } else { "DESC" }) 
+                    } else { 
+                        format!("{acc}, {} {}", e + 1, if sort_ascending { "ASC" } else { "DESC" }) 
+                    }
+                )
+        } else {
+            String::from("")
+        };
+
         Ok(Some((
             format!(
-                "SELECT {} FROM {} {} {} {} {}",
+                "SELECT ROW_NUMBER() OVER ({orderby_expression}) AS ROW_INDEX, {} FROM {} {} {} {} {orderby_expression}",
 
                 // Column expressions
                 {
@@ -342,8 +358,8 @@ impl<'a> QueryBuilder<'a> {
                         .filter_map(|col| match col {
                             QueryBuilderColumn::Primitive { label_ord, label_expr, .. } => 
                                 Some(format!("{label_expr} AS {label_ord}")),
-                            QueryBuilderColumn::Object { label_ord, label_expr, object_row_ord, object_row_expr, .. } =>
-                                Some(format!("{label_expr} AS {label_ord}, {object_row_expr} AS {object_row_ord}")),
+                            QueryBuilderColumn::Object { label_ord, label_expr, object_query_string_ord, object_query_string_expr, .. } =>
+                                Some(format!("{label_expr} AS {label_ord}, {object_query_string_expr} AS {object_query_string_ord}")),
                             QueryBuilderColumn::Select { label_ord, label_expr, select_row_ord, select_row_expr, .. } 
                             | QueryBuilderColumn::Multiselect { label_ord, label_expr, select_row_ord, select_row_expr, .. } =>
                                 Some(format!("{label_expr} AS {label_ord}, {select_row_expr} AS {select_row_ord}")),
@@ -366,11 +382,11 @@ impl<'a> QueryBuilder<'a> {
 
                 // Table and subquery expressions
                 {
-                    let first_compiled_table_or_subquery: String = match self.tables_and_subqueries.pop_front() {
-                        Some(TableOrSubquery::RootDatasource { datasource, alias }) => format!("TABLE{} {alias}", datasource.get_schema().oid),
+                    let mut compiled_tables_and_subqueries: String = match self.tables_and_subqueries.pop_front() {
+                        Some(TableOrSubquery::RootDatasource { datasource, alias }) => format!("TABLE{} {alias}", datasource.get_schema_oid()?),
                         Some(TableOrSubquery::DerivativeDatasource { datasource, alias, on_clause }) => {
                             self.pregroup_filters.push(on_clause);
-                            format!("TABLE{} {alias}", datasource.get_schema().oid)
+                            format!("TABLE{} {alias}", datasource.get_schema_oid()?)
                         }
                         Some(TableOrSubquery::Subquery { subquery, alias, on_clause }) => {
                             self.pregroup_filters.push(on_clause);
@@ -379,14 +395,17 @@ impl<'a> QueryBuilder<'a> {
                         Some(TableOrSubquery::Array { values, alias }) => format!("VALUES({}) {alias}", todo!("Arrays are not implemented yet!")),
                         None => { return Ok(None); }
                     };
-                    self.tables_and_subqueries.into_iter()
-                        .map(|table_or_subquery| match table_or_subquery {
-                            TableOrSubquery::RootDatasource { datasource, alias } => format!("INNER JOIN TABLE{} {alias}", datasource.get_schema().oid),
-                            TableOrSubquery::DerivativeDatasource { datasource, alias, on_clause } => format!("LEFT JOIN TABLE{} {alias} ON {on_clause}", datasource.get_schema().oid),
-                            TableOrSubquery::Subquery { subquery, alias, on_clause } => format!("LEFT JOIN ({subquery}) {alias} ON {on_clause}"),
-                            TableOrSubquery::Array { values, alias } => format!("INNER JOIN VALUES({}) {alias}", todo!("Arrays are not yet implemented!"))
-                        })
-                        .fold(first_compiled_table_or_subquery, |acc, e| format!("{acc} {e}"))
+                    for table_or_subquery in self.tables_and_subqueries.into_iter() {
+                        compiled_tables_and_subqueries = format!("{compiled_tables_and_subqueries} {}",
+                            match table_or_subquery {
+                                TableOrSubquery::RootDatasource { datasource, alias } => format!("INNER JOIN TABLE{} {alias}", datasource.get_schema_oid()?),
+                                TableOrSubquery::DerivativeDatasource { datasource, alias, on_clause } => format!("LEFT JOIN TABLE{} {alias} ON {on_clause}", datasource.get_schema_oid()?),
+                                TableOrSubquery::Subquery { subquery, alias, on_clause } => format!("LEFT JOIN ({subquery}) {alias} ON {on_clause}"),
+                                TableOrSubquery::Array { values, alias } => format!("INNER JOIN VALUES({}) {alias}", todo!("Arrays are not yet implemented!"))
+                            }
+                        )
+                    }
+                    compiled_tables_and_subqueries
                 },
 
                 // WHERE expression
@@ -406,7 +425,7 @@ impl<'a> QueryBuilder<'a> {
                             for i in self.group_by_indices {
                                 group_expr.push(match &self.columns[i] {
                                     QueryBuilderColumn::Primitive { value_expr, .. }
-                                    | QueryBuilderColumn::Object { object_row_expr: value_expr, .. }
+                                    | QueryBuilderColumn::Object { object_query_string_expr: value_expr, .. }
                                     | QueryBuilderColumn::Select { select_row_expr: value_expr, .. }
                                     | QueryBuilderColumn::Multiselect { select_row_expr: value_expr, .. } => value_expr.clone(),
                                     QueryBuilderColumn::Formula { value_expr, deterministic, .. } => {
@@ -433,21 +452,6 @@ impl<'a> QueryBuilder<'a> {
                     format!("HAVING {}",
                         self.postgroup_filters.into_iter().reduce(|acc, e| format!("{acc} AND {e}")).unwrap_or(String::from("TRUE"))
                     )
-                } else {
-                    String::from("")
-                },
-
-                // ORDER BY expression
-                if self.order_by_indices.len() > 0 {
-                    self.order_by_indices.into_iter()
-                        .fold(
-                            String::from("ORDER BY"),
-                            |acc, (e, sort_ascending)| if acc == "ORDER BY" { 
-                                format!("ORDER BY {} {}", e + 1, if sort_ascending { "ASC" } else { "DESC" }) 
-                            } else { 
-                                format!("{acc}, {} {}", e + 1, if sort_ascending { "ASC" } else { "DESC" }) 
-                            }
-                        )
                 } else {
                     String::from("")
                 }
@@ -480,7 +484,7 @@ impl<'a> QueryBuilder<'a> {
             return Ok(alias);
         } else if let Some(parent_query) = &mut self.parent_query {
             // Test if the parent query is already pulling from a datasource that has a 1-to-1 relationship with this datasource
-            let deep_parent: Datasource = datasource.get_deep_relationship();
+            let deep_parent: Datasource = datasource.seek_basis()?;
             let deep_alias: String = deep_parent.get_alias();
             if parent_query.has_table_or_subquery_alias(&deep_alias) {
                 // If it does, then insert the datasource into the parent instead
@@ -491,8 +495,7 @@ impl<'a> QueryBuilder<'a> {
         // Branch based on datasource type
         let table_or_subquery = match &datasource {
             Datasource::Table { .. } => TableOrSubquery::RootDatasource { datasource, alias },
-            Datasource::MasterTable { parent_datasource, table_oid } => {
-                let parent_schema_oid: i64 = parent_datasource.get_schema_oid()?;
+            Datasource::MasterTable { parent_datasource, .. } => {
                 let parent_alias: String = self.insert_datasource(*parent_datasource.clone())?;
                 TableOrSubquery::DerivativeDatasource { 
                     on_clause: format!(
@@ -502,7 +505,7 @@ impl<'a> QueryBuilder<'a> {
                     alias
                 }
             },
-            Datasource::InheritorTable { parent_datasource, table_oid } => {
+            Datasource::InheritorTable { parent_datasource, .. } => {
                 let parent_schema_oid: i64 = parent_datasource.get_schema_oid()?;
                 let parent_alias: String = self.insert_datasource(*parent_datasource.clone())?;
                 TableOrSubquery::DerivativeDatasource { 
@@ -613,15 +616,15 @@ impl<'a> QueryBuilder<'a> {
                     datasource_alias,
                     column_metadata.oid
                 );
-                let object_row_ord: String = format!("VALUE{}", self.columns.len());
+                let object_query_string_ord: String = format!("VALUE{}", self.columns.len());
                 let label_ord: String = format!("LABEL{}", self.columns.len());
                 QueryBuilderColumn::Object { 
                     label_expr: format!("(SELECT LABEL FROM TABLE{table_oid}_SURROGATE WHERE OID = {primitive_value_alias})"),
                     json_expr: format!("(SELECT JSON_STRINGIFY FROM TABLE{table_oid}_SURROGATE WHERE OID = {primitive_value_alias})"),
-                    object_row_expr: primitive_value_alias,
+                    object_query_string_expr: format!("'{datasource_alias}=' || FORMAT('%d', {primitive_value_alias})"),
                     label_ord, 
                     object_schema_oid: table_oid,
-                    object_row_ord,
+                    object_query_string_ord,
                     schema_oid: column_metadata.schema.oid,
                     schema_row_ord: format!("{datasource_alias}_OID"),
                     column_oid: column_metadata.oid
@@ -879,12 +882,10 @@ impl<'a> QueryBuilder<'a> {
                 param_expr: String::from("NULL"),
                 deterministic: false
             },
-            Formula::Param { datasource_oid, column_oid } => {
-                let param_expr: String = format!("'{datasource_oid}:{column_oid}'");
-                let (column_datasource, column_metadata) = (
-                    Datasource::get(datasource_oid.clone())?,
-                    column::FullMetadata::get(column_oid.clone())?
-                );
+            Formula::Param { datasource_path, column_oid } => {
+                let column_datasource: Datasource = Datasource::from_path(datasource_path.clone())?;
+                let column_metadata = column::FullMetadata::get(column_oid.clone())?;
+                let param_expr: String = format!("'{}:{column_oid}'", column_datasource.get_alias());
                 match self.compile_column(column_datasource, column_metadata)? {
                     QueryBuilderColumn::Primitive { primitive_type, label_expr, value_expr, .. } => ScalarExpression { 
                         arg_expr: value_expr.clone(), 
@@ -904,10 +905,10 @@ impl<'a> QueryBuilder<'a> {
                         param_expr,
                         deterministic: false
                     },
-                    QueryBuilderColumn::Object { label_expr, json_expr, object_row_expr, .. } => ScalarExpression {
+                    QueryBuilderColumn::Object { label_expr, json_expr, object_query_string_expr: object_datasource_row_expr, .. } => ScalarExpression {
                         arg_expr: json_expr,
                         arg_return_type: ScalarType::JSON,
-                        value_expr: object_row_expr,
+                        value_expr: object_datasource_row_expr,
                         label_expr,
                         param_expr,
                         deterministic: false

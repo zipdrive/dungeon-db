@@ -1,14 +1,14 @@
-body {
-  display: grid;
-  grid-template-rows: 1fr auto;
-}
-
-.page {
-  position: relative;
-  overflow-y: auto;
+.tab + .container {
+  bottom: 3em;
 }
 
 .dialog-buttons {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3em;
+
   padding: 8px;
   display: flex;
   flex-direction: row;

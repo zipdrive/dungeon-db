@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="stylesheet" href="./schema.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script type="module" src="./schema.ts" defer></script>
+    <style id="column-stylesheet" type="text/css"></style>
+  </head>
+
+  <body>
+    <div id="page">
+      <table id="page-content">
+      </table>
+    </div>
+    <div id="pagenav-bar">
+      <div>
+        <label for="page-size-input">Rows per Page:</label>
+        <input type="number" id="page-size-input">
+      </div>
+      <div>
+        <button id="first-page-button"><img src="/src-tauri/icons/first_page.png"></button>
+        <button id="prev-page-button"><img src="/src-tauri/icons/prev_page.png"></button>
+        <span>
+          Page&nbsp;<input type="number" id="page-num-input">
+        </span>
+        <button id="next-page-button"><img src="/src-tauri/icons/next_page.png"></button>
+        <button id="last-page-button"><img src="/src-tauri/icons/last_page.png"></button>
+      </div>
+    </div>
+  </body>
+</html>

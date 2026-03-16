@@ -59,6 +59,7 @@ impl FlatListItemMetadata {
 
 
 #[derive(Serialize, Clone)]
+#[serde(rename_all="camelCase")]
 pub struct HierarchicalListItemMetadata {
     oid: i64,
     name: String,
@@ -80,8 +81,8 @@ impl HierarchicalListItemMetadata {
                     NULL AS MASTER_OID,
                     0 AS LEVEL
                 FROM METADATA_TABLE tbl
-                INNER JOIN METADATA_SCHEMA s ON s.OID = tbl.OID
-                WHERE tbl.OID NOT IN (SELECT INHERITOR_TABLE_OID FROM METADATA_SCHEMA_INHERITANCE)
+                INNER JOIN METADATA_SCHEMA s ON s.OID = tbl.OID AND NOT s.TRASH
+                WHERE tbl.OID NOT IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE)
 
                 UNION
 
@@ -91,8 +92,8 @@ impl HierarchicalListItemMetadata {
                     h.OID AS MASTER_OID,
                     h.LEVEL + 1 AS LEVEL
                 FROM TABLE_HIERARCHY h
-                INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID
-                INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_TABLE_OID
+                INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID AND NOT inh.TRASH
+                INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID AND NOT s.TRASH
 
                 ORDER BY LEVEL DESC, NAME -- Order depth first, then by name within a depth
             )
@@ -125,7 +126,7 @@ impl HierarchicalListItemMetadata {
                     NULL AS MASTER_OID,
                     0 AS LEVEL
                 FROM METADATA_SCHEMA s
-                WHERE s.OID = ?1
+                WHERE s.OID = ?1 AND NOT s.TRASH
 
                 UNION
 
@@ -135,8 +136,8 @@ impl HierarchicalListItemMetadata {
                     h.OID AS MASTER_OID,
                     h.LEVEL + 1 AS LEVEL
                 FROM TABLE_HIERARCHY h
-                INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID
-                INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID
+                INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID AND NOT inh.TRASH
+                INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID AND NOT s.TRASH
 
                 ORDER BY LEVEL DESC, NAME -- Order depth first, then by name within a depth
             )
@@ -169,7 +170,7 @@ impl HierarchicalListItemMetadata {
                     NULL AS MASTER_OID,
                     0 AS LEVEL
                 FROM METADATA_REPORT r
-                INNER JOIN METADATA_SCHEMA s ON s.OID = r.OID
+                INNER JOIN METADATA_SCHEMA s ON s.OID = r.OID AND NOT s.TRASH
                 WHERE r.OID NOT IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE)
 
                 UNION
@@ -180,9 +181,9 @@ impl HierarchicalListItemMetadata {
                     h.OID AS MASTER_OID,
                     h.LEVEL + 1 AS LEVEL
                 FROM REPORT_HIERARCHY h
-                INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID
+                INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID AND NOT inh.TRASH
                 INNER JOIN METADATA_REPORT r ON r.OID = inh.INHERITOR_SCHEMA_OID
-                INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID
+                INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID AND NOT s.TRASH
 
                 ORDER BY LEVEL DESC, NAME -- Order depth first, then by name within a depth
             )
@@ -206,6 +207,7 @@ impl HierarchicalListItemMetadata {
 
 
 #[derive(Serialize, Clone)]
+#[serde(rename_all="camelCase")]
 pub struct ToggledHierarchicalListItemMetadata {
     oid: i64,
     name: String,
@@ -231,8 +233,9 @@ impl ToggledHierarchicalListItemMetadata {
                         NULL AS MASTER_OID,
                         0 AS LEVEL,
                         (OID IS ?1) AS DISABLED
-                    FROM METADATA_SCHEMA s ON s.OID = r.OID
-                    WHERE s.OID NOT IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE)
+                    FROM METADATA_SCHEMA s 
+                    WHERE (NOT s.TRASH)
+                        AND s.OID NOT IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE)
 
                     UNION
 
@@ -241,11 +244,10 @@ impl ToggledHierarchicalListItemMetadata {
                         s.NAME,
                         h.OID AS MASTER_OID,
                         h.LEVEL + 1 AS LEVEL,
-                        (h.DISABLED OR s.OID IS ?1) AS DISABLED
+                        (s.OID IS ?1 OR s.OID IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE MASTER_SCHEMA_OID = ?1)) AS DISABLED
                     FROM SCHEMA_HIERARCHY h
-                    INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID
-                    INNER JOIN METADATA_REPORT r ON r.OID = inh.INHERITOR_SCHEMA_OID
-                    INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID
+                    INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID AND NOT inh.TRASH
+                    INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID AND NOT s.TRASH
 
                     ORDER BY LEVEL DESC, NAME -- Order depth first, then by name within a depth
                 )
@@ -262,7 +264,7 @@ impl ToggledHierarchicalListItemMetadata {
                     0 AS LEVEL,
                     (OID IS ?1) AS DISABLED
                 FROM METADATA_REPORT r
-                INNER JOIN METADATA_SCHEMA s ON s.OID = r.OID
+                INNER JOIN METADATA_SCHEMA s ON s.OID = r.OID AND NOT s.TRASH
                 WHERE r.OID NOT IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE)
 
                 UNION
@@ -272,11 +274,11 @@ impl ToggledHierarchicalListItemMetadata {
                     s.NAME,
                     h.OID AS MASTER_OID,
                     h.LEVEL + 1 AS LEVEL,
-                    (h.DISABLED OR s.OID IS ?1) AS DISABLED
+                    (s.OID IS ?1 OR s.OID IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE MASTER_SCHEMA_OID = ?1)) AS DISABLED
                 FROM REPORT_HIERARCHY h
-                INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID
+                INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID AND NOT inh.TRASH
                 INNER JOIN METADATA_REPORT r ON r.OID = inh.INHERITOR_SCHEMA_OID
-                INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID
+                INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID AND NOT s.TRASH
 
                 ORDER BY LEVEL DESC, NAME -- Order depth first, then by name within a depth
             )
@@ -354,7 +356,7 @@ impl Schema {
 pub struct FullMetadata {
     pub oid: i64,
     pub name: String,
-    pub master_schemas: HashSet<Schema>
+    pub master_schema_oids: HashSet<i64>
 }
 
 impl Hash for FullMetadata {
@@ -373,17 +375,16 @@ impl FullMetadata {
     /// Gets the metadata.
     pub fn get(conn: &Connection, oid: i64) -> Result<Self, Error> {
         // Query for schemas that this schema inherits from
-        let mut master_schemas: HashSet<Schema> = HashSet::new();
+        let mut master_schemas: HashSet<i64> = HashSet::new();
         {
             let mut master_schema_oid_statement = conn.prepare(
                 "
                 SELECT 
                     u.MASTER_SCHEMA_OID 
                 FROM METADATA_SCHEMA_INHERITANCE u
-                INNER JOIN METADATA_SCHEMA s ON s.OID = u.MASTER_SCHEMA_OID
+                INNER JOIN METADATA_SCHEMA s ON s.OID = u.MASTER_SCHEMA_OID AND NOT s.TRASH
                 WHERE u.INHERITOR_SCHEMA_OID = ?1 
-                    AND u.TRASH = 0
-                    AND tbl.TRASH = 0
+                    AND NOT u.TRASH
                 "
             )?;
             let master_schema_oid_rows = master_schema_oid_statement.query_and_then(
@@ -391,7 +392,7 @@ impl FullMetadata {
                 |row| row.get::<_, i64>(0)
             )?;
             for master_schema_oid_result in master_schema_oid_rows {
-                master_schemas.insert(Schema::get(master_schema_oid_result?)?);
+                master_schemas.insert(master_schema_oid_result?);
             }
         }
 
@@ -403,7 +404,7 @@ impl FullMetadata {
                 Ok(Self {
                     oid,
                     name: row.get("NAME")?,
-                    master_schemas
+                    master_schema_oids: master_schemas
                 })
             }
         )?)
@@ -452,7 +453,7 @@ impl FullMetadata {
     fn set_inheritance(&self, trans: &Transaction) -> Result<(), Error> {
         // Clear all metadata describing inheritance
         trans.execute(
-            "UPDATE METADATA_SCHEMA_INHERITANCE SET TRASH = 1 WHERE INHERITOR_SCHEMA_OID = ?1",
+            "UPDATE METADATA_SCHEMA_INHERITANCE SET TRASH = TRUE WHERE INHERITOR_SCHEMA_OID = ?1",
             params![self.oid]
         )?;
 
@@ -461,33 +462,29 @@ impl FullMetadata {
         let is_table: bool = trans.table_exists(Some("main"), &table_name)?;
 
         // Add inheritance from each master schema
-        for master_schema in self.master_schemas.iter() {
-            let master_schema_oid: i64 = master_schema.get_oid();
-
+        for master_schema_oid in self.master_schema_oids.iter() {
             // Upsert the inheritance row
             trans.execute(
-                "INSERT INTO METADATA_SCHEMA_INHERITANCE (INHERITOR_SCHEMA_OID, MASTER_SCHEMA_OID) VALUES (?1, ?2) ON CONFLICT DO UPDATE SET TRASH = 0",
+                "INSERT INTO METADATA_SCHEMA_INHERITANCE (INHERITOR_SCHEMA_OID, MASTER_SCHEMA_OID) VALUES (?1, ?2) ON CONFLICT DO UPDATE SET TRASH = FALSE",
                 params![self.oid, master_schema_oid]
             )?;
 
             // Update the corresponding table, if both master and inheritor schemas are tables
             if is_table {
-                if let Schema::Table(_) = master_schema {
-                    let master_column_name: String = format!("MASTER{master_schema_oid}_OID");
-                    if !trans.column_exists(Some("main"), &table_name, &master_column_name)? {
-                        // Add a column to the table that references a row in the master list
-                        let alter_table_cmd: String = format!(
-                            "
-                            ALTER TABLE TABLE{} 
-                                ADD COLUMN MASTER{master_schema_oid}_OID INTEGER
-                                REFERENCES TABLE{master_schema_oid} (OID) 
-                                ON UPDATE CASCADE 
-                                ON DELETE CASCADE
-                            ",
-                            self.oid
-                        );
-                        trans.execute(&alter_table_cmd, [])?;
-                    }
+                let master_column_name: String = format!("MASTER{master_schema_oid}_OID");
+                if !trans.column_exists(Some("main"), &table_name, &master_column_name)? {
+                    // Add a column to the table that references a row in the master list
+                    let alter_table_cmd: String = format!(
+                        "
+                        ALTER TABLE TABLE{} 
+                            ADD COLUMN MASTER{master_schema_oid}_OID INTEGER
+                            REFERENCES TABLE{master_schema_oid} (OID) 
+                            ON UPDATE CASCADE 
+                            ON DELETE CASCADE
+                        ",
+                        self.oid
+                    );
+                    trans.execute(&alter_table_cmd, [])?;
                 }
             }
         }

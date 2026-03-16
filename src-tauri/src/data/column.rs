@@ -3,14 +3,15 @@ use crate::util::db;
 use crate::util::channel::Sender;
 use crate::data::schema;
 use crate::data::column_type;
+use rusqlite::Transaction;
 use rusqlite::{params};
 use serde::{Serialize, Deserialize};
 use std::hash::{Hash, Hasher};
 
 #[derive(Serialize, Clone)]
 pub struct DropdownValue {
-    label: Option<String>,
-    value: Option<i64>
+    label: String,
+    value: i64
 }
 
 
@@ -26,8 +27,6 @@ pub struct FullMetadata {
     pub style: String,
     pub ordering: i64,
     pub default_value: Option<String>,
-    pub is_nullable: bool,
-    pub is_unique: bool,
     pub is_primary_key: bool
 }
 
@@ -49,8 +48,6 @@ impl FullMetadata {
             style,
             ordering,
             default_value,
-            is_nullable,
-            is_unique,
             is_primary_key
         ) = conn.query_one(
             "
@@ -77,8 +74,6 @@ impl FullMetadata {
                 row.get::<_, String>("STYLE")?,
                 row.get::<_, i64>("ORDERING")?,
                 row.get::<_, Option<String>>("DEFAULT_VALUE")?,
-                row.get::<_, bool>("IS_NULLABLE")?,
-                row.get::<_, bool>("IS_UNIQUE")?,
                 row.get::<_, bool>("IS_PRIMARY_KEY")?
             ))}
         )?;
@@ -94,8 +89,6 @@ impl FullMetadata {
             style,
             ordering,
             default_value,
-            is_nullable,
-            is_unique,
             is_primary_key
         })
     }
@@ -146,8 +139,9 @@ impl FullMetadata {
                 c.IS_NULLABLE,
                 c.IS_UNIQUE,
                 c.IS_PRIMARY_KEY
-            FROM SUPERSCHEMAS s
-            INNER JOIN METADATA_COLUMN c ON c.SCHEMA_OID = s.OID
+            FROM METADATA_COLUMN c
+            LEFT JOIN METADATA_SCHEMA_INHERITANCE_VIEW s ON c.SCHEMA_OID = s.MASTER_SCHEMA_OID
+            WHERE COALESCE(s.INHERITOR_SCHEMA_OID, c.SCHEMA_OID) = ?1 AND NOT c.TRASH
             ORDER BY c.ORDERING
             "
         )?;
@@ -162,8 +156,6 @@ impl FullMetadata {
                 row.get::<_, String>("STYLE")?,
                 row.get::<_, i64>("ORDERING")?,
                 row.get::<_, Option<String>>("DEFAULT_VALUE")?,
-                row.get::<_, bool>("IS_NULLABLE")?,
-                row.get::<_, bool>("IS_UNIQUE")?,
                 row.get::<_, bool>("IS_PRIMARY_KEY")?
             ))}
         )? {
@@ -176,8 +168,6 @@ impl FullMetadata {
                 style,
                 ordering,
                 default_value,
-                is_nullable,
-                is_unique,
                 is_primary_key
             ) = row_result?;
 
@@ -192,8 +182,6 @@ impl FullMetadata {
                 style,
                 ordering,
                 default_value,
-                is_nullable,
-                is_unique,
                 is_primary_key
             })?;
         }
@@ -206,21 +194,18 @@ impl FullMetadata {
 
         let sql_select = format!("SELECT OID, LABEL FROM TABLE{schema_oid}_SURROGATE");
         let mut select_stmt = conn.prepare(&sql_select)?;
-        let select_rows = select_stmt.query_and_then([], |row| Ok::<(i64, Option<String>), rusqlite::Error>((row.get::<_, i64>("OID")?, row.get::<_, Option<String>>("LABEL")?)))?;
+        let select_rows = select_stmt.query_and_then([], |row| Ok::<(i64, String), rusqlite::Error>((row.get::<_, i64>("OID")?, row.get::<_, Option<String>>("LABEL")?)))?;
         for row_result in select_rows {
             let (value, label) = row_result?;
-            sender.send(DropdownValue { label, value: Some(value) })?;
+            sender.send(DropdownValue { label, value })?;
         }
 
         Ok(())
     }
 
-    /// Create the column.
-    pub fn create(&mut self) -> Result<(), Error> {
-        let mut conn = db::open()?;
-        let trans = conn.transaction()?;
-
-        // Find the column OID
+    /// Creates a new column.
+    fn _create(&mut self, trans: &Transaction) -> Result<(), Error> {
+        // Find the column type OID
         let column_type: column_type::ColumnType = self.column_type.clone();
         self.column_type = column_type.find()?;
 
@@ -329,6 +314,16 @@ impl FullMetadata {
                 // Otherwise, a virtual column that requires nothing to be done
             }
         }
+        Ok(())
+    }
+
+    /// Create the column.
+    pub fn create(&mut self) -> Result<(), Error> {
+        let mut conn = db::open()?;
+        let trans = conn.transaction()?;
+
+        // Create the column
+        self._create(&trans)?;
 
         // Commit the transaction
         trans.commit()?;
@@ -338,126 +333,16 @@ impl FullMetadata {
     /// Overwrites the column metadata.
     pub fn set(&mut self) -> Result<(), Error> {
         let mut conn = db::open()?;
-        let mut trans = conn.transaction()?;
+        let trans = conn.transaction()?;
 
         // Find the column type OID
-        self.column_type = self.column_type.clone().find()?;
+        let old_column: Self = Self::get(self.oid)?;
 
-        // Update the column metadata
+        // Create a new column
+        self._create(&trans)?;
 
-        trans.execute(
-            "
-            UPDATE METADATA_COLUMN
-            SET
-                HIDDEN = ?1,
-                NAME = ?2,
-                TYPE_OID = ?3,
-                STYLE = ?4,
-                ORDERING = ?5,
-                IS_NULLABLE = ?6,
-                IS_UNIQUE = ?7,
-                IS_PRIMARY_KEY = ?8
-            WHERE OID = ?9
-            ", 
-            params![
-                self.hidden,
-                self.name,
-                self.column_type.get_oid(),
-                self.style,
-                self.ordering,
-                self.is_nullable,
-                self.is_unique,
-                self.is_primary_key,
-                self.oid
-            ]
-        )?;
-
-        // Drop any existing non-virtual columns
-        {
-            let cmd: String = format!(
-                "
-                DROP TABLE IF EXISTS MULTISELECT{};
-                DROP VIEW IF EXISTS FORMULA{};
-                ", 
-                self.oid,
-                self.oid
-            );
-            trans.execute(&cmd, [])?;
-        }
-        {
-            let savepoint = trans.savepoint()?;
-            let cmd: String = format!("ALTER TABLE TABLE{} DROP COLUMN COLUMN{}", self.schema.oid, self.oid);
-            match savepoint.execute(&cmd, []) {
-                Ok(_) => {
-                    savepoint.commit()?;
-                }
-                _ => {}
-            }
-        }
-
-        // If the column is not virtual, add it to the table
-        match &self.column_type {
-            column_type::ColumnType::Primitive(prim) => {
-                let cmd: String = format!(
-                    "ALTER TABLE TABLE{} ADD COLUMN COLUMN{} {}", 
-                    self.schema.oid,
-                    self.oid,
-                    match prim {
-                        column_type::Primitive::Text
-                        | column_type::Primitive::JSON => "TEXT",
-                        column_type::Primitive::Checkbox
-                        | column_type::Primitive::Integer => "INTEGER",
-                        column_type::Primitive::Number
-                        | column_type::Primitive::Date
-                        | column_type::Primitive::Datetime => "REAL",
-                        column_type::Primitive::File
-                        | column_type::Primitive::Image => "BLOB"
-                    }
-                );
-                trans.execute(&cmd, [])?;
-            }
-            column_type::ColumnType::Object { table_oid, .. }
-            | column_type::ColumnType::Select { table_oid, .. } => {
-                let cmd: String = format!(
-                    "
-                    ALTER TABLE TABLE{} ADD COLUMN COLUMN{} INTEGER 
-                        REFERENCES TABLE{} (OID) 
-                        ON UPDATE CASCADE 
-                        ON DELETE SET DEFAULT
-                    ", 
-                    self.schema.oid,
-                    self.oid,
-                    table_oid
-                );
-                trans.execute(&cmd, [])?;
-            }
-            column_type::ColumnType::Multiselect { table_oid, .. } => {
-                let cmd: String = format!(
-                    "
-                    CREATE TABLE MULTISELECT{} (
-                        TABLE{}_OID INTEGER NOT NULL REFERENCES TABLE{} (OID)
-                            ON UPDATE CASCADE
-                            ON DELETE CASCADE,
-                        TABLE{}_OID INTEGER NOT NULL REFERENCES TABLE{} (OID)
-                            ON UPDATE CASCADE
-                            ON DELETE CASCADE,
-                        PRIMARY KEY (TABLE{}_OID, TABLE{}_OID)
-                    );
-                    ",
-                    self.oid,
-                    self.schema.oid,
-                    self.schema.oid,
-                    table_oid,
-                    table_oid,
-                    self.schema.oid,
-                    table_oid
-                );
-                trans.execute(&cmd, [])?;
-            }
-            _ => {
-                // Virtual column, so do nothing
-            }
-        }
+        // Try to copy data from the old column to the new column
+        todo!("Copying data after column edit has not yet been implemented!");
 
         // Commit the transaction
         trans.commit()?;

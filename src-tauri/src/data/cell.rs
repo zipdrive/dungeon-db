@@ -1,13 +1,13 @@
 use base64::{Engine, prelude::{BASE64_STANDARD as base64standard}};
-use rusqlite::types::Value;
+use rusqlite::{OptionalExtension, types::Value};
 use rusqlite::vtab::array::Array;
 use rusqlite::{Connection, Params, Transaction, params};
 use serde::{Deserialize, Serialize};
-use std::cell;
+use std::{cell, collections::HashSet};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
-use crate::data::query::QueryBuilder;
+use crate::data::{datasource::Datasource, query::QueryBuilder, row};
 use crate::util::channel::Sender;
 use crate::util::error::Error;
 use crate::util::db;
@@ -29,6 +29,16 @@ pub enum RetrievalLimit {
     SingleRow
 }
 
+impl RetrievalLimit {
+    /// Retrieves the LIMIT of the query.
+    pub fn get_size(&self) -> i64 {
+        match self {
+            Self::Page { size, .. } => size.clone(),
+            Self::SingleRow => 1
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct CellOid {
     schema_oid: i64,
@@ -39,6 +49,7 @@ pub struct CellOid {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum Cell {
+    MaxIndex(i64),
     Row {
         schema_oid: i64,
         row_oid: Option<i64>,
@@ -85,6 +96,10 @@ pub enum Cell {
         multiselect_row_oid: Vec<i64>,
         label: Option<String>,
         validation_failures: Vec<FailedValidation>
+    },
+    AddNewRowButton {
+        table_oid: i64,
+        column_span: usize
     }
 }
 
@@ -140,7 +155,7 @@ impl Cell {
             column_type::ColumnType::Object { table_oid, .. } => {
                 let conn = db::open()?;
 
-                let datasource_oid: i64 = conn.query_row("SELECT OID FROM METADATA_DATASOURCE__TABLE WHERE TABLE_OID = ?1", params![value_oid.schema_oid], |row| row.get(0))?;
+                let datasource_oid: i64 = conn.query_row("SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = ?1", params![value_oid.schema_oid], |row| row.get(0))?;
 
                 let column_name: String = format!("COLUMN{}", value_oid.column_oid);
                 let table_name: String = format!("TABLE{}", value_oid.schema_oid);
@@ -249,23 +264,25 @@ impl Cell {
             | Self::MultiselectEntry { value_oid, .. } => Ok(value_oid.clone()),
             Self::Readonly { .. } => Err(Error::AdhocError("A readonly cell does not read from a value.")),
             Self::Subreport { .. } => Err(Error::AdhocError("A subreport cell does not read from a value.")),
-            Self::Row { .. } => Err(Error::AdhocError("A row does not read from a value."))
+            Self::Row { .. } => Err(Error::AdhocError("A row does not read from a value.")),
+            Self::AddNewRowButton { .. } => Err(Error::AdhocError("A button to add a new row does not read from a value.")),
+            Self::MaxIndex(_) => Err(Error::AdhocError("The maximum index does not read from a value."))
         }
     }
 
     /// Recursively build mapping from schema to default datasource by traversing up the inheritance hierarchy.
-    fn build_schema_to_datasource_mapping(trans: &Transaction, schema_to_datasource: &mut HashMap<schema::FullMetadata, datasource::Datasource>, table_metadata: table::FullMetadata) -> Result<(), Error> {
-        for master_schema in table_metadata.schema.master_schemas.iter() {
-            if let schema::Schema::Table(master_table) = master_schema {
-                if !schema_to_datasource.contains_key(&master_table.schema) {
-                    let datasource: datasource::Datasource = datasource::Datasource::Inheritance { 
-                        oid: 0, 
-                        parent_datasource: Box::new(schema_to_datasource[&table_metadata.schema].clone()), 
-                        table: master_table.clone() 
-                    }.find(trans, Vec::new())?;
-                    schema_to_datasource.insert(master_table.schema.clone(), datasource);
+    fn build_schema_to_datasource_mapping(trans: &Transaction, schema_to_datasource: &mut HashMap<i64, datasource::Datasource>, table_metadata: table::FullMetadata) -> Result<(), Error> {
+        for master_schema_oid in table_metadata.schema.master_schema_oids.iter() {
+            if !schema_to_datasource.contains_key(master_schema_oid) {
+                if let schema::Schema::Table(master_table) = schema::Schema::get(master_schema_oid.clone())? {
+                    let datasource: datasource::Datasource = datasource::Datasource::MasterTable { 
+                        parent_datasource: Box::new(schema_to_datasource[&table_metadata.schema.oid].clone()), 
+                        table_oid: master_table.schema.oid
+                    };
+                    schema_to_datasource.insert(master_table.schema.oid, datasource);
+
+                    Self::build_schema_to_datasource_mapping(trans, schema_to_datasource, master_table)?;
                 }
-                Self::build_schema_to_datasource_mapping(trans, schema_to_datasource, master_table.clone())?;
             }
         }
         Ok(())
@@ -273,19 +290,20 @@ impl Cell {
 
     /// Builds a basic query to get all columns associated with the given schema.
     /// Also sends the column information through the provided Sender object.
-    fn build_query(mut column_sender: Sender<column::FullMetadata>, schema_oid: i64, initial_datasources: Vec<datasource::Datasource>) -> Result<query::QueryBuilder, Error> {
+    fn build_query(mut column_sender: Sender<column::FullMetadata>, schema_oid: i64, initial_datasources: Vec<datasource::Datasource>, filters: Vec<(String, i64)>) -> Result<query::QueryBuilder, Error> {
         // Construct mapping from schema to default datasource
-        let mut schema_to_datasource: HashMap<schema::FullMetadata, datasource::Datasource> = HashMap::new();
+        let mut schema_to_datasource: HashMap<i64, datasource::Datasource> = HashMap::new();
         {
             let mut conn = db::open()?;
             let trans = conn.transaction()?;
 
             for datasource in initial_datasources.iter() {
-                schema_to_datasource.insert(datasource.get_schema(), datasource.clone());
+                schema_to_datasource.insert(datasource.get_schema_oid()?, datasource.clone());
 
                 // Make sure all master tables of a root table are also included as a datasource
-                if let datasource::Datasource::Table { table, .. } = datasource {
-                    Self::build_schema_to_datasource_mapping(&trans, &mut schema_to_datasource, table.clone())?;
+                if let datasource::Datasource::Table { table_oid, .. } = datasource {
+                    let table: table::FullMetadata = table::FullMetadata::get(table_oid.clone())?;
+                    Self::build_schema_to_datasource_mapping(&trans, &mut schema_to_datasource, table)?;
                 }
             }
 
@@ -297,7 +315,7 @@ impl Cell {
         column::FullMetadata::query_by_schema(
             Sender::Callback(Box::new(|col: column::FullMetadata| -> Result<(), Error> {
                 // Add column to query
-                let datasource: datasource::Datasource = schema_to_datasource[&col.schema].clone();
+                let datasource: datasource::Datasource = schema_to_datasource[&col.schema.oid].clone();
                 query.insert_column(datasource, col.clone())?;
 
                 // Send column metadata over the provided Sender object
@@ -315,6 +333,11 @@ impl Cell {
             let filter_formula = row_result?;
             // Insert WHERE clause
             query.insert_filter(filter_formula)?;
+        }
+
+        // Additionally filter rows in the query based on the provided filters
+        for (filter_datasource_alias, filter_datasource_row_oid) in filters {
+            query.insert_row_filter(filter_datasource_alias, filter_datasource_row_oid);
         }
 
         // Group rows in the query based on the METADATA_REPORT_GROUPBY table
@@ -341,17 +364,16 @@ impl Cell {
         let conn: Connection = db::open()?;
         if let Some((cmd_query, cols, datasource_aliases)) = query.compile()? {
 
-            // Add extra filters and row limits
-            let cmd_query: String = if filters.len() > 0 {
-                format!(
-                    "SELECT * FROM ({cmd_query}) WHERE {}",
-                    filters.into_iter().map(|(table_or_subquery_alias, table_or_subquery_row_oid)| format!("{table_or_subquery_alias}_OID = {table_or_subquery_row_oid}"))
-                        .reduce(|acc, e| format!("{acc} AND {e}"))
-                        .unwrap()
+            // First, get the maximum index
+            let cmd_max_index_query = format!("SELECT ROW_INDEX FROM ({cmd_query}) ORDER BY ROW_INDEX DESC LIMIT 1");
+            cell_sender.send(
+                Cell::MaxIndex(
+                    conn.query_one(&cmd_max_index_query, [], |row| row.get::<_, i64>("ROW_INDEX")).optional()?.unwrap_or(0)
                 )
-            } else {
-                cmd_query
-            };
+            )?;
+
+            // Then, start working on the actual query
+            // Add row limits
             let cmd_query: String = match limit {
                 RetrievalLimit::SingleRow => format!("{cmd_query} LIMIT 1"),
                 RetrievalLimit::Page { num, size } => format!("{cmd_query} LIMIT {size} OFFSET {}", size * (num - 1))
@@ -360,8 +382,10 @@ impl Cell {
             // Run the query
             let mut stmt_query = conn.prepare(&cmd_query)?;
             let mut rows_query = stmt_query.query([])?;
+            let mut row_count: i64 = 0;
             loop {
-                let Some(row) = rows_query.next()? else { return Ok(()); };
+                let Some(row) = rows_query.next()? else { break; };
+                row_count += 1;
 
                 // First, send a header for the row
                 cell_sender.send(Cell::Row { 
@@ -395,7 +419,7 @@ impl Cell {
                                 validation_failures: Vec::new() 
                             })?;
                         }
-                        query::QueryBuilderColumn::Object { schema_oid, schema_row_ord, column_oid, label_ord, object_schema_oid, object_row_ord, .. } => {
+                        query::QueryBuilderColumn::Object { schema_oid, schema_row_ord, column_oid, label_ord, object_schema_oid, object_query_string_ord: object_datasource_row_ord, .. } => {
                             let label: Option<String> = row.get::<&str, Option<String>>(label_ord)?;
                             let value_oid: CellOid = CellOid { 
                                 schema_oid: schema_oid.clone(), 
@@ -406,7 +430,11 @@ impl Cell {
                                 cell_oid: value_oid.clone(), 
                                 value_oid,
                                 object_schema_oid: object_schema_oid.clone(),
-                                object_row_oid: row.get::<&str, Option<i64>>(object_row_ord)?,
+                                object_query_string: if let Some(object_datasource_row_oid) = row.get::<&str, Option<i64>>(object_datasource_row_ord)? {
+                                    Some(format!("{object_schema_oid}={object_datasource_row_oid}"))
+                                } else {
+                                    None
+                                },
                                 label, 
                                 validation_failures: Vec::new() 
                             })?;
@@ -468,9 +496,9 @@ impl Cell {
                                 };
                                 let value_column = column::FullMetadata::get(value_column_oid)?;
                                 
-                                let value_row_ord: String = format!("d{}_OID", value_datasource.get_oid());
+                                let value_row_ord: String = format!("{}_OID", value_datasource.get_alias());
                                 let value_oid: CellOid = CellOid {
-                                    schema_oid: value_datasource.get_schema().oid,
+                                    schema_oid: value_datasource.get_schema_oid()?,
                                     row_oid: row.get::<&str, i64>(&value_row_ord)?,
                                     column_oid: value_column.oid.clone()
                                 };
@@ -490,7 +518,7 @@ impl Cell {
                                             cell_oid, 
                                             value_oid, 
                                             object_schema_oid: table_oid.clone(), 
-                                            object_row_oid: row.get::<&str, Option<i64>>(value_ord)?, 
+                                            object_query_string: row.get::<&str, Option<String>>(value_ord)?,
                                             label, 
                                             validation_failures: Vec::new() 
                                         }
@@ -513,7 +541,7 @@ impl Cell {
                                         Cell::MultiselectEntry { 
                                             cell_oid, 
                                             value_oid, 
-                                            multiselect_schema_oid: if value_datasource.get_schema().oid == value_column.schema.oid {
+                                            multiselect_schema_oid: if value_datasource.get_schema_oid()? == value_column.schema.oid {
                                                 // If the multiselect column belongs to the schema of the datasource, do not invert
                                                 table_oid.clone() 
                                             } else {
@@ -570,9 +598,35 @@ impl Cell {
                     }
                 }
             }
-        } else {
-            return Ok(()); // If the report doesn't have any datasources, just don't run it
-        }
+
+            // Send over an Add New Row button at the bottom, if there is room and it is applicable to the schema
+            if row_count < limit.get_size() {
+                // Assuming there is space for an Add New Row button, it is allowed to create a new row 
+                // if there is only a single unfixed root or 1-to-* datasource.
+                let mut unfixed_datasources: HashSet<Datasource> = HashSet::new();
+                for datasource_alias in datasource_aliases {
+                    let datasource_path: Vec<String> = datasource_alias.split('_').map(|s| String::from(s)).collect();
+                    let datasource: Datasource = Datasource::from_path(datasource_path)?;
+                    let base_datasource: Datasource = datasource.seek_basis()?;
+                    let base_datasource_alias: String = base_datasource.get_alias();
+
+                    // A datasource is fixed if it or a datasource that branches from it is filtered
+                    if !filters.iter().any(|(fixed_datasource_alias, _)| fixed_datasource_alias.starts_with(&base_datasource_alias)) {
+                        unfixed_datasources.insert(base_datasource);
+                    }
+                }
+
+                // According to the above rule, check that there is only one unfixed root and/or 1-to-* datasource.
+                if unfixed_datasources.len() == 1 {
+                    let table_oid: i64 = unfixed_datasources.iter().next().unwrap().get_schema_oid()?;
+                    cell_sender.send(Cell::AddNewRowButton { 
+                        table_oid, 
+                        column_span: cols.len()
+                    })?;
+                }
+            }
+        } // If the report doesn't have any datasources, just don't run it
+        return Ok(()); 
     }
 
     /// Sends all cells on a page in a schema.
@@ -584,18 +638,17 @@ impl Cell {
             match schema {
                 schema::Schema::Table(table_metadata) => {
                     // Find the default datasource for the table
-                    let mut conn = db::open()?;
-                    let trans = conn.transaction()?;
+                    let conn = db::open()?;
                     let table_datasource: datasource::Datasource = datasource::Datasource::Table { 
-                        oid: 0, 
-                        label: table_metadata.schema.name.clone(), 
-                        table: table_metadata
-                    }.find(&trans, Vec::new())?;
-                    trans.commit()?;
+                        oid: conn.query_row("SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = ?1", params![table_metadata.schema.oid], |row| row.get(0))?,
+                        table_oid: table_metadata.schema.oid,
+                        label: table_metadata.schema.name.clone()
+                    };
                     vec![table_datasource]
                 }
                 schema::Schema::Report(_) => Vec::new() // Reports have no default datasource
-            }
+            },
+            filters.clone()
         )?;
 
         // Compile and run the query
@@ -622,7 +675,7 @@ impl Cell {
                     }
                 }
             }
-            Self::Object { value_oid, object_schema_oid, object_row_oid, .. } => {
+            Self::Object { value_oid, object_schema_oid, object_query_string, .. } => {
                 // Trash the previous object
                 let sql_trash_previous: String = format!(
                     "UPDATE TABLE{} AS o SET o.TRASH = TRUE FROM (SELECT COLUMN{} AS O_OID FROM TABLE{} WHERE OID = ?1) AS t WHERE o.OID = t.O_OID",
@@ -632,11 +685,11 @@ impl Cell {
                 );
                 trans.execute(&sql_trash_previous, params![value_oid.row_oid])?;
 
-                match object_row_oid {
+                match object_query_string {
                     Some(_) => {
                         // Create a new Object row
-                        let object_table: table::FullMetadata = table::FullMetadata::get(object_schema_oid.clone())?;
-                        let object_row_oid: i64 = object_table.insert_row(None)?;
+                        let mut object_master_rows: HashMap<i64, i64> = HashMap::new();
+                        let object_row_oid: i64 = row::insert_transact(&trans, object_schema_oid.clone(), None, &mut object_master_rows)?;
 
                         // Assign the Object row to the cell's value
                         let sql_update: String = format!("UPDATE TABLE{} SET COLUMN{} = ?1 WHERE OID = ?2", value_oid.schema_oid, value_oid.column_oid);

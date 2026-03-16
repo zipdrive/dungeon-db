@@ -21,6 +21,16 @@ export type Action = {
 } | {
     trashColumn: number
 } | {
+    createRow: {
+        tableOid: number,
+        rowOid: number | null
+    }
+} | {
+    trashRow: {
+        tableOid: number,
+        rowOid: number
+    }
+} | {
     editCellContents: Cell
 } | {
     uploadBlob: {

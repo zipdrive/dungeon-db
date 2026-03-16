@@ -1,0 +1,208 @@
+#table-content {
+  table-layout: fixed;
+  width: 0;
+  border: none;
+  border-spacing: 0;
+  border-collapse: separate;
+  cursor: default;
+}
+tr {
+  --row-background-color: var(--main-color-neutral);
+}
+tr:nth-child(even), thead > tr, tfoot > tr {
+  --row-background-color: var(--main-color-light);
+}
+th, td {
+  background-color: var(--row-background-color);
+  border: var(--main-color-dark) 1px solid;
+  &:nth-child(1) {
+    border-left-width: 2px;
+  }
+}
+td {
+  position: relative;
+  padding: 0;
+  &:nth-last-child(1) {
+    border-right-width: 2px;
+  }
+}
+th {
+  position: sticky;
+  top: 0;
+  padding: 2px 6px;
+  border-top-width: 2px;
+  &:nth-last-child(2) {
+    border-right-width: 2px;
+  }
+}
+tfoot td {
+  position: sticky;
+  bottom: -1px;
+  border-bottom-width: 2px;
+  z-index: 1;
+}
+
+#add-new-column-button {
+  cursor: pointer;
+  width: 8em;
+  color: var(--text-color-link);
+  border: none;
+  background-color: transparent;
+  white-space: nowrap;
+  font-weight: normal;
+}
+#add-new-row-button {
+  cursor: pointer;
+  color: var(--text-color-link);
+  padding: 0;
+  vertical-align: middle;
+  text-align: center;
+}
+#add-new-column-button:hover, #add-new-row-button:hover {
+  color: var(--text-color-link-hover);
+}
+
+[contenteditable], .clickable-text, td:has(.cell-multiselect) {
+  padding: 2px 6px;
+
+  &[placeholder][content=""]::before {
+    display: block;
+    content: attr(placeholder);
+    z-index: 9;
+    line-height: 1.7;
+    color: var(--text-color-light);
+    width: 100%;
+    text-align: center;
+    word-break: break-all;
+    user-select: none;
+  }
+
+  &[placeholder][content=""]:focus::before {
+    content: "";
+  }
+}
+
+select {
+  padding: 2px 6px;
+  border: none;
+  width: 100%;
+  height: 100%;
+  background-color: transparent;
+}
+
+.cell-multiselect {
+  display: none;
+  padding: 2px 6px;
+
+  :focus &, &:focus, &:has(:focus) {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    display: grid;
+    grid-template-columns: 1fr;
+
+    border-radius: 8px;
+    border: 1px solid transparent;
+    padding: 0.6em 1.2em;
+    font-size: 1em;
+    font-weight: 500;
+    font-family: inherit;
+    color: var(--text-color-neutral);
+    background-color: var(--main-color-light);
+    box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
+
+    z-index: 2;
+  }
+}
+.cell-multiselect * {
+  transition: background-color 0.25s;
+  &:hover {
+    background-color: var(--main-color-semidark);
+  }
+}
+
+.cell-null {
+  background-color: var(--main-color-dark);
+}
+
+.cell-error {
+  position: relative;
+  background-color: var(--error-color);
+  color: var(--text-color-error);
+}
+.cell-error [placeholder]:empty::before {
+  color: var(--text-color-error) !important;
+}
+
+[tooltip-error]::after {
+  visibility: hidden;
+  content: attr(tooltip-error);
+  width: calc(100% + 20px);
+  background-color: var(--main-color-dark);
+  color: var(--text-color-light);
+  text-align: center;
+  padding: 5px 0;
+  border-radius: 6px;
+
+  /* Position the tooltip text */
+  position: absolute;
+  z-index: 2;
+  top: 125%;
+  margin-left: -10px;
+  margin-right: -10px;
+
+  /* Fade in tooltip */
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+[tooltip-error]::after::before {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin-left: -5px;
+  border-width: 5px;
+  border-style: solid;
+  border-color: var(--main-color-dark) transparent transparent transparent;
+}
+
+[tooltip-error]:hover::after {
+  visibility: visible;
+  opacity: 1;
+}
+
+
+td.clickable-text, td.file-text, td:has(img) {
+  padding: 2px 6px;
+  text-align: center;
+}
+
+
+img {
+  max-width: 100%;
+}
+
+
+body {
+  display: grid;
+  grid-template-rows: 1fr 2.5em;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+}
+
+#page {
+  margin: 8px 12px 0;
+  padding: 0;
+  overflow: auto;
+}
+
+#pagenav-bar {
+  margin: 0;
+  padding: 0 12px;
+  background-color: var(--main-color-dark);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}

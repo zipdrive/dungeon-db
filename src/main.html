@@ -10,30 +10,29 @@
   </head>
 
   <body>
-    <div class="tab-bar">
-      <input type="radio" name="tabs" id="tables-tab-button" class="hidden" checked>
-      <input type="radio" name="tabs" id="reports-tab-button" class="hidden">
-      <label for="tables-tab-button" id="tables-tab" class="input tab" tabindex="0">Tables</label>
-      <label for="reports-tab-button" id="reports-tab" class="input tab" tabindex="0">Reports</label>
-    </div>
-    <div id="tables-container" class="container">
-      <div class="header">
-        <button class="input" id="new-table-button" tabindex="0">New</button>
-        <button class="input" id="open-table-button" tabindex="0" disabled>Open</button>
-        <button class="input" id="edit-table-button" tabindex="0" disabled>Edit</button>
-        <button class="input" id="delete-table-button" tabindex="0" disabled>Delete</button>
+    <div class="tab-bar">          
+      <label for="tables-tab-button" id="tables-tab" class="input tab" tabindex="0"><input type="radio" name="tabs" id="tables-tab-button" class="hidden" checked>Tables</label>
+      <div id="tables-container" class="container">
+        <div class="header">
+          <button class="input" id="new-table-button" tabindex="0">New</button>
+          <button class="input" id="open-table-button" tabindex="0" disabled>Open</button>
+          <button class="input" id="edit-table-button" tabindex="0" disabled>Edit</button>
+          <button class="input" id="delete-table-button" tabindex="0" disabled>Delete</button>
+        </div>
+        <div class="list">
+        </div>
       </div>
-      <div class="list">
-      </div>
-    </div>
-    <div id="reports-container" class="container">
-      <div class="header">
-        <button class="input" id="new-report-button" tabindex="0">New</button>
-        <button class="input" id="open-report-button" tabindex="0" disabled>Open</button>
-        <button class="input" id="edit-report-button" tabindex="0" disabled>Edit</button>
-        <button class="input" id="delete-report-button" tabindex="0" disabled>Delete</button>
-      </div>
-      <div class="list">
+
+      <label for="reports-tab-button" id="reports-tab" class="input tab" tabindex="0"><input type="radio" name="tabs" id="reports-tab-button" class="hidden">Reports</label>
+      <div id="reports-container" class="container">
+        <div class="header">
+          <button class="input" id="new-report-button" tabindex="0">New</button>
+          <button class="input" id="open-report-button" tabindex="0" disabled>Open</button>
+          <button class="input" id="edit-report-button" tabindex="0" disabled>Edit</button>
+          <button class="input" id="delete-report-button" tabindex="0" disabled>Delete</button>
+        </div>
+        <div class="list">
+        </div>
       </div>
     </div>
   </body>

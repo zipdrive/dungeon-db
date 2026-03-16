@@ -16,7 +16,7 @@
   --text-color-link: #646cff;
   --text-color-link-hover: #535bf2;
   --accent-color: #396cd8;
-  --error-color: #e996a0;
+  --main-color-error: #e996a0;
   --text-color-error: #800707;
 
   font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
@@ -134,3 +134,52 @@ body {
   background-color: var(--main-color-neutral);
 }
 
+
+
+.tab-bar {
+  position: fixed;
+  top: 0;
+  height: 2.5em;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: end;
+  gap: 8px;
+  margin: 0;
+  padding: 0 8px;
+  background-color: var(--main-color-dark);
+}
+
+.tab {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border-bottom: 0 solid transparent;
+  padding: 0 0.6em;
+  height: 1.8em;
+  box-shadow: none;
+  background-color: var(--main-color-semidark);
+
+  &:has(:checked) {
+    position: relative;
+    padding: 0.1em 0.7em 0;
+    height: 1.9em;
+    left: -0.05em;
+    background-color: var(--main-color-light);
+  }
+}
+
+.tab + .container {
+  display: none;
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 2.5em;
+  bottom: 0;
+  margin: 8px 8px 16px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.tab:has(:checked) + .container {
+  display: inline;
+}

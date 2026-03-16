@@ -1,0 +1,185 @@
+import { message } from "@tauri-apps/plugin-dialog";
+import { getReportMetadataAsync, getTableMetadataAsync, queryAsync, ToggledHierarchicalListItemMetadata } from "./util/query";
+import { Channel } from "@tauri-apps/api/core";
+import { FullMetadata as ColumnFullMetadata, createColumnHeaderHTML } from "./util/column";
+import { Cell, createCell, updateCell } from "./util/cell";
+import { listen } from "@tauri-apps/api/event";
+import { openDialogAsync } from "./util/dialog";
+
+const urlParams = new URLSearchParams(window.location.search);
+const urlParamSchemaOid: string | null = urlParams.get('schema_oid');
+const urlParamPageNum: string | null = urlParams.get('page_num');
+const urlParamPageSize: string | null = urlParams.get('page_size');
+if (urlParamSchemaOid) {
+    const schemaOid: number = parseInt(urlParamSchemaOid);
+    let pageNum: number = urlParamPageNum ? parseInt(urlParamPageNum) : 1;
+    let maxPageNum: number = 100; // TODO dynamically query this value when refreshing cells
+    let pageSize: number = urlParamPageSize ? parseInt(urlParamPageSize) : 2000;
+
+    let filters: [string, number][] = [];
+    urlParams.forEach((urlParamValue, urlParamKey) => {
+        if (urlParamKey != 'schema_oid' && urlParamKey != 'page_num' && urlParamKey != 'page_size') {
+            filters.push([urlParamKey, parseInt(urlParamValue)]);
+        }
+    });
+
+
+    /**
+     * Reloads all cells in the schema.
+     */
+    function reloadAllCells() {
+        navigator.locks.request('page-content', async () => {
+            console.debug('Here1');
+
+            // Reset the table
+            const pageContentElem: HTMLTableElement = document.getElementById('page-content') as HTMLTableElement;
+            pageContentElem.innerHTML = '';
+            const pageContentBody: HTMLElement = document.createElement('tbody');
+            pageContentElem.appendChild(pageContentBody);
+            const pageContentHead: HTMLElement = document.createElement('thead');
+            pageContentElem.appendChild(pageContentHead);
+            const pageContentFoot: HTMLElement = document.createElement('tfoot');
+            pageContentElem.appendChild(pageContentFoot);
+
+            // Construct header
+            const columnHeaderRow: HTMLElement = document.createElement('th');
+            pageContentHead.appendChild(columnHeaderRow);
+            const columnChannel: Channel<ColumnFullMetadata> = new Channel<ColumnFullMetadata>((column) => {
+                console.debug(`COLUMN: ${JSON.stringify(cellChannel)}`);
+                const elem: HTMLTableCellElement = createColumnHeaderHTML(schemaOid, column);
+                elem.classList.add('resizable-column');
+                elem.classList.add('reorderable-column');
+                columnHeaderRow.appendChild(elem);
+            });
+
+            // Construct body
+            let currentRow: HTMLElement = pageContentBody;
+            const cellChannel: Channel<Cell & { maxIndex: number }> = new Channel<Cell & { maxIndex: number }>((cell) => {
+                console.debug(`CELL: ${JSON.stringify(cellChannel)}`);
+                if ('maxIndex' in cell) {
+                    maxPageNum = 1 + Math.floor(cell.maxIndex / pageSize);
+                } else {
+                    const elem: HTMLTableRowElement | HTMLTableCellElement = createCell(cell, true, filters);
+                    if (elem.nodeName == 'TR') {
+                        currentRow = elem;
+                        pageContentBody.appendChild(elem);
+                    } else {
+                        currentRow.appendChild(elem);
+                    }
+                }
+            });
+
+            // Query for columns and cells
+            await queryAsync({
+                cells: {
+                    schemaOid: schemaOid,
+                    filters: filters,
+                    limit: {
+                        page: {
+                            num: pageNum,
+                            size: pageSize
+                        }
+                    },
+                    columnChannel: columnChannel,
+                    cellChannel: cellChannel
+                }
+            });
+
+            // Add button to add new column
+            const addNewColumnButton: HTMLTableCellElement = document.createElement('td');
+            addNewColumnButton.classList.add('clickable-text');
+            addNewColumnButton.innerText = 'Add New Column';
+            addNewColumnButton.addEventListener('click', () => {
+                openDialogAsync({
+                    createColumn: {
+                        schemaOid: schemaOid,
+                        columnOrdering: null
+                    }
+                });
+            });
+            columnHeaderRow.appendChild(addNewColumnButton);
+
+            // Enable or disable page navigation buttons
+            const firstPageButton: HTMLButtonElement = document.getElementById('first-page-button') as HTMLButtonElement;
+            firstPageButton.disabled = pageNum <= 1;
+            const prevPageButton: HTMLButtonElement = document.getElementById('prev-page-button') as HTMLButtonElement;
+            prevPageButton.disabled = pageNum <= 1;
+            const nextPageButton: HTMLButtonElement = document.getElementById('next-page-button') as HTMLButtonElement;
+            nextPageButton.disabled = pageNum >= maxPageNum;
+            const lastPageButton: HTMLButtonElement = document.getElementById('last-page-button') as HTMLButtonElement;
+            lastPageButton.disabled = pageNum >= maxPageNum;
+        });
+    }
+
+
+    window.addEventListener("DOMContentLoaded", () => {
+        reloadAllCells();
+
+        // Listen for manual input of page number
+        const pageNumInput: HTMLInputElement = document.getElementById('page-num-input') as HTMLInputElement;
+        pageNumInput.value = `${pageNum}`;
+        pageNumInput.addEventListener('input', () => {
+            const newPageNum: number = parseInt(pageNumInput.value);
+            if (newPageNum > 0 && isFinite(newPageNum)) {
+                pageNum = newPageNum;
+                reloadAllCells();
+            } else {
+                pageNumInput.value = `${pageNum}`;
+            }
+        });
+
+        // Listen for manual input of page size
+        const pageSizeInput: HTMLInputElement = document.getElementById('page-size-input') as HTMLInputElement;
+        pageSizeInput.value = `${pageSize}`;
+        pageSizeInput.addEventListener('input', () => {
+            const newPageSize: number = parseInt(pageSizeInput.value);
+            if (newPageSize > 0 && isFinite(newPageSize)) {
+                pageSize = newPageSize;
+                reloadAllCells();
+            } else {
+                pageSizeInput.value = `${pageSize}`;
+            }
+        });
+
+        // Listen for buttons adjusting page number
+        const firstPageButton: HTMLElement = document.getElementById('first-page-button') as HTMLElement;
+        firstPageButton.addEventListener('click', () => {
+            pageNum = 1;
+            reloadAllCells();
+        });
+        const prevPageButton: HTMLElement = document.getElementById('prev-page-button') as HTMLElement;
+        prevPageButton.addEventListener('click', () => {
+            pageNum = Math.max(pageNum - 1, 1);
+            reloadAllCells();
+        });
+        const nextPageButton: HTMLElement = document.getElementById('next-page-button') as HTMLElement;
+        nextPageButton.addEventListener('click', () => {
+            pageNum = Math.min(pageNum + 1, maxPageNum);
+            reloadAllCells();
+        });
+        const lastPageButton: HTMLElement = document.getElementById('last-page-button') as HTMLElement;
+        lastPageButton.addEventListener('click', () => {
+            pageNum = maxPageNum;
+            reloadAllCells();
+        });
+    });
+
+    listen<number>('schema', (e) => {
+        if (e.payload == schemaOid) {
+            reloadAllCells();
+        }
+    });
+    listen<number>('table', (e) => {
+        if (e.payload == schemaOid) {
+            reloadAllCells();
+        }
+    });
+    listen<number>('report', (e) => {
+        if (e.payload == schemaOid) {
+            reloadAllCells();
+        }
+    });
+    listen<Cell>('cell', (e) => {
+        updateCell(e.payload, true);
+    });
+}

@@ -45,7 +45,7 @@ type ObjectCell = {
     valueOid: CellOid,
     label: string | null,
     objectSchemaOid: number,
-    objectRowOid: number | null,
+    objectQueryString: string | null,
     validationFailures: ValidationFailures
 };
 type SelectEntryCell = {
@@ -63,6 +63,10 @@ type MultiselectEntryCell = {
     multiselectRowOid: number[],
     validationFailures: ValidationFailures
 };
+type AddNewRowButtonCell = {
+    tableOid: number,
+    columnSpan: number
+};
 
 export type Cell = { row: RowCell } 
 | { readonly: ReadonlyCell } 
@@ -70,9 +74,23 @@ export type Cell = { row: RowCell }
 | { primitiveEntry: PrimitiveEntryCell } 
 | { object: ObjectCell } 
 | { selectEntry: SelectEntryCell } 
-| { multiselectEntry: MultiselectEntryCell };
+| { multiselectEntry: MultiselectEntryCell }
+| { addNewRowButton: AddNewRowButtonCell };
 
 export type Blob = { blobOid: CellOid };
+
+
+
+let columnValueWorkers: {[key: number]: Worker} = {};
+
+function getColumnValueWorker(schemaOid: number) {
+    if (!columnValueWorkers[schemaOid]) {
+        columnValueWorkers[schemaOid] = new Worker('./workers/queryColumnValues');
+    }
+    return columnValueWorkers[schemaOid];
+}
+
+
 
 /**
  * Add a tooltip to an HTML element.
@@ -90,6 +108,8 @@ function addValidationFailureTooltips(elem: HTMLElement, validationFailures: Val
         validationFailures.forEach((validationFailure) => addTooltip(elem, validationFailure.message));
     }
 }
+
+
 
 function updateRowIndexCell(cell: RowCell, elem: HTMLTableCellElement) {
     elem.innerText = `${cell.index}`;
@@ -169,7 +189,7 @@ function updatePrimitiveEntryCell(cell: PrimitiveEntryCell, elem: HTMLTableCellE
                 title: 'Upload File to DungeonDB'
             });
             if (filepath) {
-                let worker: Worker = new Worker('./workers/action');
+                let worker: Worker = new Worker('./workers/action', { type: 'module' });
                 worker.onerror = async function (event) {
                     await message(event.error, {
                         title: 'An error occurred while uploading file.',
@@ -195,7 +215,7 @@ function updatePrimitiveEntryCell(cell: PrimitiveEntryCell, elem: HTMLTableCellE
                 title: 'Download File from DungeonDB'
             });
             if (filePath) {
-                let worker: Worker = new Worker('./workers/downloadBlob');
+                let worker: Worker = new Worker('./workers/downloadBlob', { type: 'module' });
                 worker.onerror = async function (event) {
                     await message(event.error, {
                         title: 'An error occurred while downloading file.',
@@ -253,7 +273,7 @@ function updatePrimitiveEntryCell(cell: PrimitiveEntryCell, elem: HTMLTableCellE
                 pickerMode: 'image'
             });
             if (filepath) {
-                let worker: Worker = new Worker('./workers/action');
+                let worker: Worker = new Worker('./workers/action', { type: 'module' });
                 worker.onerror = async function (event) {
                     await message(event.error, {
                         title: 'An error occurred while uploading file.',
@@ -277,7 +297,7 @@ function updatePrimitiveEntryCell(cell: PrimitiveEntryCell, elem: HTMLTableCellE
             elem.innerText = 'Upload Image';
         } else {
             // Attempt to display image
-            let base64Worker: Worker = new Worker('./workers/getBlobBase64');
+            let base64Worker: Worker = new Worker('./workers/getBlobBase64', { type: 'module' });
             base64Worker.onmessage = async function (event) {
                 const imgBase64: string = event.data;
                 const imgBinary: Uint8Array = Uint8Array.fromBase64(imgBase64);
@@ -365,25 +385,47 @@ function updatePrimitiveEntryCell(cell: PrimitiveEntryCell, elem: HTMLTableCellE
 
 function updateObjectCell(cell: ObjectCell, elem: HTMLTableCellElement) {
     elem.classList.add('clickable-text');
-    if (cell.objectRowOid == null)
+    if (cell.objectQueryString == null)
         elem.classList.add('cell-null');
     elem.innerText = cell.label ?? '';
 
     elem.addEventListener('click', async () => {
-        // Open object dialog
-        await openDialogAsync({
-            object: {
-                title: cell.label ?? '',
-                queryString: `schema_oid=${cell.objectSchemaOid}&`
-            }
-        });
+        if (cell.objectQueryString) {
+            // Open object dialog
+            await openDialogAsync({
+                object: {
+                    title: cell.label ?? '',
+                    queryString: `schema_oid=${cell.objectSchemaOid}&${cell.objectQueryString}`
+                }
+            });
+        } else {
+            await executeAsync({
+                editCellContents: {
+                    object: {
+                        cellOid: cell.cellOid,
+                        valueOid: cell.valueOid,
+                        label: null,
+                        objectSchemaOid: cell.objectSchemaOid,
+                        objectQueryString: '',
+                        validationFailures: []
+                    }
+                }
+            })
+            .catch(async e => {
+                await message(e, {
+                    title: "Unable to create object.",
+                    kind: 'error'
+                });
+            });
+        }
     });
 
     addValidationFailureTooltips(elem, cell.validationFailures);
 }
 
 function updateSelectEntryCell(cell: SelectEntryCell, elem: HTMLTableCellElement) {
-
+    const selectNode: HTMLSelectElement = document.createElement('select');
+    
 
     addValidationFailureTooltips(elem, cell.validationFailures);
 }
@@ -394,7 +436,7 @@ function updateMultiselectEntryCell(cell: MultiselectEntryCell, elem: HTMLTableC
     addValidationFailureTooltips(elem, cell.validationFailures);
 }
 
-export function createCell(cell: Cell, isTable: boolean): HTMLTableCellElement | HTMLTableRowElement {
+export function createCell(cell: Cell, isTable: boolean, filters: [string, number][]): HTMLTableCellElement | HTMLTableRowElement {
     function createCellElement(cellOid: CellOid, callbackFn: (e: HTMLTableCellElement) => void) {
         const id: string = `schema${cellOid.schemaOid}-row${cellOid.rowOid}-column${cellOid.columnOid}`;
         const elem: HTMLTableCellElement = document.createElement('td');
@@ -429,6 +471,28 @@ export function createCell(cell: Cell, isTable: boolean): HTMLTableCellElement |
         return createCellElement(cell.multiselectEntry.cellOid, (elem) => {
             updateMultiselectEntryCell(cell.multiselectEntry, elem);
         });
+    } else if ('addNewRowButton' in cell) {
+        const row: HTMLTableRowElement = document.createElement('tr');
+        const elem: HTMLTableCellElement = document.createElement('td');
+        elem.innerText = 'Add New Row';
+        elem.classList.add('clickable-text');
+        elem.colSpan = 1 + cell.addNewRowButton.columnSpan;
+        elem.addEventListener('click', () => {
+            executeAsync({
+                createRow: {
+                    tableOid: cell.addNewRowButton.tableOid,
+                    rowOid: null
+                }
+            })
+            .catch(async (e) => {
+                await message(e, {
+                    title: 'An error occurred while adding new row.',
+                    kind: 'error'
+                });
+            })
+        });
+        row.appendChild(elem);
+        return row;
     } else {
         const row: HTMLTableRowElement = document.createElement('tr');
         const id: string = `schema${cell.row.schemaOid}-row${cell.row.rowOid}-index`;
@@ -442,7 +506,7 @@ export function createCell(cell: Cell, isTable: boolean): HTMLTableCellElement |
     }
 }
 
-function updateCell(cell: Cell, isTable: boolean) {
+export function updateCell(cell: Cell, isTable: boolean) {
     function getCellElement(cellOid: CellOid, callbackFn: (e: HTMLTableCellElement) => void) {
         const id: string = `schema${cellOid.schemaOid}-row${cellOid.rowOid}-column${cellOid.columnOid}`;
         navigator.locks.request(id, () => {
@@ -480,6 +544,8 @@ function updateCell(cell: Cell, isTable: boolean) {
         getCellElement(cell.multiselectEntry.cellOid, (elem) => {
             updateMultiselectEntryCell(cell.multiselectEntry, elem);
         });
+    } else if ('addNewRowButton' in cell) {
+        // Ignore. An update should not make any changes to this cell.
     } else {
         const id: string = `schema${cell.row.schemaOid}-row${cell.row.rowOid}-index`;
         navigator.locks.request(id, () => {
@@ -493,7 +559,3 @@ function updateCell(cell: Cell, isTable: boolean) {
         });
     }
 }
-
-listen<Cell>('cell', (e) => {
-    updateCell(e.payload);
-});

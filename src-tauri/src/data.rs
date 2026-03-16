@@ -12,6 +12,7 @@ mod table;
 mod report;
 mod column_type;
 mod column;
+mod row;
 mod cell;
 
 #[tauri::command]
@@ -122,6 +123,7 @@ pub fn download_blob(blob: cell::Blob, filepath: String) -> Result<(), Error> {
 
 
 #[derive(Deserialize)]
+#[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum Action {
     CreateTable(table::FullMetadata),
     EditTable(table::FullMetadata),
@@ -137,6 +139,19 @@ pub enum Action {
     RestoreColumn {
         trash_column_oid: i64,
         untrash_column_oid: i64
+    },
+
+    CreateRow {
+        table_oid: i64,
+        row_oid: Option<i64>
+    },
+    TrashRow {
+        table_oid: i64,
+        row_oid: i64 
+    },
+    UntrashRow {
+        table_oid: i64,
+        row_oid: i64
     },
 
     EditCellContents(cell::Cell),
@@ -278,6 +293,41 @@ impl Action {
 
                 // Send signal to update schema
                 // TODO
+            }
+
+
+
+            Self::CreateRow { table_oid, row_oid } => {
+                // Create the row
+                let row_oid: i64 = row::insert(table_oid, row_oid)?;
+                record_action(Self::TrashRow {
+                    table_oid,
+                    row_oid
+                }, is_forward);
+
+                // Send signal to update table
+                app.emit(UPDATE_TABLE_SIGNAL, table_oid)?;
+            }
+            Self::TrashRow { table_oid, row_oid } => {
+                if let Some((table_oid, row_oid)) = row::trash(table_oid, row_oid)? {
+                    record_action(Self::UntrashRow {
+                        table_oid,
+                        row_oid
+                    }, is_forward);
+
+                    // Send signal to update table
+                    app.emit(UPDATE_TABLE_SIGNAL, table_oid)?;
+                }
+            }
+            Self::UntrashRow { table_oid, row_oid } => {
+                row::untrash(table_oid, row_oid)?;
+                record_action(Self::TrashRow {
+                    table_oid,
+                    row_oid
+                }, is_forward);
+
+                // Send signal to update table
+                app.emit(UPDATE_TABLE_SIGNAL, table_oid)?;
             }
 
 

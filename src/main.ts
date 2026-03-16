@@ -1,48 +1,82 @@
+import { listen } from "@tauri-apps/api/event";
 import { openDialogAsync } from "./util/dialog";
-import { HierarchicalListItemMetadata } from "./util/query";
+import { HierarchicalListItemMetadata, queryAsync } from "./util/query";
+import { FullMetadata as TableFullMetadata } from "./util/table";
+import { FullMetadata as ReportFullMetadata } from "./util/report";
+import { Channel } from "@tauri-apps/api/core";
+import { executeAsync } from "./util/action";
+import { message } from "@tauri-apps/plugin-dialog";
 
 function loadTables() {
+    // Disable the open/edit/delete buttons
+    const openButton: HTMLButtonElement = document.getElementById('open-table-button') as HTMLButtonElement;
+    openButton.disabled = true;
+    const editButton: HTMLButtonElement = document.getElementById('edit-table-button') as HTMLButtonElement;
+    editButton.disabled = true;
+    const deleteButton: HTMLButtonElement = document.getElementById('delete-table-button') as HTMLButtonElement;
+    deleteButton.disabled = true;
+
     // Clear the list of tables
     let tablesList: HTMLDivElement = document.querySelector('#tables-container .list') as HTMLDivElement;
     tablesList.innerHTML = '<div class="empty-list-item">Click "New" to Define a New Table</div>';
 
     // Query the list of tables
-    let worker: Worker = new Worker('./util/workers/queryTables');
-    worker.onmessage = function (event) {
-        const table: HierarchicalListItemMetadata = event.data;
-        const tableId: string = `table${table.oid}-master${table.masterOid}`;
-        
-        const tableElem: HTMLLabelElement = document.createElement('label');
-        tableElem.classList.add('list-item');
-        tableElem.innerText = `${'&nbsp;&nbsp;'.repeat(table.level)}${table.name}`;
-        tableElem.insertAdjacentHTML('afterbegin', `<input type="radio" name="tables" id="${tableId}" value="${table.oid}:${table.masterOid}">`);
-        tableElem.htmlFor = tableId;
+    queryAsync({
+        tables: {
+            channel: new Channel<HierarchicalListItemMetadata>((table) => {
+                const tableId: string = `table${table.oid}-master${table.masterOid}`;
+                console.debug(JSON.stringify(table));
+                
+                const tableElem: HTMLLabelElement = document.createElement('label');
+                tableElem.classList.add('list-item');
+                tableElem.innerText = `${'  '.repeat(table.level)}${table.name}`;
+                tableElem.insertAdjacentHTML('afterbegin', `<input type="radio" name="tables" id="${tableId}" value="${table.oid}:${table.masterOid}">`);
+                tableElem.htmlFor = tableId;
 
-        tablesList.appendChild(tableElem);
-    };
-    worker.postMessage(null);
+                tableElem.addEventListener('input', () => {
+                    openButton.disabled = false;
+                    editButton.disabled = false;
+                    deleteButton.disabled = false;
+                });
+
+                tablesList.appendChild(tableElem);
+            })
+        }
+    });
+}
+
+function getSelectedTableOid(): number | null {
+    const selectedTableOption: HTMLOptionElement | null = document.querySelector('[name=tables]:checked') as HTMLOptionElement;
+    if (selectedTableOption) {
+        const selectedTableOid: number = parseInt(selectedTableOption.value.split(':')[0]);
+        if (!isNaN(selectedTableOid)) {
+            return selectedTableOid;
+        }
+    }
+    return null;
 }
 
 function loadReports() {
-    // Clear the list of tables
+    // Clear the list of reports
     let reportsList: HTMLDivElement = document.querySelector('#reports-container .list') as HTMLDivElement;
     reportsList.innerHTML = '<div class="empty-list-item">Click "New" to Define a New Report</div>';
 
-    // Query the list of tables
-    let worker: Worker = new Worker('./util/workers/queryReports');
-    worker.onmessage = function (event) {
-        const report: HierarchicalListItemMetadata = event.data;
-        const reportId: string = `report${report.oid}-master${report.masterOid}`;
+    // Query the list of reports
+    queryAsync({
+        reports: {
+            channel: new Channel<HierarchicalListItemMetadata>((report) => {
+                const reportId: string = `report${report.oid}-master${report.masterOid}`;
         
-        const reportElem: HTMLLabelElement = document.createElement('label');
-        reportElem.classList.add('list-item');
-        reportElem.innerText = `${'&nbsp;&nbsp;'.repeat(report.level)}${report.name}`;
-        reportElem.insertAdjacentHTML('afterbegin', `<input type="radio" name="reports" id="${reportId}" value="${report.oid}:${report.masterOid}">`);
-        reportElem.htmlFor = reportId;
+                const reportElem: HTMLLabelElement = document.createElement('label');
+                reportElem.classList.add('list-item');
+                reportElem.innerText = `${'  '.repeat(report.level)}${report.name}`;
+                reportElem.insertAdjacentHTML('afterbegin', `<input type="radio" name="reports" id="${reportId}" value="${report.oid}:${report.masterOid}">`);
+                reportElem.htmlFor = reportId;
 
-        reportsList.appendChild(reportElem);
-    };
-    worker.postMessage(null);
+                reportsList.appendChild(reportElem);
+            })
+        }
+    });
 }
 
 
@@ -51,12 +85,51 @@ window.addEventListener("DOMContentLoaded", () => {
     // Add button listeners
     document.getElementById('new-table-button')?.addEventListener('click', async (_) => {
         await openDialogAsync({
-        createTable: null
+            createTable: null
         });
+    });
+    document.getElementById('open-table-button')?.addEventListener('click', async (_) => {
+        const selectedTableOption: HTMLOptionElement | null = document.querySelector('[name=tables]:checked') as HTMLOptionElement;
+        if (selectedTableOption) {
+            const selectedTableOid: number = parseInt(selectedTableOption.value.split(':')[0]);
+            const selectedTableName: string = selectedTableOption.innerText.trim();
+            if (!isNaN(selectedTableOid)) {
+                await openDialogAsync({
+                    schema: {
+                        title: selectedTableName,
+                        queryString: `schema_oid=${selectedTableOid}`
+                    }
+                });
+            }
+        }
+    });
+    document.getElementById('edit-table-button')?.addEventListener('click', async (_) => {
+        const selectedTableOid: number | null = getSelectedTableOid();
+        if (selectedTableOid) {
+            await openDialogAsync({
+                editTable: {
+                    tableOid: selectedTableOid
+                }
+            });
+        }
+    });
+    document.getElementById('delete-table-button')?.addEventListener('click', async (_) => {
+        const selectedTableOid: number | null = getSelectedTableOid();
+        if (selectedTableOid) {
+            await executeAsync({
+                trashSchema: selectedTableOid
+            })
+            .catch(async (e) => {
+                await message(e, {
+                    title: 'An error occurred while deleting table.',
+                    kind: 'error'
+                });
+            });
+        }
     });
     document.getElementById('new-report-button')?.addEventListener('click', async (_) => {
         await openDialogAsync({
-        createReport: null
+            createReport: null
         });
     });
 
@@ -64,3 +137,11 @@ window.addEventListener("DOMContentLoaded", () => {
     loadTables();
     loadReports();
 });
+
+
+listen<number>('schema', () => {
+    loadTables();
+    loadReports();
+});
+listen<number>('table', loadTables);
+listen<number>('report', loadReports);
