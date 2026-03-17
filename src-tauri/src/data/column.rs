@@ -273,7 +273,7 @@ impl FullMetadata {
                         | column_type::Primitive::Date
                         | column_type::Primitive::Datetime => "REAL",
                         column_type::Primitive::File
-                        | column_type::Primitive::Image => "BLOB"
+                        | column_type::Primitive::Image => "INTEGER REFERENCES METADATA_FILE (OID) ON UPDATE CASCADE ON DELETE SET NULL"
                     }
                 );
                 trans.execute(&cmd, [])?;
@@ -352,7 +352,288 @@ impl FullMetadata {
         // Create a new column
         self._create(&trans)?;
 
-        // TODO copy data from old column to new column
+        if old_column.column_type == self.column_type {
+            // Do a batch update to copy over the data from the old column
+            match self.column_type {
+                column_type::ColumnType::Multiselect { table_oid, .. } => {
+                    let sql_insert: String = format!(
+                        "INSERT INTO MULTISELECT{} (TABLE{}_OID, TABLE{}_OID) SELECT TABLE{}_OID, TABLE{}_OID FROM MULTISELECT{}",
+                        self.oid,
+                        table_oid,
+                        self.schema.oid,
+                        table_oid,
+                        self.schema.oid,
+                        old_column.oid
+                    );
+                    trans.execute(&sql_insert, [])?;
+                }
+                column_type::ColumnType::Primitive(_)
+                | column_type::ColumnType::Object { .. }
+                | column_type::ColumnType::Select { .. } => {
+                    let sql_update: String = format!(
+                        "UPDATE TABLE{} SET COLUMN{} = COLUMN{}",
+                        self.schema.oid,
+                        self.oid,
+                        old_column.oid
+                    );
+                    trans.execute(&sql_update, [])?;
+                }
+            }
+        } else {
+            // Try to update each row individually, copying over the data from the old column
+            if let Some(sql_update) = match &self.column_type {
+                column_type::ColumnType::Primitive(prim) => {
+
+                }
+                column_type::ColumnType::Object { table_oid, .. } 
+                | column_type::ColumnType::Select { table_oid, .. } => {
+                    // Match rows in the new associated table on an individual basis, using the JSON label
+                    if let Some(json_label_expr) = match &old_column.column_type {
+                        column_type::ColumnType::Primitive(old_prim) => {
+                            let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
+                            match old_prim {
+                                column_type::Primitive::File 
+                                | column_type::Primitive::Image => None,
+                                column_type::Primitive::Date => Some(format!(r#"COALESCE('"' || DATE({old_column_label}, 'julianday') || '"', 'null')"#, old_column.oid)),
+                                column_type::Primitive::Datetime => Some(format!(r#"COALESCE('"' || STRFTIME('%FT%TZ', {old_column_label}, 'julianday') || '"', 'null')"#, old_column.oid)),
+                                column_type::Primitive::Checkbox => Some(format!(r#"CASE WHEN {old_column_label} IS NULL THEN 'null' WHEN {old_column_label} THEN 'true' ELSE 'false' END"#, old_column.oid, old_column.oid)),
+                                _ => Some(format!(r#"COALESCE('"' || CAST({old_column_label} AS TEXT) || '"', 'null')"#))
+                            }
+                        }
+                        column_type::ColumnType::Object { old_table_oid, .. } 
+                        | column_type::ColumnType::Select { old_table_oid, .. } => {
+                            if table_oid == old_table_oid {
+                                // Can be updated directly, rather than needing to use labels to identify rows
+                                let sql_update: String = format!(
+                                    "UPDATE TABLE{} SET COLUMN{} = COLUMN{}",
+                                    self.schema.oid,
+                                    self.oid,
+                                    old_column.oid
+                                );
+                                trans.execute(&sql_update, [])?;
+
+                                // Don't update rows individually
+                                None 
+                            } else {
+                                let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
+                                Some(format!("(SELECT JSON_LABEL FROM TABLE{old_table_oid}_SURROGATE WHERE OID = {old_column_label})"))
+                            }
+                        }
+                        column_type::ColumnType::Multiselect { old_table_oid, .. } => {
+                            if table_oid == old_table_oid {
+                                // Can be updated more or less directly, rather than needing to use labels to identify rows
+                                // Pick which one to assign to the new column arbitrarily
+                                let sql_update: String = format!(
+                                    "UPDATE TABLE{} t SET t.COLUMN{} = (SELECT MIN(TABLE{table_oid}_OID) FROM MULTISELECT{} WHERE TABLE{}_OID = t.OID)",
+                                    self.schema.oid,
+                                    old_column.oid,
+                                    old_column.schema.oid
+                                );
+                                trans.execute(&sql_update, [])?;
+
+                                // Don't update rows individually
+                                None 
+                            } else {
+                                // Use the array of selected rows as the label
+                                Some(format!(
+                                    "(SELECT GROUP_CONCAT('[' || s.JSON_LABEL || ']') FROM MULTISELECT{} m INNER JOIN TABLE{old_table_oid}_SURROGATE s ON s.OID = m.TABLE{old_table_oid}_OID WHERE m.TABLE{}_OID = t.OID)", 
+                                    old_column.oid,
+                                    old_column.schema.oid
+                                ))
+                            }
+                        }
+                        _ => None
+                    } {
+                        Some(format!(
+                            "
+                            UPDATE TABLE{} t SET
+                                t.COLUMN{} = {json_label_expr}
+                            WHERE t.OID = ?1
+                            "
+                        ))
+                    } else {
+                        None
+                    }
+                }
+                column_type::ColumnType::Multiselect { table_oid, .. } => {
+                    // Match rows in the new associated table on an individual basis, using the JSON label
+                    match &old_column.column_type {
+                        column_type::ColumnType::Primitive(old_prim) => {
+                            let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
+                            if let Some(json_label_expr) = match old_prim {
+                                column_type::Primitive::File 
+                                | column_type::Primitive::Image => None,
+                                column_type::Primitive::Date => Some(format!(r#"COALESCE('"' || DATE({old_column_label}, 'julianday') || '"', 'null')"#, old_column.oid)),
+                                column_type::Primitive::Datetime => Some(format!(r#"COALESCE('"' || STRFTIME('%FT%TZ', {old_column_label}, 'julianday') || '"', 'null')"#, old_column.oid)),
+                                column_type::Primitive::Checkbox => Some(format!(r#"CASE WHEN {old_column_label} IS NULL THEN 'null' WHEN {old_column_label} THEN 'true' ELSE 'false' END"#, old_column.oid, old_column.oid)),
+                                _ => Some(format!(r#"COALESCE('"' || CAST({old_column_label} AS TEXT) || '"', 'null')"#))
+                            } {
+                                Some(format!(
+                                    "
+                                    INSERT INTO MULTISELECT{} (TABLE{}_OID, TABLE{}_OID) VALUES (?1, (SELECT t.OID FROM TABLE{table_oid}_SURROGATE t WHERE t.JSON_LABEL = {json_label_expr}))
+                                    ",
+                                    self.oid,
+                                    self.schema.oid,
+                                    table_oid
+                                ))
+                            } else {
+                                None
+                            }
+                        }
+                        column_type::ColumnType::Object { old_table_oid, .. } 
+                        | column_type::ColumnType::Select { old_table_oid, .. } => {
+                            if table_oid == old_table_oid {
+                                // Can be updated directly, rather than needing to use labels to identify rows
+                                let sql_update: String = format!(
+                                    "
+                                    INSERT INTO MULTISELECT{} (TABLE{}_OID, TABLE{}_OID) 
+                                    SELECT 
+                                        OID,
+                                        COLUMN{}
+                                    FROM TABLE{}",
+                                    self.oid,
+                                    self.schema.oid,
+                                    table_oid,
+                                    old_column.oid,
+                                    self.schema.oid
+                                );
+                                trans.execute(&sql_update, [])?;
+
+                                // Don't update rows individually
+                                None 
+                            } else {
+                                let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
+                                Some(format!(
+                                    "
+                                    INSERT INTO MULTISELECT{} (TABLE{}_OID, TABLE{}_OID) VALUES (
+                                        ?1, 
+                                        (
+                                            SELECT OID FROM TABLE{table_oid}_SURROGATE WHERE JSON_LABEL = (
+                                                SELECT 
+                                                    JSON_LABEL 
+                                                FROM TABLE{} t 
+                                                INNER JOIN TABLE{old_table_oid}_SURROGATE s ON s.OID = {old_column_label}
+                                                WHERE t.OID = ?1
+                                            )
+                                        )
+                                    )
+                                    ",
+                                    self.oid,
+                                    self.schema.oid,
+                                    table_oid,
+                                    self.schema.oid
+                                ))
+                            }
+                        }
+                        column_type::ColumnType::Multiselect { old_table_oid, .. } => {
+                            Some(format!(
+                                "
+                                INSERT INTO MULTISELECT{} (TABLE{}_OID, TABLE{table_oid}_OID) 
+                                SELECT
+                                    u.TABLE{}_OID, 
+                                    (
+                                        SELECT t.OID FROM TABLE{table_oid}_SURROGATE t WHERE t.JSON_LABEL = (
+                                            SELECT JSON_LABEL FROM TABLE{old_table_oid}_SURROGATE WHERE OID = u.TABLE{old_table_oid}_OID
+                                        )
+                                    )
+                                FROM MULTISELECT{} u
+                                WHERE u.TABLE{}_OID = ?1
+                                ",
+                                self.oid,
+                                self.schema.oid,
+                                self.schema.oid,
+                                old_column.oid,
+                                self.schema.oid
+                            ))
+                        }
+                        _ => None
+                    }
+                }
+                _ => {} // No copy necessary
+            } {
+                // Iterate over each row and try to update each row on an individual basis
+            }
+
+
+            match &old_column.column_type {
+                column_type::ColumnType::Primitive(old_prim) => {
+                    match old_prim {
+                        column_type::Primitive::File 
+                        | column_type::Primitive::Image => {
+                            // Only copy if the new column type is also a File
+                            match &self.column_type {
+                                column_type::ColumnType::Primitive(prim) => {
+                                    match prim {
+                                        column_type::Primitive::File 
+                                        | column_type::Primitive::Image => {
+
+                                        }
+                                        _ => {} // Apples to oranges
+                                    }
+                                }
+                                _ => {} // Apples to oranges
+                            }
+                        }
+                        _ => {
+                            let label_expr: String = format!("CAST()")
+                            
+                        }
+                    }
+                },
+                column_type::ColumnType::Object { table_oid: old_table_oid, .. } => {
+                    match &self.column_type {
+                        column_type::ColumnType::Primitive(prim) => {
+
+                        }
+                        column_type::ColumnType::Object { table_oid, .. } => {
+
+                        }
+                        column_type::ColumnType::Select { table_oid, .. } => {
+
+                        }
+                        column_type::ColumnType::Multiselect { table_oid, .. } => {
+
+                        }
+                        _ => {} // No copy necessary
+                    }
+                },
+                column_type::ColumnType::Select { table_oid: old_table_oid, .. } => {
+                    match &self.column_type {
+                        column_type::ColumnType::Primitive(prim) => {
+
+                        }
+                        column_type::ColumnType::Object { table_oid, .. } => {
+
+                        }
+                        column_type::ColumnType::Select { table_oid, .. } => {
+
+                        }
+                        column_type::ColumnType::Multiselect { table_oid, .. } => {
+
+                        }
+                        _ => {} // No copy necessary
+                    }
+                },
+                column_type::ColumnType::Multiselect { table_oid: old_table_oid, .. } => {
+                    match &self.column_type {
+                        column_type::ColumnType::Primitive(prim) => {
+
+                        }
+                        column_type::ColumnType::Object { table_oid, .. } => {
+
+                        }
+                        column_type::ColumnType::Select { table_oid, .. } => {
+
+                        }
+                        column_type::ColumnType::Multiselect { table_oid, .. } => {
+
+                        }
+                        _ => {} // No copy necessary
+                    }
+                },
+                _ => {} // No copy necessary
+            }
+        }
 
         // Commit the transaction
         trans.commit()?;
