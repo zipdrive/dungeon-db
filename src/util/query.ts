@@ -2,7 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { FullMetadata as TableFullMetadata } from "./table";
 import { FullMetadata as ReportFullMetadata } from "./report";
 import { FullMetadata as ColumnFullMetadata } from "./column";
-import { Blob, Cell } from "./cell";
+import { Cell, File } from "./cell";
 import { message } from "@tauri-apps/plugin-dialog";
 
 export type FlatListItemMetadata = {
@@ -89,12 +89,14 @@ export async function getColumnAsync(oid: number): Promise<ColumnFullMetadata> {
     return await invoke('get_column', { columnOid: oid });
 }
 
-export async function getFileBase64Async(blob: Blob): Promise<string> {
-    return await invoke('get_file_base64', { blob: blob });
+export async function getFileBase64Async(data: { fileOid: number }): Promise<string> {
+    return await invoke('get_file_base64', data);
 }
 
-export async function downloadFileAsync(blob: Blob, filepath: string): Promise<void> {
-    await invoke('download_blob', { blob: blob, filepath: filepath });
+export async function downloadFileAsync(data: { fileOid: number, filepath: string }): Promise<void> {
+    await invoke('download_file', data);
 }
 
-export async function uploadFileAsync()
+export async function uploadFileAsync(data: { file: File, filepath: string }): Promise<number> {
+    return await invoke('upload_file', data);
+}

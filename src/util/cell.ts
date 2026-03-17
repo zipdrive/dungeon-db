@@ -197,65 +197,6 @@ function updatePrimitiveEntryCell(cell: PrimitiveEntryCell, elem: HTMLTableCellE
             });
         });
 
-    } else if (cell.primitiveType == 'file') {
-
-    } else if (cell.primitiveType == 'image') {
-        /**
-         * Uploads an image from the filesystem to the backend.
-         */
-        async function uploadImageAsync() {
-            const filepath = await open({
-                title: 'Upload Image to DungeonDB',
-                pickerMode: 'image'
-            });
-            if (filepath) {
-                let worker: Worker = new Worker('./workers/action', { type: 'module' });
-                worker.onerror = async function (event) {
-                    await message(event.error, {
-                        title: 'An error occurred while uploading file.',
-                        kind: 'error'
-                    });
-                };
-                worker.postMessage({
-                    uploadBlob: {
-                        blob: {
-                            blobOid: cell.valueOid
-                        },
-                        filepath: filepath
-                    }
-                });
-            }
-        }
-
-        elem.classList.add('clickable-text');
-        if (cell.label == null) {
-            // Display a simple link to upload an image
-            elem.innerText = 'Upload Image';
-        } else {
-            // Attempt to display image
-            let base64Worker: Worker = new Worker('./workers/getBlobBase64', { type: 'module' });
-            base64Worker.onmessage = async function (event) {
-                const imgBase64: string = event.data;
-                const imgBinary: Uint8Array = Uint8Array.fromBase64(imgBase64);
-                const mimeType: FileTypeResult | undefined = await fileTypeFromBuffer(imgBinary);
-                if (mimeType && mimeType.mime.startsWith('image/')) {
-                    // Display image thumbnail
-                    let img: HTMLImageElement = document.createElement('img');
-                    img.src = `data:${mimeType.mime};base64,${imgBase64}`;
-                    elem.appendChild(img);
-                } else {
-                    // Display warning that file is not an image
-                    elem.classList.add('cell-error');
-                    elem.innerText = '⚠';
-                    addTooltip(elem, mimeType ? `Detected non-image MIME type "${mimeType.mime}."` : 'Unable to detect image type.');
-                }
-            };
-            base64Worker.postMessage({ blobOid: cell.valueOid });
-        }
-
-        // When the cell is clicked, prompt for an image to upload
-        elem.addEventListener('click', uploadImageAsync);
-
     } else {
         if (isTable) { // Make contents of table cell editable
             elem.contentEditable = 'true';
@@ -316,6 +257,7 @@ function updatePrimitiveEntryCell(cell: PrimitiveEntryCell, elem: HTMLTableCellE
         }
     }
 
+    // Add validation failure tooltips
     addValidationFailureTooltips(elem, cell.validationFailures);
 }
 
@@ -334,7 +276,27 @@ function updateFileEntryCell(cell: FileEntryCell, elem: HTMLTableCellElement) {
                 }
             );
 
-            let worker: Worker = new Worker('./workers/action', { type: 'module' });
+            let worker: Worker = new Worker('./workers/uploadFile.ts', { type: 'module' });
+            worker.onmessage = async function (event) {
+                const fileOid: number = event.data;
+                await executeAsync({
+                    editCellContents: {
+                        fileEntry: {
+                            cellOid: cell.cellOid,
+                            valueOid: cell.valueOid,
+                            label: cell.label,
+                            fileOid: fileOid,
+                            validationFailures: []
+                        }
+                    }
+                })
+                .catch(async (e) => {
+                    await message(e, {
+                        title: 'An error occurred while updating cell with new file content.',
+                        kind: 'error'
+                    });
+                });
+            };
             worker.onerror = async function (event) {
                 await message(event.error, {
                     title: 'An error occurred while uploading file.',
@@ -365,7 +327,13 @@ function updateFileEntryCell(cell: FileEntryCell, elem: HTMLTableCellElement) {
             title: 'Download File from DungeonDB'
         });
         if (filepath) {
-            let worker: Worker = new Worker('./workers/downloadBlob', { type: 'module' });
+            let worker: Worker = new Worker('./workers/downloadBlob.ts', { type: 'module' });
+            worker.onmessage = async function () {
+                await message(`The file was successfully downloaded to "${filepath}".`, {
+                    title: 'Download completed successfully.',
+                    kind: 'info'
+                });
+            };
             worker.onerror = async function (event) {
                 await message(event.error, {
                     title: 'An error occurred while downloading file.',
@@ -379,7 +347,7 @@ function updateFileEntryCell(cell: FileEntryCell, elem: HTMLTableCellElement) {
         }
     }
 
-    if (cell.label == null) {
+    if (cell.fileOid == null) {
         // Display a simple link to upload a file
         elem.classList.add('clickable-text');
         elem.innerText = 'Upload File';
@@ -394,7 +362,7 @@ function updateFileEntryCell(cell: FileEntryCell, elem: HTMLTableCellElement) {
 
         // Display the size of the file
         let fileDescNode: HTMLSpanElement = document.createElement('span');
-        fileDescNode.innerText = cell.label;
+        fileDescNode.innerText = cell.label ?? '';
         gridDiv.appendChild(fileDescNode);
 
         // Button for uploading a file
@@ -414,8 +382,39 @@ function updateFileEntryCell(cell: FileEntryCell, elem: HTMLTableCellElement) {
         fileDownloadNode.addEventListener('click', downloadFileAsync);
         fileDownloadNode.tabIndex = 0;
         gridDiv.appendChild(fileDownloadNode);
+
+        // Attempt to display image, if an image MIME type is detected
+        let base64Worker: Worker = new Worker('./workers/getFileBase64.ts', { type: 'module' });
+        base64Worker.onmessage = async function (event) {
+            const imgBase64: string = event.data;
+            const imgBinary: Uint8Array = Uint8Array.fromBase64(imgBase64);
+            const mimeType: FileTypeResult | undefined = await fileTypeFromBuffer(imgBinary);
+            if (mimeType && mimeType.mime.startsWith('image/')) {
+                // Move buttons to upload/download image to the bottom-right corner
+                let flexDiv: HTMLDivElement = document.createElement('div');
+                flexDiv.style.position = 'absolute';
+                flexDiv.style.left = '0';
+                flexDiv.style.right = '0';
+                flexDiv.style.bottom = '0';
+                flexDiv.style.display = 'flex';
+                flexDiv.style.justifyContent = 'flex-end';
+                flexDiv.style.alignItems = 'flex-end';
+                flexDiv.appendChild(fileUploadNode);
+                flexDiv.appendChild(fileDownloadNode);
+                elem.appendChild(flexDiv);
+
+                // Display image thumbnail
+                let img: HTMLImageElement = document.createElement('img');
+                img.src = `data:${mimeType.mime};base64,${imgBase64}`;
+                img.alt = cell.label ?? '';
+                gridDiv.replaceWith(img);
+            }
+        };
+        base64Worker.postMessage({ fileOid: cell.fileOid });
     }
 
+    // Add validation failure tooltips
+    addValidationFailureTooltips(elem, cell.validationFailures);
 }
 
 function updateObjectCell(cell: ObjectCell, elem: HTMLTableCellElement) {
@@ -434,6 +433,7 @@ function updateObjectCell(cell: ObjectCell, elem: HTMLTableCellElement) {
                 }
             });
         } else {
+            // If no object has been created for this cell, create an object for this cell
             await executeAsync({
                 editCellContents: {
                     object: {
@@ -455,19 +455,21 @@ function updateObjectCell(cell: ObjectCell, elem: HTMLTableCellElement) {
         }
     });
 
+    // Add validation failure tooltips
     addValidationFailureTooltips(elem, cell.validationFailures);
 }
 
 function updateSelectEntryCell(cell: SelectEntryCell, elem: HTMLTableCellElement) {
     const selectNode: HTMLSelectElement = document.createElement('select');
     
-
+    // Add validation failure tooltips
     addValidationFailureTooltips(elem, cell.validationFailures);
 }
 
 function updateMultiselectEntryCell(cell: MultiselectEntryCell, elem: HTMLTableCellElement) {
+    
 
-
+    // Add validation failure tooltips
     addValidationFailureTooltips(elem, cell.validationFailures);
 }
 
