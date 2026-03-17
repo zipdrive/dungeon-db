@@ -74,6 +74,13 @@ pub enum Cell {
         primitive_type: column_type::Primitive,
         validation_failures: Vec<FailedValidation>
     },
+    FileEntry {
+        cell_oid: CellOid,
+        value_oid: CellOid,
+        file_oid: Option<i64>,
+        label: Option<String>,
+        validation_failures: Vec<FailedValidation>
+    },
     Object {
         cell_oid: CellOid,
         value_oid: CellOid,
@@ -112,45 +119,82 @@ impl Cell {
         match column_metadata.column_type {
             column_type::ColumnType::Primitive(prim) => {
                 let conn = db::open()?;
-                let sql_select: String = match prim {
+                Ok(match prim {
                     column_type::Primitive::Text
-                    | column_type::Primitive::JSON => 
-                        format!("SELECT COLUMN{} FROM TABLE{} WHERE OID = ?1", value_oid.column_oid, value_oid.schema_oid),
+                    | column_type::Primitive::JSON => {
+                        let sql_select: String = format!("SELECT COLUMN{} FROM TABLE{} WHERE OID = ?1", value_oid.column_oid, value_oid.schema_oid);
+                        let label: Option<String> = conn.query_one(&sql_select, params![value_oid.row_oid], |row| row.get(0))?;
+                        Self::PrimitiveEntry { 
+                            cell_oid: value_oid.clone(), 
+                            value_oid, 
+                            label, 
+                            primitive_type: prim, 
+                            validation_failures: Vec::new() 
+                        }
+                    }
                     column_type::Primitive::Integer
                     | column_type::Primitive::Number
-                    | column_type::Primitive::Checkbox => 
-                        format!("SELECT CAST(COLUMN{} AS TEXT) FROM TABLE{} WHERE OID = ?1", value_oid.column_oid, value_oid.schema_oid),
-                    column_type::Primitive::Date => 
-                        format!("SELECT DATE(COLUMN{}, 'julianday') FROM TABLE{} WHERE OID = ?1", value_oid.column_oid, value_oid.schema_oid),
-                    column_type::Primitive::Datetime =>
-                        format!("SELECT STRFTIME('%FT%TZ', COLUMN{}, 'julianday') FROM TABLE{} WHERE OID = ?1", value_oid.column_oid, value_oid.schema_oid),
+                    | column_type::Primitive::Checkbox => {
+                        let sql_select: String = format!("SELECT CAST(COLUMN{} AS TEXT) FROM TABLE{} WHERE OID = ?1", value_oid.column_oid, value_oid.schema_oid);
+                        let label: Option<String> = conn.query_one(&sql_select, params![value_oid.row_oid], |row| row.get(0))?;
+                        Self::PrimitiveEntry { 
+                            cell_oid: value_oid.clone(), 
+                            value_oid, 
+                            label, 
+                            primitive_type: prim, 
+                            validation_failures: Vec::new() 
+                        }
+                    }
+                    column_type::Primitive::Date => {
+                        let sql_select: String = format!("SELECT DATE(COLUMN{}, 'julianday') FROM TABLE{} WHERE OID = ?1", value_oid.column_oid, value_oid.schema_oid);
+                        let label: Option<String> = conn.query_one(&sql_select, params![value_oid.row_oid], |row| row.get(0))?;
+                        Self::PrimitiveEntry { 
+                            cell_oid: value_oid.clone(), 
+                            value_oid, 
+                            label, 
+                            primitive_type: prim, 
+                            validation_failures: Vec::new() 
+                        }
+                    }
+                    column_type::Primitive::Datetime =>{
+                        let sql_select: String = format!("SELECT STRFTIME('%FT%TZ', COLUMN{}, 'julianday') FROM TABLE{} WHERE OID = ?1", value_oid.column_oid, value_oid.schema_oid);
+                        let label: Option<String> = conn.query_one(&sql_select, params![value_oid.row_oid], |row| row.get(0))?;
+                        Self::PrimitiveEntry { 
+                            cell_oid: value_oid.clone(), 
+                            value_oid, 
+                            label, 
+                            primitive_type: prim, 
+                            validation_failures: Vec::new() 
+                        }
+                    }
                     column_type::Primitive::File
                     | column_type::Primitive::Image => {
-                        let column_name: String = format!("COLUMN{}", value_oid.column_oid);
-                        format!(
+                        let table_name: String = format!("TABLE{} t", value_oid.schema_oid);
+                        let column_name: String = format!("t.COLUMN{}", value_oid.column_oid);
+                        let sql_select: String = format!(
                             "
                             SELECT 
-                                CASE 
-                                    WHEN {column_name} IS NULL THEN NULL
-                                    WHEN LENGTH({column_name}) > 1000000000 THEN FORMAT('%.1f GB', LENGTH({column_name}) * 0.000000001)
-                                    WHEN LENGTH({column_name}) > 1000000 THEN FORMAT('%.1f MB', LENGTH({column_name}) * 0.000001)
-                                    ELSE FORMAT('%.1f KB', LENGTH({column_name}) * 0.001)
-                                END 
-                            FROM TABLE{} 
+                                f.OID,
+                                f.LABEL
+                            FROM {table_name}
+                            LEFT JOIN METADATA_FILE_VIEW f ON f.OID = {column_name}
                             WHERE OID = ?1
-                            ",
-                            value_oid.schema_oid
-                        )
+                            "
+                        );
+                        let (oid, label) = conn.query_one(
+                            &sql_select, 
+                            params![value_oid.row_oid], 
+                            |row| Ok::<(Option<i64>, Option<String>), rusqlite::Error>((row.get("OID")?, row.get("LABEL")?))
+                        )?;
+                        Self::FileEntry { 
+                            cell_oid: value_oid.clone(), 
+                            value_oid, 
+                            label, 
+                            file_oid: oid, 
+                            validation_failures: Vec::new() 
+                        }
                     }
-                };
-                let label: Option<String> = conn.query_one(&sql_select, params![value_oid.row_oid], |row| row.get(0))?;
-                Ok(Self::PrimitiveEntry { 
-                    cell_oid: value_oid.clone(), 
-                    value_oid, 
-                    label, 
-                    primitive_type: prim, 
-                    validation_failures: Vec::new() 
-                })
+                })                
             }
             column_type::ColumnType::Object { table_oid, .. } => {
                 let conn = db::open()?;
@@ -259,6 +303,7 @@ impl Cell {
     pub fn get_value_oid(&self) -> Result<CellOid, Error> {
         match self {
             Self::PrimitiveEntry { value_oid, .. }
+            | Self::FileEntry { value_oid, .. }
             | Self::Object { value_oid, .. }
             | Self::SelectEntry { value_oid, .. }
             | Self::MultiselectEntry { value_oid, .. } => Ok(value_oid.clone()),
@@ -416,6 +461,22 @@ impl Cell {
                                 value_oid,
                                 label, 
                                 primitive_type: primitive_type.clone(),
+                                validation_failures: Vec::new() 
+                            })?;
+                        }
+                        query::QueryBuilderColumn::File { schema_oid, schema_row_ord, column_oid, label_ord, file_ord, .. } => {
+                            let label: Option<String> = row.get::<&str, Option<String>>(label_ord)?;
+                            let file_oid: Option<i64> = row.get::<&str, Option<i64>>(file_ord)?;
+                            let value_oid: CellOid = CellOid { 
+                                schema_oid: schema_oid.clone(), 
+                                row_oid: row.get::<&str, i64>(schema_row_ord)?, 
+                                column_oid: column_oid.clone()
+                            };
+                            cell_sender.send(Cell::FileEntry { 
+                                cell_oid: value_oid.clone(), 
+                                value_oid, 
+                                file_oid, 
+                                label, 
                                 validation_failures: Vec::new() 
                             })?;
                         }

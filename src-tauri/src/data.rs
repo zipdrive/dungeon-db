@@ -14,6 +14,7 @@ mod column_type;
 mod column;
 mod row;
 mod cell;
+mod file;
 
 #[tauri::command]
 /// Initialize a connection to a StaticDB database file.
@@ -39,6 +40,9 @@ pub enum QueryStream {
     MasterSchemas {
         schema_oid: Option<i64>,
         is_table: bool,
+        channel: JavaScriptChannelId
+    },
+    ColumnAssociatedTables {
         channel: JavaScriptChannelId
     },
     ColumnValues {
@@ -69,6 +73,8 @@ impl QueryStream {
             Self::MasterSchemas { schema_oid, is_table, channel } => 
                 schema::ToggledHierarchicalListItemMetadata::query_master_schemas(Sender::Channel(channel.channel_on(webview)), schema_oid, is_table),
 
+            Self::ColumnAssociatedTables { channel } => 
+                column::FullMetadata::query_associated_tables(Sender::Channel(channel.channel_on(webview))),
             Self::ColumnValues { schema_oid, channel } => 
                 column::FullMetadata::query_values(Sender::Channel(channel.channel_on(webview)), schema_oid),
                 
@@ -111,13 +117,21 @@ pub fn get_column(column_oid: i64) -> Result<column::FullMetadata, Error> {
 }
 
 #[tauri::command]
-pub fn get_blob(blob: cell::Blob) -> Result<String, Error> {
-    blob.into_base64()
+pub fn get_file_base64(file_oid: i64) -> Result<String, Error> {
+    let file: file::File = file::File::get(file_oid)?;
+    file.into_base64()
 }
 
 #[tauri::command]
-pub fn download_blob(blob: cell::Blob, filepath: String) -> Result<(), Error> {
-    blob.download(filepath)
+pub fn download_file(file_oid: i64, download_to_path: String) -> Result<(), Error> {
+    let file: file::File = file::File::get(file_oid)?;
+    file.download(download_to_path)
+}
+
+#[tauri::command]
+pub fn upload_file(mut file: file::File, upload_from_path: String) -> Result<i64, Error> {
+    file.upload(upload_from_path)?;
+    Ok(match file { file::File::Path { oid, .. } | file::File::Blob { oid } => oid})
 }
 
 
@@ -154,11 +168,7 @@ pub enum Action {
         row_oid: i64
     },
 
-    EditCellContents(cell::Cell),
-    UploadBlob {
-        blob: cell::Blob,
-        filepath: String
-    }
+    EditCellContents(cell::Cell)
 }
 
 static REVERSE_STACK: Mutex<Vec<Action>> = Mutex::new(Vec::new());
@@ -340,14 +350,6 @@ impl Action {
 
                 // Send signal to update that cell + any dependent cells
                 app.emit(UPDATE_CELL_SIGNAL, cell.get_value_oid()?)?;
-            }
-            Self::UploadBlob { blob, filepath } => {
-                let blob_oid: cell::CellOid = blob.blob_oid.clone();
-                blob.upload(filepath)?;
-                // TODO store old BLOB value?
-
-                // Send signal to update that cell + any dependent cells
-                app.emit(UPDATE_CELL_SIGNAL, blob_oid)?;
             }
         }
         Ok(())

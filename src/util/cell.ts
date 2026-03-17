@@ -2,8 +2,8 @@ import { listen } from "@tauri-apps/api/event";
 import { Primitive } from "./column";
 import { openDialogAsync } from "./dialog";
 import { executeAsync } from "./action";
-import { open, save, message } from "@tauri-apps/plugin-dialog";
-import { getBlobBase64Async } from "./query";
+import { open, save, message, ask } from "@tauri-apps/plugin-dialog";
+import { getFileBase64Async } from "./query";
 import { fileTypeFromBuffer, FileTypeResult } from "file-type";
 
 type ValidationFailures = {
@@ -14,6 +14,17 @@ type CellOid = {
     schemaOid: number,
     rowOid: number,
     columnOid: number
+};
+
+export type File = {
+    path: {
+        oid: number,
+        path: string 
+    }
+} | {
+    blob: {
+        oid: number
+    }
 };
 
 type RowCell = {
@@ -39,6 +50,13 @@ type PrimitiveEntryCell = {
     label: string | null,
     primitiveType: Primitive,
     validationFailures: ValidationFailures 
+};
+type FileEntryCell = {
+    cellOid: CellOid,
+    valueOid: CellOid,
+    label: string | null,
+    fileOid: number | null,
+    validationFailures: ValidationFailures
 };
 type ObjectCell = {
     cellOid: CellOid,
@@ -72,12 +90,11 @@ export type Cell = { row: RowCell }
 | { readonly: ReadonlyCell } 
 | { subreport: SubreportCell } 
 | { primitiveEntry: PrimitiveEntryCell } 
+| { fileEntry: FileEntryCell }
 | { object: ObjectCell } 
 | { selectEntry: SelectEntryCell } 
 | { multiselectEntry: MultiselectEntryCell }
 | { addNewRowButton: AddNewRowButtonCell };
-
-export type Blob = { blobOid: CellOid };
 
 
 
@@ -181,87 +198,6 @@ function updatePrimitiveEntryCell(cell: PrimitiveEntryCell, elem: HTMLTableCellE
         });
 
     } else if (cell.primitiveType == 'file') {
-        /**
-         * Uploads a file from the filesystem to the backend.
-         */
-        async function uploadFileAsync() {
-            const filepath = await open({
-                title: 'Upload File to DungeonDB'
-            });
-            if (filepath) {
-                let worker: Worker = new Worker('./workers/action', { type: 'module' });
-                worker.onerror = async function (event) {
-                    await message(event.error, {
-                        title: 'An error occurred while uploading file.',
-                        kind: 'error'
-                    });
-                };
-                worker.postMessage({
-                    uploadBlob: {
-                        blob: {
-                            blobOid: cell.valueOid
-                        },
-                        filepath: filepath
-                    }
-                });
-            }
-        }
-
-        /**
-         * Downloads the data from the backend to a location in the filesystem.
-         */
-        async function downloadFileAsync() {
-            const filePath = await save({
-                title: 'Download File from DungeonDB'
-            });
-            if (filePath) {
-                let worker: Worker = new Worker('./workers/downloadBlob', { type: 'module' });
-                worker.onerror = async function (event) {
-                    await message(event.error, {
-                        title: 'An error occurred while downloading file.',
-                        kind: 'error'
-                    });
-                }
-                worker.postMessage({ blobOid: cell.valueOid });
-            }
-        }
-
-        if (cell.label == null) {
-            // Display a simple link to upload a file
-            elem.classList.add('clickable-text');
-            elem.innerText = 'Upload File';
-            elem.addEventListener('click', uploadFileAsync);
-        } else { // Display upload and download buttons + current BLOB size
-            elem.classList.add('file-text');
-
-            let gridDiv: HTMLDivElement = document.createElement('div');
-            gridDiv.style.display = 'grid';
-            gridDiv.style.gridTemplateColumns = '1fr auto auto';
-            elem.appendChild(gridDiv);
-
-            // Display the size of the file
-            let fileDescNode: HTMLSpanElement = document.createElement('span');
-            fileDescNode.innerText = cell.label;
-            gridDiv.appendChild(fileDescNode);
-
-            // Button for uploading a file
-            let fileUploadNode: HTMLImageElement = document.createElement('img');
-            fileUploadNode.classList.add('clickable-text');
-            fileUploadNode.alt = 'Upload';
-            fileUploadNode.src = '/src-tauri/icons/upload.png';
-            fileUploadNode.addEventListener('click', uploadFileAsync);
-            fileUploadNode.tabIndex = 0;
-            gridDiv.appendChild(fileUploadNode);
-
-            // Button for downloading the file that's in the database
-            let fileDownloadNode: HTMLImageElement = document.createElement('img');
-            fileDownloadNode.classList.add('clickable-text');
-            fileDownloadNode.alt = 'Download';
-            fileDownloadNode.src = '/src-tauri/icons/download.png';
-            fileDownloadNode.addEventListener('click', downloadFileAsync);
-            fileDownloadNode.tabIndex = 0;
-            gridDiv.appendChild(fileDownloadNode);
-        }
 
     } else if (cell.primitiveType == 'image') {
         /**
@@ -383,6 +319,105 @@ function updatePrimitiveEntryCell(cell: PrimitiveEntryCell, elem: HTMLTableCellE
     addValidationFailureTooltips(elem, cell.validationFailures);
 }
 
+function updateFileEntryCell(cell: FileEntryCell, elem: HTMLTableCellElement) {
+    /**
+     * Uploads a file from the filesystem to the backend.
+     */
+    async function uploadFileAsync() {
+        const filepath = await open({
+            title: 'Upload File to DungeonDB'
+        });
+        if (filepath) {
+            let isSoftLink: boolean = await ask(
+                'Do you want this file to be a soft link that references the location of this file?', {
+                    title: 'Upload File as Soft Link?'
+                }
+            );
+
+            let worker: Worker = new Worker('./workers/action', { type: 'module' });
+            worker.onerror = async function (event) {
+                await message(event.error, {
+                    title: 'An error occurred while uploading file.',
+                    kind: 'error'
+                });
+            };
+            worker.postMessage({
+                file: isSoftLink ? {
+                    path: {
+                        oid: 0,
+                        path: filepath
+                    }
+                } : {
+                    blob: {
+                        oid: 0
+                    }
+                },
+                uploadFromPath: filepath
+            });
+        }
+    }
+
+    /**
+     * Downloads the data from the backend to a location in the filesystem.
+     */
+    async function downloadFileAsync() {
+        const filepath = await save({
+            title: 'Download File from DungeonDB'
+        });
+        if (filepath) {
+            let worker: Worker = new Worker('./workers/downloadBlob', { type: 'module' });
+            worker.onerror = async function (event) {
+                await message(event.error, {
+                    title: 'An error occurred while downloading file.',
+                    kind: 'error'
+                });
+            }
+            worker.postMessage({ 
+                fileOid: cell.fileOid,
+                downloadToPath: filepath
+            });
+        }
+    }
+
+    if (cell.label == null) {
+        // Display a simple link to upload a file
+        elem.classList.add('clickable-text');
+        elem.innerText = 'Upload File';
+        elem.addEventListener('click', uploadFileAsync);
+    } else { // Display upload and download buttons + current BLOB size
+        elem.classList.add('file-text');
+
+        let gridDiv: HTMLDivElement = document.createElement('div');
+        gridDiv.style.display = 'grid';
+        gridDiv.style.gridTemplateColumns = '1fr auto auto';
+        elem.appendChild(gridDiv);
+
+        // Display the size of the file
+        let fileDescNode: HTMLSpanElement = document.createElement('span');
+        fileDescNode.innerText = cell.label;
+        gridDiv.appendChild(fileDescNode);
+
+        // Button for uploading a file
+        let fileUploadNode: HTMLImageElement = document.createElement('img');
+        fileUploadNode.classList.add('clickable-text');
+        fileUploadNode.alt = 'Upload';
+        fileUploadNode.src = '/src-tauri/icons/upload.png';
+        fileUploadNode.addEventListener('click', uploadFileAsync);
+        fileUploadNode.tabIndex = 0;
+        gridDiv.appendChild(fileUploadNode);
+
+        // Button for downloading the file that's in the database
+        let fileDownloadNode: HTMLImageElement = document.createElement('img');
+        fileDownloadNode.classList.add('clickable-text');
+        fileDownloadNode.alt = 'Download';
+        fileDownloadNode.src = '/src-tauri/icons/download.png';
+        fileDownloadNode.addEventListener('click', downloadFileAsync);
+        fileDownloadNode.tabIndex = 0;
+        gridDiv.appendChild(fileDownloadNode);
+    }
+
+}
+
 function updateObjectCell(cell: ObjectCell, elem: HTMLTableCellElement) {
     elem.classList.add('clickable-text');
     if (cell.objectQueryString == null)
@@ -459,6 +494,10 @@ export function createCell(cell: Cell, isTable: boolean, filters: [string, numbe
         return createCellElement(cell.primitiveEntry.cellOid, (elem) => {
             updatePrimitiveEntryCell(cell.primitiveEntry, elem, isTable);
         });
+    } else if ('fileEntry' in cell) {
+        return createCellElement(cell.fileEntry.cellOid, (elem) => {
+            updateFileEntryCell(cell.fileEntry, elem);
+        })
     } else if ('object' in cell) {
         return createCellElement(cell.object.cellOid, (elem) => {
             updateObjectCell(cell.object, elem);
@@ -476,7 +515,8 @@ export function createCell(cell: Cell, isTable: boolean, filters: [string, numbe
         const elem: HTMLTableCellElement = document.createElement('td');
         elem.innerText = 'Add New Row';
         elem.classList.add('clickable-text');
-        elem.colSpan = 1 + cell.addNewRowButton.columnSpan;
+        elem.style.whiteSpace = 'nowrap';
+        elem.colSpan = 2 + cell.addNewRowButton.columnSpan;
         elem.addEventListener('click', () => {
             executeAsync({
                 createRow: {
@@ -531,6 +571,10 @@ export function updateCell(cell: Cell, isTable: boolean) {
     } else if ('primitiveEntry' in cell) {
         getCellElement(cell.primitiveEntry.cellOid, (elem) => {
             updatePrimitiveEntryCell(cell.primitiveEntry, elem, isTable);
+        });
+    } else if ('fileEntry' in cell) {
+        getCellElement(cell.fileEntry.cellOid, (elem) => {
+            updateFileEntryCell(cell.fileEntry, elem);
         });
     } else if ('object' in cell) {
         getCellElement(cell.object.cellOid, (elem) => {

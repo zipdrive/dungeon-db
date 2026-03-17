@@ -1,4 +1,4 @@
-#table-content {
+#page-content {
   table-layout: fixed;
   width: 0;
   border: none;
@@ -11,6 +11,10 @@ tr {
 }
 tr:nth-child(even), thead > tr, tfoot > tr {
   --row-background-color: var(--main-color-light);
+}
+th:nth-child(1), td:nth-child(1) {
+  width: 2em;
+  text-align: center;
 }
 th, td {
   background-color: var(--row-background-color);
@@ -34,32 +38,10 @@ th {
   &:nth-last-child(2) {
     border-right-width: 2px;
   }
-}
-tfoot td {
-  position: sticky;
-  bottom: -1px;
-  border-bottom-width: 2px;
-  z-index: 1;
-}
-
-#add-new-column-button {
-  cursor: pointer;
-  width: 8em;
-  color: var(--text-color-link);
-  border: none;
-  background-color: transparent;
-  white-space: nowrap;
-  font-weight: normal;
-}
-#add-new-row-button {
-  cursor: pointer;
-  color: var(--text-color-link);
-  padding: 0;
-  vertical-align: middle;
-  text-align: center;
-}
-#add-new-column-button:hover, #add-new-row-button:hover {
-  color: var(--text-color-link-hover);
+  &:nth-last-child(1) {
+    border: none;
+    background-color: transparent;
+  }
 }
 
 [contenteditable], .clickable-text, td:has(.cell-multiselect) {

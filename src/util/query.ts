@@ -49,7 +49,7 @@ export type Query = {
         channel: Channel<ToggledHierarchicalListItemMetadata>
     }
 } | {
-    columnReferences: {
+    columnAssociatedTables: {
         channel: Channel<DropdownValue>
     }
 } | {
@@ -89,10 +89,12 @@ export async function getColumnAsync(oid: number): Promise<ColumnFullMetadata> {
     return await invoke('get_column', { columnOid: oid });
 }
 
-export async function getBlobBase64Async(blob: Blob): Promise<string> {
-    return await invoke('get_blob', { blob: blob });
+export async function getFileBase64Async(blob: Blob): Promise<string> {
+    return await invoke('get_file_base64', { blob: blob });
 }
 
-export async function downloadBlobAsync(blob: Blob, filepath: string): Promise<void> {
+export async function downloadFileAsync(blob: Blob, filepath: string): Promise<void> {
     await invoke('download_blob', { blob: blob, filepath: filepath });
 }
+
+export async function uploadFileAsync()

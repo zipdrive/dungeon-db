@@ -153,6 +153,23 @@ pub enum QueryBuilderColumn {
         /// The SQL expression returning the raw primitive value.
         value_expr: String 
     },
+    File {
+        schema_oid: i64,
+        schema_row_ord: String,
+        column_oid: i64,
+
+        /// The ordinal pointing to the String value of the primitive.
+        label_ord: String,
+
+        /// The SQL expression returning the String value of the primitive.
+        label_expr: String,
+
+        /// The ordinal pointing to the file OID.
+        file_ord: String,
+
+        /// The SQL expression returning the file OID.
+        file_expr: String 
+    },
     Object {
         schema_oid: i64,
         schema_row_ord: String,
@@ -358,6 +375,8 @@ impl<'a> QueryBuilder<'a> {
                         .filter_map(|col| match col {
                             QueryBuilderColumn::Primitive { label_ord, label_expr, .. } => 
                                 Some(format!("{label_expr} AS {label_ord}")),
+                            QueryBuilderColumn::File { label_ord, label_expr, file_ord, file_expr, .. } =>
+                                Some(format!("{label_expr} AS {label_ord}, {file_expr} AS {file_ord}")),
                             QueryBuilderColumn::Object { label_ord, label_expr, object_query_string_ord, object_query_string_expr, .. } =>
                                 Some(format!("{label_expr} AS {label_ord}, {object_query_string_expr} AS {object_query_string_ord}")),
                             QueryBuilderColumn::Select { label_ord, label_expr, select_row_ord, select_row_expr, .. } 
@@ -425,6 +444,7 @@ impl<'a> QueryBuilder<'a> {
                             for i in self.group_by_indices {
                                 group_expr.push(match &self.columns[i] {
                                     QueryBuilderColumn::Primitive { value_expr, .. }
+                                    | QueryBuilderColumn::File { file_expr: value_expr, .. }
                                     | QueryBuilderColumn::Object { object_query_string_expr: value_expr, .. }
                                     | QueryBuilderColumn::Select { select_row_expr: value_expr, .. }
                                     | QueryBuilderColumn::Multiselect { select_row_expr: value_expr, .. } => value_expr.clone(),
@@ -584,29 +604,56 @@ impl<'a> QueryBuilder<'a> {
                     column_metadata.oid
                 );
                 let label_ord: String = format!("LABEL{}", self.columns.len());
-                QueryBuilderColumn::Primitive { 
-                    label_expr: match &prim {
-                        column_type::Primitive::Text 
-                        | column_type::Primitive::JSON => format!("{primitive_value_alias}"),
-                        column_type::Primitive::Integer
-                        | column_type::Primitive::Number
-                        | column_type::Primitive::Checkbox => format!("CAST({primitive_value_alias} AS TEXT)"),
-                        column_type::Primitive::Date => format!("DATE({primitive_value_alias}, 'julianday')"),
-                        column_type::Primitive::Datetime => format!("STRFTIME('%FT%TZ', {primitive_value_alias}, 'julianday')"),
-                        column_type::Primitive::File
-                        | column_type::Primitive::Image => format!("CASE 
-                            WHEN {primitive_value_alias} IS NULL THEN NULL 
-                            WHEN LENGTH({primitive_value_alias}) > 1000000000 THEN FORMAT('%.1f GB', LENGTH({primitive_value_alias}) * 0.000000001)
-                            WHEN LENGTH({primitive_value_alias}) > 1000000 THEN FORMAT('%.1f MB', LENGTH({primitive_value_alias}) * 0.000001)
-                            ELSE FORMAT('%.1f KB', LENGTH({primitive_value_alias}) * 0.001)
-                        END")
+                match &prim {
+                    column_type::Primitive::File 
+                    | column_type::Primitive::Image => QueryBuilderColumn::File {
+                        label_expr: format!("(SELECT LABEL FROM METADATA_FILE_VIEW WHERE OID = {primitive_value_alias})"),
+                        file_expr: primitive_value_alias,
+                        label_ord,
+                        file_ord: format!("VALUE{}", self.columns.len()),
+                        schema_oid: column_metadata.schema.oid,
+                        schema_row_ord: format!("{datasource_alias}_OID"),
+                        column_oid: column_metadata.oid
                     },
-                    value_expr: primitive_value_alias,
-                    primitive_type: prim, 
-                    label_ord,
-                    schema_oid: column_metadata.schema.oid,
-                    schema_row_ord: format!("{datasource_alias}_OID"),
-                    column_oid: column_metadata.oid
+                    column_type::Primitive::Text
+                    | column_type::Primitive::JSON => QueryBuilderColumn::Primitive { 
+                        label_expr: format!("{primitive_value_alias}"),
+                        value_expr: primitive_value_alias,
+                        primitive_type: prim, 
+                        label_ord,
+                        schema_oid: column_metadata.schema.oid,
+                        schema_row_ord: format!("{datasource_alias}_OID"),
+                        column_oid: column_metadata.oid
+                    },
+                    column_type::Primitive::Integer
+                    | column_type::Primitive::Number 
+                    | column_type::Primitive::Checkbox => QueryBuilderColumn::Primitive { 
+                        label_expr: format!("CAST({primitive_value_alias} AS TEXT)"),
+                        value_expr: primitive_value_alias,
+                        primitive_type: prim, 
+                        label_ord,
+                        schema_oid: column_metadata.schema.oid,
+                        schema_row_ord: format!("{datasource_alias}_OID"),
+                        column_oid: column_metadata.oid
+                    },
+                    column_type::Primitive::Date => QueryBuilderColumn::Primitive {
+                        label_expr: format!("DATE({primitive_value_alias}, 'julianday')"),
+                        value_expr: primitive_value_alias,
+                        primitive_type: prim, 
+                        label_ord,
+                        schema_oid: column_metadata.schema.oid,
+                        schema_row_ord: format!("{datasource_alias}_OID"),
+                        column_oid: column_metadata.oid
+                    },
+                    column_type::Primitive::Datetime => QueryBuilderColumn::Primitive {
+                        label_expr: format!("STRFTIME('%FT%TZ', {primitive_value_alias}, 'julianday')"),
+                        value_expr: primitive_value_alias,
+                        primitive_type: prim, 
+                        label_ord,
+                        schema_oid: column_metadata.schema.oid,
+                        schema_row_ord: format!("{datasource_alias}_OID"),
+                        column_oid: column_metadata.oid
+                    }
                 }
             }
             column_type::ColumnType::Object { table_oid, .. } => {
@@ -790,6 +837,7 @@ impl<'a> QueryBuilder<'a> {
     pub fn insert_grouping(&mut self, column_oid: i64) -> Result<(), Error> {
         if let Some(idx) = self.columns.iter().position(|col| match col {
             QueryBuilderColumn::Primitive { column_oid: c, .. }
+            | QueryBuilderColumn::File { column_oid: c, .. }
             | QueryBuilderColumn::Object { column_oid: c, .. }
             | QueryBuilderColumn::Select { column_oid: c, .. }
             | QueryBuilderColumn::Multiselect { column_oid: c, .. }
@@ -807,6 +855,7 @@ impl<'a> QueryBuilder<'a> {
     pub fn insert_ordering(&mut self, column_oid: i64, sort_ascending: bool) -> Result<(), Error> {
         if let Some(idx) = self.columns.iter().position(|col| match col {
             QueryBuilderColumn::Primitive { column_oid: c, .. }
+            | QueryBuilderColumn::File { column_oid: c, .. }
             | QueryBuilderColumn::Object { column_oid: c, .. }
             | QueryBuilderColumn::Select { column_oid: c, .. }
             | QueryBuilderColumn::Multiselect { column_oid: c, .. }
@@ -901,6 +950,14 @@ impl<'a> QueryBuilder<'a> {
                             | column_type::Primitive::Image => ScalarType::Blob
                         }, 
                         value_expr, 
+                        label_expr, 
+                        param_expr,
+                        deterministic: false
+                    },
+                    QueryBuilderColumn::File { label_expr, file_expr, .. } => ScalarExpression {
+                        arg_expr: file_expr.clone(), 
+                        arg_return_type: ScalarType::Blob, 
+                        value_expr: file_expr, 
                         label_expr, 
                         param_expr,
                         deterministic: false

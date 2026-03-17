@@ -108,6 +108,49 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
 
 
 
+    -- METADATA_FILE stores all files.
+    CREATE TABLE IF NOT EXISTS METADATA_FILE (
+        OID INTEGER PRIMARY KEY
+    );
+
+    -- METADATA_FILE__PATH stores all files that are a reference to a file on the local filesystem.
+    CREATE TABLE IF NOT EXISTS METADATA_FILE__PATH (
+        OID INTEGER PRIMARY KEY REFERENCES METADATA_FILE (OID)
+            ON UPDATE CASCADE
+            ON DELETE CASCADE,
+        FILEPATH TEXT NOT NULL
+    );
+
+    -- METADATA_FILE__BLOB stores all files stored inside the database as BLOBs.
+    CREATE TABLE IF NOT EXISTS METADATA_FILE__BLOB (
+        OID INTEGER PRIMARY KEY REFERENCES METADATA_FILE (OID)
+            ON UPDATE CASCADE
+            ON DELETE CASCADE,
+        FILENAME TEXT NOT NULL,
+        CONTENT BLOB NOT NULL
+    );
+    
+    DROP VIEW IF EXISTS METADATA_FILE_VIEW;
+    CREATE VIEW METADATA_FILE_VIEW AS 
+    SELECT
+        OID,
+        FILENAME || ' (' || CASE 
+            WHEN CONTENT IS NULL THEN NULL 
+            WHEN LENGTH(CONTENT) > 1000000000 THEN FORMAT('%.1f GB', LENGTH(CONTENT) * 0.000000001)
+            WHEN LENGTH(CONTENT) > 1000000 THEN FORMAT('%.1f MB', LENGTH(CONTENT) * 0.000001)
+            ELSE FORMAT('%.1f KB', LENGTH(CONTENT) * 0.001)
+        END || ')' AS LABEL
+    FROM METADATA_FILE__BLOB
+    
+    UNION
+    
+    SELECT
+        OID,
+        FILEPATH AS LABEL
+    FROM METADATA_FILE__PATH;
+
+
+
     -- METADATA_COLUMN_TYPE stores all column types.
     CREATE TABLE IF NOT EXISTS METADATA_COLUMN_TYPE (
         OID INTEGER PRIMARY KEY,

@@ -29,7 +29,13 @@ if (urlParamSchemaOid) {
      */
     function reloadAllCells() {
         navigator.locks.request('page-content', async () => {
-            console.debug('Here1');
+            // Update page number
+            const pageNumInput: HTMLInputElement = document.getElementById('page-num-input') as HTMLInputElement;
+            pageNumInput.value = `${pageNum}`;
+
+            // Update page size
+            const pageSizeInput: HTMLInputElement = document.getElementById('page-size-input') as HTMLInputElement;
+            pageSizeInput.value = `${pageSize}`;
 
             // Reset the table
             const pageContentElem: HTMLTableElement = document.getElementById('page-content') as HTMLTableElement;
@@ -42,7 +48,8 @@ if (urlParamSchemaOid) {
             pageContentElem.appendChild(pageContentFoot);
 
             // Construct header
-            const columnHeaderRow: HTMLElement = document.createElement('th');
+            const columnHeaderRow: HTMLElement = document.createElement('tr');
+            columnHeaderRow.appendChild(document.createElement('th'));
             pageContentHead.appendChild(columnHeaderRow);
             const columnChannel: Channel<ColumnFullMetadata> = new Channel<ColumnFullMetadata>((column) => {
                 console.debug(`COLUMN: ${JSON.stringify(cellChannel)}`);
@@ -86,8 +93,10 @@ if (urlParamSchemaOid) {
             });
 
             // Add button to add new column
-            const addNewColumnButton: HTMLTableCellElement = document.createElement('td');
+            const addNewColumnButton: HTMLTableCellElement = document.createElement('th');
             addNewColumnButton.classList.add('clickable-text');
+            addNewColumnButton.style.whiteSpace = 'nowrap';
+            addNewColumnButton.style.width = '8em';
             addNewColumnButton.innerText = 'Add New Column';
             addNewColumnButton.addEventListener('click', () => {
                 openDialogAsync({
@@ -117,8 +126,7 @@ if (urlParamSchemaOid) {
 
         // Listen for manual input of page number
         const pageNumInput: HTMLInputElement = document.getElementById('page-num-input') as HTMLInputElement;
-        pageNumInput.value = `${pageNum}`;
-        pageNumInput.addEventListener('input', () => {
+        pageNumInput.addEventListener('change', () => {
             const newPageNum: number = parseInt(pageNumInput.value);
             if (newPageNum > 0 && isFinite(newPageNum)) {
                 pageNum = newPageNum;
@@ -130,8 +138,7 @@ if (urlParamSchemaOid) {
 
         // Listen for manual input of page size
         const pageSizeInput: HTMLInputElement = document.getElementById('page-size-input') as HTMLInputElement;
-        pageSizeInput.value = `${pageSize}`;
-        pageSizeInput.addEventListener('input', () => {
+        pageSizeInput.addEventListener('change', () => {
             const newPageSize: number = parseInt(pageSizeInput.value);
             if (newPageSize > 0 && isFinite(newPageSize)) {
                 pageSize = newPageSize;

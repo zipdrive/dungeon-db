@@ -44,8 +44,6 @@ export type FullMetadata = {
     style: string,
     ordering: number,
     defaultValue: string | null,
-    isNullable: boolean,
-    isUnique: boolean,
     isPrimaryKey: boolean
 };
 
@@ -58,7 +56,7 @@ export type FullMetadata = {
 export function createColumnHeaderHTML(schemaOid: number, column: FullMetadata): HTMLTableCellElement {
     const columnClassName: string = `column${column.oid}`;
 
-    const elem: HTMLTableCellElement = document.createElement('td');
+    const elem: HTMLTableCellElement = document.createElement('th');
     elem.classList.add(columnClassName);
     elem.innerText = `${(column.isPrimaryKey ? '🔑 ' : '')}${column.name}`;
 
