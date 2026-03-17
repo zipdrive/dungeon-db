@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { FullMetadata as TableFullMetadata } from "./table";
 import { FullMetadata as ReportFullMetadata } from "./report";
 import { FullMetadata as ColumnFullMetadata } from "./column";
-import { Cell, Blob } from "./cell";
+import { Cell } from "./cell";
 
 export type Action = {
     createTable: TableFullMetadata
@@ -23,7 +23,8 @@ export type Action = {
 } | {
     createRow: {
         tableOid: number,
-        rowOid: number | null
+        rowOid: number | null,
+        fixedParentDatasource: [number, number, ColumnFullMetadata] | null
     }
 } | {
     trashRow: {
@@ -32,11 +33,6 @@ export type Action = {
     }
 } | {
     editCellContents: Cell
-} | {
-    uploadBlob: {
-        blob: Blob,
-        filepath: string
-    }
 };
 
 /**

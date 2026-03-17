@@ -113,7 +113,7 @@ pub fn insert_transact(trans: &Transaction, table_oid: i64, row_oid: Option<i64>
 /// Inserts a row into the table.
 /// Optionally, a specific OID for the new row can be provided.
 /// Returns the OID of the new row.
-pub fn insert(table_oid: i64, row_oid: Option<i64>) -> Result<i64, Error> {
+pub fn insert(table_oid: i64, row_oid: Option<i64>, fixed_parent_datasource: Option<(i64, i64, column::FullMetadata)>) -> Result<i64, Error> {
     // Start a transaction
     let mut conn = db::open()?;
     let trans: Transaction = conn.transaction()?;
@@ -122,8 +122,44 @@ pub fn insert(table_oid: i64, row_oid: Option<i64>) -> Result<i64, Error> {
     let mut master_rows: HashMap<i64, i64> = HashMap::new();
     let row_oid: i64 = insert_transact(&trans, table_oid, row_oid, &mut master_rows)?;
     
-    // TODO ensure that rows fixed by filters remain fixed
+    // Ensure that rows fixed by filters remain fixed
     // e.g. A row connected to a parent table via a Multiselect column on a parent row will be auto-selected by the parent row.
+    if let Some((fixed_parent_datasource_table_oid, fixed_parent_datasource_row_oid, fixed_parent_datasource_relationship_column)) = fixed_parent_datasource {
+        match &fixed_parent_datasource_relationship_column.column_type {
+            column_type::ColumnType::Select { .. } => {
+                if fixed_parent_datasource_relationship_column.schema.oid == fixed_parent_datasource_table_oid {
+                    // Select columns on the parent datasource's schema have a *-to-1 relationship with their child datasource, so throw an error
+                    return Err(Error::AdhocError("The new row has a fixed parent datasource joined to it by a Select column on the parent datasource, so creating a new row is not allowed."));
+                } else {
+                    // Automatically set the Select column of the created row to match the fixed parent datasource row
+                    let sql_fix_parent: String = format!(
+                        "UPDATE TABLE{} SET COLUMN{} = ?1 WHERE OID = ?2",
+                        table_oid,
+                        fixed_parent_datasource_relationship_column.oid
+                    );
+                    trans.execute(&sql_fix_parent, params![fixed_parent_datasource_row_oid, row_oid])?;
+                }
+            }
+            column_type::ColumnType::Multiselect { .. } => {
+                // Automatically add a Multiselect choice to link the parent datasource row with the newly-created row
+                let sql_fix_parent: String = format!(
+                    "INSERT INTO MULTISELECT{} (TABLE{}_OID, TABLE{}_OID) VALUES (?1, ?2)",
+                    fixed_parent_datasource_relationship_column.oid,
+                    fixed_parent_datasource_table_oid,
+                    table_oid
+                );
+                trans.execute(&sql_fix_parent, params![fixed_parent_datasource_row_oid, row_oid])?;
+            }
+            column_type::ColumnType::Object { .. } => {
+                // Object columns have a 1-to-1 relationship between the parent and child datasources, so throw an error
+                return Err(Error::AdhocError("The new row has a fixed parent datasource joined to it by an Object column, so creating a new row is not allowed."));
+            }
+            _ => {
+                // No other case should ever occur, so throw an error
+                return Err(Error::AdhocError("The new row has a fixed parent datasource supposedly joined to it by a column without a relationship to that parent datasource."));
+            }
+        }
+    }
 
     // Commit the transaction
     trans.commit()?;

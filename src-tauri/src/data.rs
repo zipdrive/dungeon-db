@@ -157,7 +157,8 @@ pub enum Action {
 
     CreateRow {
         table_oid: i64,
-        row_oid: Option<i64>
+        row_oid: Option<i64>,
+        fixed_parent_datasource: Option<(i64, i64, column::FullMetadata)>
     },
     TrashRow {
         table_oid: i64,

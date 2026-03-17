@@ -1,5 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
-import { Primitive } from "./column";
+import { FullMetadata as ColumnFullMetadata, Primitive } from "./column";
 import { openDialogAsync } from "./dialog";
 import { executeAsync } from "./action";
 import { open, save, message, ask } from "@tauri-apps/plugin-dialog";
@@ -83,6 +83,7 @@ type MultiselectEntryCell = {
 };
 type AddNewRowButtonCell = {
     tableOid: number,
+    fixedParentDatasource: [number, number, ColumnFullMetadata] | null,
     columnSpan: number
 };
 
@@ -523,7 +524,8 @@ export function createCell(cell: Cell, isTable: boolean, filters: [string, numbe
             executeAsync({
                 createRow: {
                     tableOid: cell.addNewRowButton.tableOid,
-                    rowOid: null
+                    rowOid: null,
+                    fixedParentDatasource: cell.addNewRowButton.fixedParentDatasource
                 }
             })
             .catch(async (e) => {

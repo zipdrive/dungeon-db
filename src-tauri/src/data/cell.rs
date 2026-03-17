@@ -106,6 +106,7 @@ pub enum Cell {
     },
     AddNewRowButton {
         table_oid: i64,
+        fixed_parent_datasource: Option<(i64, i64, column::FullMetadata)>,
         column_span: usize
     }
 }
@@ -679,9 +680,26 @@ impl Cell {
 
                 // According to the above rule, check that there is only one unfixed root and/or 1-to-* datasource.
                 if unfixed_datasources.len() == 1 {
-                    let table_oid: i64 = unfixed_datasources.iter().next().unwrap().get_schema_oid()?;
+                    let unfixed_datasource: Datasource = unfixed_datasources.iter().next().unwrap();
+                    let table_oid: i64 = unfixed_datasource.get_schema_oid()?;
                     cell_sender.send(Cell::AddNewRowButton { 
                         table_oid, 
+                        fixed_parent_datasource: match &unfixed_datasource {
+                            Datasource::Table { .. } => None,
+                            Datasource::Column { parent_datasource, column } => {
+                                let parent_datasource_alias: String = parent_datasource.get_alias();
+                                filters.iter().find_map(|(fixed_datasource_alias, fixed_datasource_row_oid)| if fixed_datasource_alias == parent_datasource_alias {
+                                    Some((parent_datasource.get_schema_oid(), fixed_datasource_row_oid.clone(), column.clone()))
+                                } else {
+                                    None 
+                                })
+                            }
+                            Datasource::MasterTable { .. } 
+                            | Datasource::InheritorTable { .. } => {
+                                // Neither of these cases should ever occur, so throw an error if it does
+                                return Err(Error::AdhocError("The only found unfixed base datasource has a strict 1-to-1 relationship with its parent datasource, which is not allowed."));
+                            }
+                        },
                         column_span: cols.len()
                     })?;
                 }
