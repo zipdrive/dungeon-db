@@ -10,6 +10,7 @@ mod datasource;
 mod schema;
 mod table;
 mod report;
+mod surrogate;
 mod column_type;
 mod column;
 mod row;
@@ -114,6 +115,11 @@ pub fn get_report_metadata(report_oid: i64) -> Result<report::FullMetadata, Erro
 /// Get the metadata for a particular column in a table.
 pub fn get_column(column_oid: i64) -> Result<column::FullMetadata, Error> {
     column::FullMetadata::get(column_oid)
+}
+
+#[tauri::command]
+pub fn get_cell(cell_oid: cell::CellOid) -> Result<cell::Cell, Error> {
+    cell::Cell::get(cell_oid)
 }
 
 #[tauri::command]
@@ -308,9 +314,9 @@ impl Action {
 
 
 
-            Self::CreateRow { table_oid, row_oid } => {
+            Self::CreateRow { table_oid, row_oid, fixed_parent_datasource } => {
                 // Create the row
-                let row_oid: i64 = row::insert(table_oid, row_oid)?;
+                let row_oid: i64 = row::insert(table_oid, row_oid, fixed_parent_datasource)?;
                 record_action(Self::TrashRow {
                     table_oid,
                     row_oid
@@ -344,13 +350,38 @@ impl Action {
 
 
             Self::EditCellContents(cell) => {
-                // Update the contents of the cell
-                let old_cell: cell::Cell = cell::Cell::get(cell.get_value_oid()?)?;
-                cell.set()?;
-                record_action(Self::EditCellContents(old_cell), is_forward);
+                println!("Here1");
+                let execution_result: Result<(), Error> = {
+                    // Update the contents of the cell
+                    match cell.get_value_oid() {
+                        Ok(value_oid) => {
+                            match cell::Cell::get(value_oid) {
+                                Ok(old_cell) => {
+                                    match cell.set() {
+                                        Ok(_) => {
+                                            record_action(Self::EditCellContents(old_cell), is_forward);
+                                            Ok(())
+                                        }
+                                        Err(e) => Err(e)
+                                    }
+                                }
+                                Err(e) => Err(e)
+                            }
+                        }
+                        Err(e) => Err(e)
+                    }                    
+                };
 
                 // Send signal to update that cell + any dependent cells
+                // Do this regardless of whether previous execution succeeded or failed
+                println!("Here2");
                 app.emit(UPDATE_CELL_SIGNAL, cell.get_value_oid()?)?;
+                println!("Here3");
+                
+                // Throw error if execution failed
+                if let Err(e) = execution_result {
+                    return Err(e);
+                }
             }
         }
         Ok(())

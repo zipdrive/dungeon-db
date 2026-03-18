@@ -1,9 +1,9 @@
 use crate::util::error::Error;
 use crate::util::db;
-use rusqlite::{params};
+use rusqlite::{params, OptionalExtension};
 use serde::{Serialize, Deserialize};
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 #[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum Primitive {
     Text,
@@ -178,11 +178,6 @@ impl ColumnType {
                     params![oid, formula]
                 )?;
 
-                // Create a view for the formula, in case the formula is ever used as a parameter
-                let formula_query = String::from("");
-                let cmd_formula_view: String = format!("CREATE VIEW FORMULA{oid} AS ({formula_query})");
-                trans.execute(&cmd_formula_view, [])?;
-
                 // Commit the transaction
                 trans.commit()?;
                 return Ok(Self::Formula {
@@ -195,7 +190,7 @@ impl ColumnType {
                     "SELECT OID FROM METADATA_COLUMN_TYPE__SUBREPORT WHERE REPORT_OID = ?1",
                     params![report_oid],
                     |row| row.get(0)
-                )? {
+                ).optional()? {
                     Some(oid) => {
                         return Ok(Self::Subreport {
                             oid,
@@ -232,7 +227,7 @@ impl ColumnType {
                     "SELECT OID FROM METADATA_COLUMN_TYPE__OBJECT WHERE TABLE_OID = ?1",
                     params![table_oid],
                     |row| row.get(0)
-                )? {
+                ).optional()? {
                     Some(oid) => {
                         return Ok(Self::Object {
                             oid,
@@ -263,7 +258,7 @@ impl ColumnType {
                     "SELECT OID FROM METADATA_COLUMN_TYPE__SELECT WHERE TABLE_OID = ?1",
                     params![table_oid],
                     |row| row.get(0)
-                )? {
+                ).optional()? {
                     Some(oid) => {
                         return Ok(Self::Select {
                             oid,
@@ -294,7 +289,7 @@ impl ColumnType {
                     "SELECT OID FROM METADATA_COLUMN_TYPE__MULTISELECT WHERE TABLE_OID = ?1",
                     params![table_oid],
                     |row| row.get(0)
-                )? {
+                ).optional()? {
                     Some(oid) => {
                         return Ok(Self::Multiselect {
                             oid,

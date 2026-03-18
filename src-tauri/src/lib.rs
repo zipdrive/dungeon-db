@@ -49,6 +49,7 @@ pub fn run() {
             data::get_table_metadata,
             data::get_report_metadata,
             data::get_column,
+            data::get_cell,
             data::get_file_base64,
             data::download_file,
             data::upload_file,

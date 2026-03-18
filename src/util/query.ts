@@ -2,7 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { FullMetadata as TableFullMetadata } from "./table";
 import { FullMetadata as ReportFullMetadata } from "./report";
 import { FullMetadata as ColumnFullMetadata } from "./column";
-import { Cell, File } from "./cell";
+import { Cell, CellOid, File } from "./cell";
 import { message } from "@tauri-apps/plugin-dialog";
 
 export type FlatListItemMetadata = {
@@ -87,6 +87,10 @@ export async function getReportMetadataAsync(oid: number): Promise<ReportFullMet
 
 export async function getColumnAsync(oid: number): Promise<ColumnFullMetadata> {
     return await invoke('get_column', { columnOid: oid });
+}
+
+export async function getCellAsync(cellOid: CellOid): Promise<Cell> {
+    return await invoke('get_cell', { cellOid: cellOid });
 }
 
 export async function getFileBase64Async(data: { fileOid: number }): Promise<string> {

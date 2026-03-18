@@ -416,7 +416,7 @@ impl FullMetadata {
                             } {
                                 // Do batch update, because there shouldn't be any chance of failure
                                 let sql_update: String = format!(
-                                    "UPDATE TABLE{} t SET t.COLUMN{} = {label_expr}",
+                                    "UPDATE TABLE{} AS t SET COLUMN{} = {label_expr}",
                                     self.schema.oid,
                                     self.oid 
                                 );
@@ -439,10 +439,7 @@ impl FullMetadata {
                                         | column_type::Primitive::Integer => Some(format!(r#"{old_column_label}"#)),
                                         column_type::Primitive::Number => Some(format!("ROUND({old_column_label})")),
                                         column_type::Primitive::Text
-                                        | column_type::Primitive::JSON => Some(format!(r#"CASE 
-                                                WHEN REGEXP_LIKE({old_column_label}, '^\\s*(0*\\.|0+(\\.|\\s*$))') THEN 0
-                                                ELSE NULLIF(CAST({old_column_label} AS INTEGER), 0)
-                                            END"#))
+                                        | column_type::Primitive::JSON => Some(format!(r#"{old_column_label}"#))
                                     }
                                 }
                                 column_type::ColumnType::Object { table_oid: old_table_oid, .. } 
@@ -479,7 +476,7 @@ impl FullMetadata {
                             } {
                                 // Update each line item individually, casting the former value to an INTEGER affinity
                                 Some(format!(
-                                    "UPDATE TABLE{} t SET t.COLUMN{} = {int_expr} WHERE t.OID = ?1",
+                                    "UPDATE TABLE{} AS t SET COLUMN{} = {int_expr} WHERE t.OID = ?1",
                                     self.schema.oid,
                                     self.oid 
                                 ))
@@ -500,10 +497,7 @@ impl FullMetadata {
                                         | column_type::Primitive::Integer
                                         | column_type::Primitive::Number => Some(format!(r#"{old_column_label}"#)),
                                         column_type::Primitive::Text
-                                        | column_type::Primitive::JSON => Some(format!(r#"CASE 
-                                                WHEN REGEXP_LIKE({old_column_label}, '^\\s*(0*\\.|0+(\\.|\\s*$))') THEN CAST({old_column_label} AS REAL)
-                                                ELSE NULLIF(CAST({old_column_label} AS REAL), 0)
-                                            END"#))
+                                        | column_type::Primitive::JSON => Some(format!(r#"{old_column_label}"#))
                                     }
                                 }
                                 column_type::ColumnType::Object { table_oid: old_table_oid, .. } 
@@ -511,10 +505,7 @@ impl FullMetadata {
                                     let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
                                     Some(format!("(
                                         SELECT 
-                                            CASE 
-                                                WHEN REGEXP_LIKE(LABEL, '^\\s*(0*\\.|0+(\\.|\\s*$))') THEN CAST(LABEL AS REAL)
-                                                ELSE NULLIF(CAST(LABEL AS REAL), 0)
-                                            END
+                                            LABEL
                                         FROM TABLE{old_table_oid}_SURROGATE 
                                         WHERE OID = {old_column_label}
                                     )"))
@@ -522,10 +513,11 @@ impl FullMetadata {
                                 column_type::ColumnType::Multiselect { table_oid: old_table_oid, .. } => {
                                     // Use the array of selected rows as the label
                                     Some(format!(
-                                        "(SELECT REAL_EXPR 
+                                        "(
+                                            SELECT REAL_EXPR 
                                             FROM (
                                                 SELECT 
-                                                    CAST(s.LABEL AS REAL) AS REAL_EXPR, 
+                                                    s.LABEL AS REAL_EXPR, 
                                                     MAX(ABS(CAST(s.LABEL AS REAL))) AS MAX_NONZERO_REAL_EXPR 
                                                 FROM MULTISELECT{} m 
                                                 INNER JOIN TABLE{old_table_oid}_SURROGATE s ON s.OID = m.TABLE{old_table_oid}_OID 
@@ -540,7 +532,7 @@ impl FullMetadata {
                             } {
                                 // Update each line item individually, casting the former value to a REAL affinity
                                 Some(format!(
-                                    "UPDATE TABLE{} t SET t.COLUMN{} = {real_expr} WHERE t.OID = ?1",
+                                    "UPDATE TABLE{} AS t SET COLUMN{} = {real_expr} WHERE t.OID = ?1",
                                     self.schema.oid,
                                     self.oid 
                                 ))
@@ -593,7 +585,7 @@ impl FullMetadata {
                             } {
                                 // Do batch update, because there shouldn't be any chance of failure
                                 let sql_update: String = format!(
-                                    "UPDATE TABLE{} t SET t.COLUMN{} = {real_expr}",
+                                    "UPDATE TABLE{} AS t SET COLUMN{} = {real_expr}",
                                     self.schema.oid,
                                     self.oid 
                                 );
@@ -648,7 +640,7 @@ impl FullMetadata {
                             } {
                                 // Do batch update, because there shouldn't be any chance of failure
                                 let sql_update: String = format!(
-                                    "UPDATE TABLE{} t SET t.COLUMN{} = {real_expr}",
+                                    "UPDATE TABLE{} AS t SET COLUMN{} = {real_expr}",
                                     self.schema.oid,
                                     self.oid 
                                 );
@@ -727,7 +719,7 @@ impl FullMetadata {
                             } {
                                 // Do batch update, because there shouldn't be any chance of failure
                                 let sql_update: String = format!(
-                                    "UPDATE TABLE{} t SET t.COLUMN{} = {bool_expr}",
+                                    "UPDATE TABLE{} AS t SET COLUMN{} = {bool_expr}",
                                     self.schema.oid,
                                     self.oid 
                                 );
@@ -758,7 +750,7 @@ impl FullMetadata {
                             } {
                                 // Do batch update, because there shouldn't be any chance of failure
                                 let sql_update: String = format!(
-                                    "UPDATE TABLE{} t SET t.COLUMN{} = {file_expr}",
+                                    "UPDATE TABLE{} AS t SET COLUMN{} = {file_expr}",
                                     self.schema.oid,
                                     self.oid 
                                 );
@@ -809,7 +801,7 @@ impl FullMetadata {
                                 // Can be updated more or less directly, rather than needing to use labels to identify rows
                                 // Pick which one to assign to the new column arbitrarily
                                 let sql_update: String = format!(
-                                    "UPDATE TABLE{} t SET t.COLUMN{} = (SELECT MIN(TABLE{table_oid}_OID) FROM MULTISELECT{} WHERE TABLE{}_OID = t.OID)",
+                                    "UPDATE TABLE{} AS t SET COLUMN{} = (SELECT MIN(TABLE{table_oid}_OID) FROM MULTISELECT{} WHERE TABLE{}_OID = t.OID)",
                                     self.schema.oid,
                                     self.oid,
                                     old_column.oid,
@@ -832,8 +824,8 @@ impl FullMetadata {
                     } {
                         Some(format!(
                             "
-                            UPDATE TABLE{} t SET
-                                t.COLUMN{} = {json_label_expr}
+                            UPDATE TABLE{} AS t SET
+                                COLUMN{} = {json_label_expr}
                             WHERE t.OID = ?1
                             ",
                             self.schema.oid,

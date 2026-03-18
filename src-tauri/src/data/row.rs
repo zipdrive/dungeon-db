@@ -1,8 +1,7 @@
 use std::collections::{HashMap, HashSet};
-
-use rusqlite::vtab::parameter;
 use rusqlite::{OptionalExtension, Transaction, params};
-use crate::data::schema;
+use crate::data::column;
+use crate::data::column_type;
 use crate::util::db;
 use crate::util::error::Error;
 

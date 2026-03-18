@@ -3,14 +3,15 @@ import { FullMetadata as ColumnFullMetadata, Primitive } from "./column";
 import { openDialogAsync } from "./dialog";
 import { executeAsync } from "./action";
 import { open, save, message, ask } from "@tauri-apps/plugin-dialog";
-import { getFileBase64Async } from "./query";
+import { DropdownValue, getCellAsync, getFileBase64Async, queryAsync } from "./query";
 import { fileTypeFromBuffer, FileTypeResult } from "file-type";
+import { Channel } from "@tauri-apps/api/core";
 
 type ValidationFailures = {
     message: string
 }[];
 
-type CellOid = {
+export type CellOid = {
     schemaOid: number,
     rowOid: number,
     columnOid: number
@@ -99,13 +100,37 @@ export type Cell = { row: RowCell }
 
 
 
-let columnValueWorkers: {[key: number]: Worker} = {};
+let dropdownValueCallbacks: {
+    [key: number]: ((dropdownValue: DropdownValue) => Promise<void>)[]
+} = {};
 
-function getColumnValueWorker(schemaOid: number) {
-    if (!columnValueWorkers[schemaOid]) {
-        columnValueWorkers[schemaOid] = new Worker('./workers/queryColumnValues');
-    }
-    return columnValueWorkers[schemaOid];
+function addDropdownValueCallback(schemaOid: number, callbackFn: (dropdownValue: DropdownValue) => Promise<void>) {
+    navigator.locks.request('dropdown-values', () => {
+        if (schemaOid in dropdownValueCallbacks) {
+            dropdownValueCallbacks[schemaOid].push(callbackFn);
+        } else {
+            dropdownValueCallbacks[schemaOid] = [callbackFn];
+        }
+    });
+}
+
+export function runDropdownValueQueries() {
+    navigator.locks.request('dropdown-values', async () => {
+        let promises: Promise<void>[] = [];
+        for (let schemaOidStr in dropdownValueCallbacks) {
+            const schemaOid: number = parseInt(schemaOidStr);
+            promises.push(queryAsync({
+                columnValues: {
+                    schemaOid: schemaOid,
+                    channel: new Channel<DropdownValue>(async (dropdownValue) => {
+                        await Promise.all(dropdownValueCallbacks[schemaOid].map(callbackFn => callbackFn(dropdownValue)));
+                    })
+                }
+            }));
+        }
+        await Promise.all(promises);
+        dropdownValueCallbacks = {};
+    });
 }
 
 
@@ -211,7 +236,7 @@ function updatePrimitiveEntryCell(cell: PrimitiveEntryCell, elem: HTMLTableCellE
                         primitiveEntry: {
                             cellOid: cell.cellOid,
                             valueOid: cell.valueOid,
-                            label: newPrimitiveValue,
+                            label: newPrimitiveValue ? newPrimitiveValue : null,
                             primitiveType: cell.primitiveType,
                             validationFailures: []
                         }
@@ -239,7 +264,7 @@ function updatePrimitiveEntryCell(cell: PrimitiveEntryCell, elem: HTMLTableCellE
                         primitiveEntry: {
                             cellOid: cell.cellOid,
                             valueOid: cell.valueOid,
-                            label: newPrimitiveValue,
+                            label: newPrimitiveValue ? newPrimitiveValue : null,
                             primitiveType: cell.primitiveType,
                             validationFailures: []
                         }
@@ -461,14 +486,95 @@ function updateObjectCell(cell: ObjectCell, elem: HTMLTableCellElement) {
 }
 
 function updateSelectEntryCell(cell: SelectEntryCell, elem: HTMLTableCellElement) {
-    const selectNode: HTMLSelectElement = document.createElement('select');
+    const selectElem: HTMLSelectElement = document.createElement('select');
+    selectElem.classList.add('cell-dropdown');
+    selectElem.innerHTML = '<option value="">— NULL —</option>'
+    elem.appendChild(selectElem);
+
+    // Add callback function to populate the options for the SELECT element
+    addDropdownValueCallback(cell.selectSchemaOid, async (dropdownValue) => {
+        const optionElem: HTMLOptionElement = document.createElement('option');
+        optionElem.value = dropdownValue.value.toString();
+        optionElem.innerText = dropdownValue.label;
+        if (dropdownValue.value == cell.selectRowOid) {
+            optionElem.selected = true;
+        }
+        selectElem.appendChild(optionElem);
+    });
+
+    // Add event listener to update the cell when select is changed
+    selectElem.addEventListener('input', async () => {
+        await executeAsync({
+            editCellContents: {
+                selectEntry: {
+                    cellOid: cell.cellOid,
+                    valueOid: cell.valueOid,
+                    selectSchemaOid: cell.selectSchemaOid,
+                    selectRowOid: selectElem.value ? parseInt(selectElem.value) : null,
+                    validationFailures: []
+                }
+            }
+        })
+        .catch(async (e) => {
+            await message(e, {
+                title: 'An error occurred while updating cell value.',
+                kind: 'error'
+            });
+        })
+    });
     
     // Add validation failure tooltips
     addValidationFailureTooltips(elem, cell.validationFailures);
 }
 
 function updateMultiselectEntryCell(cell: MultiselectEntryCell, elem: HTMLTableCellElement) {
-    
+    // Set the cell's label when unselected
+    if (cell.label)
+        elem.innerText = cell.label;
+    else 
+        elem.classList.add('cell-null');
+
+    // Create DIV to hold multiselect options
+    let multiselectElem: HTMLDivElement = document.createElement('div');
+    multiselectElem.classList.add('cell-multiselect');
+    elem.appendChild(multiselectElem);
+
+    // Add callback function to populate the multiselect options
+    addDropdownValueCallback(cell.multiselectSchemaOid, async (dropdownValue) => {
+        // Create HTML element to represent the option
+        let labelNode: HTMLLabelElement = document.createElement('label');
+        labelNode.innerText = dropdownValue.label;
+        labelNode.insertAdjacentHTML('afterbegin', `<input type="checkbox" value="${dropdownValue.value}" ${(cell.multiselectRowOid.includes(dropdownValue.value) ? 'checked' : '')}>`);
+        multiselectElem.appendChild(labelNode);
+    });
+
+    // Add event listener to update from the multiselect DIV when unfocused
+    multiselectElem.addEventListener('focusout', async (e) => {
+        if (!e.relatedTarget || !elem.contains(e.relatedTarget as HTMLElement)) {
+            let newSelectedOidList: number[] = [];
+            multiselectElem.querySelectorAll('input:checked').forEach((checkboxNode) => {
+                newSelectedOidList.push(parseInt((checkboxNode as HTMLInputElement).value));
+            });
+            await executeAsync({
+                editCellContents: {
+                    multiselectEntry: {
+                        cellOid: cell.cellOid,
+                        valueOid: cell.valueOid,
+                        label: cell.label,
+                        multiselectSchemaOid: cell.multiselectSchemaOid,
+                        multiselectRowOid: newSelectedOidList,
+                        validationFailures: []
+                    }
+                }
+            })
+            .catch(async (e) => {
+                await message(e, {
+                    title: 'An error occurred while updating cell value.',
+                    kind: 'error'
+                });
+            });
+        }
+    });
 
     // Add validation failure tooltips
     addValidationFailureTooltips(elem, cell.validationFailures);
@@ -479,6 +585,7 @@ export function createCell(cell: Cell, isTable: boolean, filters: [string, numbe
         const id: string = `schema${cellOid.schemaOid}-row${cellOid.rowOid}-column${cellOid.columnOid}`;
         const elem: HTMLTableCellElement = document.createElement('td');
         elem.id = id;
+        elem.classList.add(`column${cellOid.columnOid}`);
         navigator.locks.request(id, () => {
             callbackFn(elem);
         });
@@ -550,60 +657,35 @@ export function createCell(cell: Cell, isTable: boolean, filters: [string, numbe
     }
 }
 
-export function updateCell(cell: Cell, isTable: boolean) {
-    function getCellElement(cellOid: CellOid, callbackFn: (e: HTMLTableCellElement) => void) {
-        const id: string = `schema${cellOid.schemaOid}-row${cellOid.rowOid}-column${cellOid.columnOid}`;
-        navigator.locks.request(id, () => {
-            const prevElem: HTMLTableCellElement | null = document.getElementById(id) as HTMLTableCellElement;
-            if (prevElem) {
-                const elem: HTMLTableCellElement = document.createElement('td');
-                elem.id = id;
-                prevElem.replaceWith(elem);
-                callbackFn(elem);
-            }
-        });
-    }
+export function updateCell(cellOid: CellOid, isTable: boolean) {
+    const id: string = `schema${cellOid.schemaOid}-row${cellOid.rowOid}-column${cellOid.columnOid}`;
+    navigator.locks.request(id, async () => {
+        const prevElem: HTMLTableCellElement | null = document.getElementById(id) as HTMLTableCellElement;
+        if (prevElem) {
+            // Construct replacement element
+            const elem: HTMLTableCellElement = document.createElement('td');
+            elem.classList.add(`column${cellOid.columnOid}`);
+            prevElem.replaceWith(elem);
+            elem.id = id;
 
-    if ('readonly' in cell) {
-        getCellElement(cell.readonly.cellOid, (elem) => {
-            updateReadonlyCell(cell.readonly, elem);
-        });
-    } else if ('subreport' in cell) {
-        getCellElement(cell.subreport.cellOid, (elem) => {
-            updateSubreportCell(cell.subreport, elem);
-        });
-    } else if ('primitiveEntry' in cell) {
-        getCellElement(cell.primitiveEntry.cellOid, (elem) => {
-            updatePrimitiveEntryCell(cell.primitiveEntry, elem, isTable);
-        });
-    } else if ('fileEntry' in cell) {
-        getCellElement(cell.fileEntry.cellOid, (elem) => {
-            updateFileEntryCell(cell.fileEntry, elem);
-        });
-    } else if ('object' in cell) {
-        getCellElement(cell.object.cellOid, (elem) => {
-            updateObjectCell(cell.object, elem);
-        });
-    } else if ('selectEntry' in cell) {
-        getCellElement(cell.selectEntry.cellOid, (elem) => {
-            updateSelectEntryCell(cell.selectEntry, elem);
-        });
-    } else if ('multiselectEntry' in cell) {
-        getCellElement(cell.multiselectEntry.cellOid, (elem) => {
-            updateMultiselectEntryCell(cell.multiselectEntry, elem);
-        });
-    } else if ('addNewRowButton' in cell) {
-        // Ignore. An update should not make any changes to this cell.
-    } else {
-        const id: string = `schema${cell.row.schemaOid}-row${cell.row.rowOid}-index`;
-        navigator.locks.request(id, () => {
-            const prevElem: HTMLTableCellElement | null = document.getElementById(id) as HTMLTableCellElement;
-            if (prevElem) {
-                const elem: HTMLTableCellElement = document.createElement('td');
-                elem.id = id;
-                prevElem.replaceWith(elem);
-                updateRowIndexCell(cell.row, elem);
-            }
-        });
-    }
+            // Query for the cell
+            const cell: Cell = await getCellAsync(cellOid);
+            console.debug(`cell: ${JSON.stringify(cell)}`);
+            if ('readonly' in cell) {
+                updateReadonlyCell(cell.readonly, elem);
+            } else if ('subreport' in cell) {
+                updateSubreportCell(cell.subreport, elem);
+            } else if ('primitiveEntry' in cell) {
+                updatePrimitiveEntryCell(cell.primitiveEntry, elem, isTable);
+            } else if ('fileEntry' in cell) {
+                updateFileEntryCell(cell.fileEntry, elem);
+            } else if ('object' in cell) {
+                updateObjectCell(cell.object, elem);
+            } else if ('selectEntry' in cell) {
+                updateSelectEntryCell(cell.selectEntry, elem);
+            } else if ('multiselectEntry' in cell) {
+                updateMultiselectEntryCell(cell.multiselectEntry, elem);
+            } // Ignore everything else
+        }
+    });
 }

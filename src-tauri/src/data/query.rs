@@ -604,6 +604,7 @@ impl<'a> QueryBuilder<'a> {
                     column_metadata.oid
                 );
                 let label_ord: String = format!("LABEL{}", self.columns.len());
+                println!("COLUMN{} type = {prim:?}", column_metadata.oid);
                 match &prim {
                     column_type::Primitive::File 
                     | column_type::Primitive::Image => QueryBuilderColumn::File {

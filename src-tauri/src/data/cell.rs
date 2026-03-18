@@ -40,6 +40,7 @@ impl RetrievalLimit {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all="camelCase")]
 pub struct CellOid {
     schema_oid: i64,
     row_oid: i64,
@@ -115,19 +116,19 @@ pub enum Cell {
 
 impl Cell {
     /// Retrieves the value of a cell.
-    pub fn get(value_oid: CellOid) -> Result<Self, Error> {
-        let column_metadata: column::FullMetadata = column::FullMetadata::get(value_oid.column_oid)?;
+    pub fn get(cell_oid: CellOid) -> Result<Self, Error> {
+        let column_metadata: column::FullMetadata = column::FullMetadata::get(cell_oid.column_oid)?;
         match column_metadata.column_type {
             column_type::ColumnType::Primitive(prim) => {
                 let conn = db::open()?;
                 Ok(match prim {
                     column_type::Primitive::Text
                     | column_type::Primitive::JSON => {
-                        let sql_select: String = format!("SELECT COLUMN{} FROM TABLE{} WHERE OID = ?1", value_oid.column_oid, value_oid.schema_oid);
-                        let label: Option<String> = conn.query_one(&sql_select, params![value_oid.row_oid], |row| row.get(0))?;
+                        let sql_select: String = format!("SELECT COLUMN{} FROM TABLE{} WHERE OID = ?1", cell_oid.column_oid, cell_oid.schema_oid);
+                        let label: Option<String> = conn.query_one(&sql_select, params![cell_oid.row_oid], |row| row.get(0))?;
                         Self::PrimitiveEntry { 
-                            cell_oid: value_oid.clone(), 
-                            value_oid, 
+                            cell_oid: cell_oid.clone(), 
+                            value_oid: cell_oid, 
                             label, 
                             primitive_type: prim, 
                             validation_failures: Vec::new() 
@@ -136,33 +137,33 @@ impl Cell {
                     column_type::Primitive::Integer
                     | column_type::Primitive::Number
                     | column_type::Primitive::Checkbox => {
-                        let sql_select: String = format!("SELECT CAST(COLUMN{} AS TEXT) FROM TABLE{} WHERE OID = ?1", value_oid.column_oid, value_oid.schema_oid);
-                        let label: Option<String> = conn.query_one(&sql_select, params![value_oid.row_oid], |row| row.get(0))?;
+                        let sql_select: String = format!("SELECT CAST(COLUMN{} AS TEXT) FROM TABLE{} WHERE OID = ?1", cell_oid.column_oid, cell_oid.schema_oid);
+                        let label: Option<String> = conn.query_one(&sql_select, params![cell_oid.row_oid], |row| row.get(0))?;
                         Self::PrimitiveEntry { 
-                            cell_oid: value_oid.clone(), 
-                            value_oid, 
+                            cell_oid: cell_oid.clone(), 
+                            value_oid: cell_oid, 
                             label, 
                             primitive_type: prim, 
                             validation_failures: Vec::new() 
                         }
                     }
                     column_type::Primitive::Date => {
-                        let sql_select: String = format!("SELECT DATE(COLUMN{}, 'julianday') FROM TABLE{} WHERE OID = ?1", value_oid.column_oid, value_oid.schema_oid);
-                        let label: Option<String> = conn.query_one(&sql_select, params![value_oid.row_oid], |row| row.get(0))?;
+                        let sql_select: String = format!("SELECT DATE(COLUMN{}, 'julianday') FROM TABLE{} WHERE OID = ?1", cell_oid.column_oid, cell_oid.schema_oid);
+                        let label: Option<String> = conn.query_one(&sql_select, params![cell_oid.row_oid], |row| row.get(0))?;
                         Self::PrimitiveEntry { 
-                            cell_oid: value_oid.clone(), 
-                            value_oid, 
+                            cell_oid: cell_oid.clone(), 
+                            value_oid: cell_oid, 
                             label, 
                             primitive_type: prim, 
                             validation_failures: Vec::new() 
                         }
                     }
                     column_type::Primitive::Datetime =>{
-                        let sql_select: String = format!("SELECT STRFTIME('%FT%TZ', COLUMN{}, 'julianday') FROM TABLE{} WHERE OID = ?1", value_oid.column_oid, value_oid.schema_oid);
-                        let label: Option<String> = conn.query_one(&sql_select, params![value_oid.row_oid], |row| row.get(0))?;
+                        let sql_select: String = format!("SELECT STRFTIME('%FT%TZ', COLUMN{}, 'julianday') FROM TABLE{} WHERE OID = ?1", cell_oid.column_oid, cell_oid.schema_oid);
+                        let label: Option<String> = conn.query_one(&sql_select, params![cell_oid.row_oid], |row| row.get(0))?;
                         Self::PrimitiveEntry { 
-                            cell_oid: value_oid.clone(), 
-                            value_oid, 
+                            cell_oid: cell_oid.clone(), 
+                            value_oid: cell_oid, 
                             label, 
                             primitive_type: prim, 
                             validation_failures: Vec::new() 
@@ -170,8 +171,8 @@ impl Cell {
                     }
                     column_type::Primitive::File
                     | column_type::Primitive::Image => {
-                        let table_name: String = format!("TABLE{} t", value_oid.schema_oid);
-                        let column_name: String = format!("t.COLUMN{}", value_oid.column_oid);
+                        let table_name: String = format!("TABLE{} t", cell_oid.schema_oid);
+                        let column_name: String = format!("t.COLUMN{}", cell_oid.column_oid);
                         let sql_select: String = format!(
                             "
                             SELECT 
@@ -184,12 +185,12 @@ impl Cell {
                         );
                         let (oid, label) = conn.query_one(
                             &sql_select, 
-                            params![value_oid.row_oid], 
+                            params![cell_oid.row_oid], 
                             |row| Ok::<(Option<i64>, Option<String>), rusqlite::Error>((row.get("OID")?, row.get("LABEL")?))
                         )?;
                         Self::FileEntry { 
-                            cell_oid: value_oid.clone(), 
-                            value_oid, 
+                            cell_oid: cell_oid.clone(), 
+                            value_oid: cell_oid, 
                             label, 
                             file_oid: oid, 
                             validation_failures: Vec::new() 
@@ -200,10 +201,10 @@ impl Cell {
             column_type::ColumnType::Object { table_oid, .. } => {
                 let conn = db::open()?;
 
-                let datasource_oid: i64 = conn.query_row("SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = ?1", params![value_oid.schema_oid], |row| row.get(0))?;
+                let datasource_oid: i64 = conn.query_row("SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = ?1", params![cell_oid.schema_oid], |row| row.get(0))?;
 
-                let column_name: String = format!("COLUMN{}", value_oid.column_oid);
-                let table_name: String = format!("TABLE{}", value_oid.schema_oid);
+                let column_name: String = format!("COLUMN{}", cell_oid.column_oid);
+                let table_name: String = format!("TABLE{}", cell_oid.schema_oid);
                 let sql_select: String = format!(
                     "
                     SELECT 
@@ -216,13 +217,13 @@ impl Cell {
                 );
                 let (object_row_oid, label) = conn.query_one(
                     &sql_select, 
-                    params![value_oid.row_oid], 
+                    params![cell_oid.row_oid], 
                     |row| Ok::<(Option<i64>, Option<String>), rusqlite::Error>((row.get("OBJECT_ROW_OID")?, row.get("LABEL")?))
                 )?;
 
                 Ok(Self::Object { 
-                    cell_oid: value_oid.clone(), 
-                    value_oid, 
+                    cell_oid: cell_oid.clone(), 
+                    value_oid: cell_oid, 
                     object_schema_oid: table_oid, 
                     object_query_string: match object_row_oid {
                         Some(o) => Some(format!("d{datasource_oid}={o}")), 
@@ -242,18 +243,18 @@ impl Cell {
                     FROM TABLE{}
                     WHERE t.OID = ?1
                     ", 
-                    value_oid.column_oid, 
-                    value_oid.schema_oid
+                    cell_oid.column_oid, 
+                    cell_oid.schema_oid
                 );
                 let select_row_oid: Option<i64> = conn.query_one(
                     &sql_select, 
-                    params![value_oid.row_oid], 
+                    params![cell_oid.row_oid], 
                     |row| row.get("SELECT_ROW_OID")
                 )?;
 
                 Ok(Self::SelectEntry { 
-                    cell_oid: value_oid.clone(), 
-                    value_oid, 
+                    cell_oid: cell_oid.clone(), 
+                    value_oid: cell_oid, 
                     select_schema_oid: table_oid, 
                     select_row_oid, 
                     validation_failures: Vec::new() 
@@ -262,8 +263,8 @@ impl Cell {
             column_type::ColumnType::Multiselect { table_oid, .. } => {
                 let conn = db::open()?;
 
-                let multiselect_name: String = format!("MULTISELECT{}", value_oid.column_oid);
-                let table_name: String = format!("TABLE{}", value_oid.schema_oid);
+                let multiselect_name: String = format!("MULTISELECT{}", cell_oid.column_oid);
+                let table_name: String = format!("TABLE{}", cell_oid.schema_oid);
                 let sql_select: String = format!(
                     "
                     SELECT 
@@ -276,7 +277,7 @@ impl Cell {
                 );
                 let (multiselect_row_oid_str, label) = conn.query_one(
                     &sql_select, 
-                    params![value_oid.row_oid], 
+                    params![cell_oid.row_oid], 
                     |row| Ok::<(Option<String>, Option<String>), rusqlite::Error>((row.get("VALUE")?, row.get("LABEL")?))
                 )?;
                 let multiselect_row_oid: Vec<i64> = match multiselect_row_oid_str {
@@ -285,8 +286,8 @@ impl Cell {
                 };
 
                 Ok(Self::MultiselectEntry { 
-                    cell_oid: value_oid.clone(), 
-                    value_oid, 
+                    cell_oid: cell_oid.clone(), 
+                    value_oid: cell_oid, 
                     multiselect_schema_oid: table_oid, 
                     multiselect_row_oid, 
                     label, 
@@ -424,6 +425,7 @@ impl Cell {
                 RetrievalLimit::SingleRow => format!("{cmd_query} LIMIT 1"),
                 RetrievalLimit::Page { num, size } => format!("{cmd_query} LIMIT {size} OFFSET {}", size * (num - 1))
             };
+            println!("{cmd_query}");
 
             // Run the query
             let mut stmt_query = conn.prepare(&cmd_query)?;
@@ -680,16 +682,17 @@ impl Cell {
 
                 // According to the above rule, check that there is only one unfixed root and/or 1-to-* datasource.
                 if unfixed_datasources.len() == 1 {
-                    let unfixed_datasource: Datasource = unfixed_datasources.iter().next().unwrap();
+                    let unfixed_datasource: &Datasource = unfixed_datasources.iter().next().unwrap();
                     let table_oid: i64 = unfixed_datasource.get_schema_oid()?;
                     cell_sender.send(Cell::AddNewRowButton { 
                         table_oid, 
-                        fixed_parent_datasource: match &unfixed_datasource {
+                        fixed_parent_datasource: match unfixed_datasource {
                             Datasource::Table { .. } => None,
                             Datasource::Column { parent_datasource, column } => {
                                 let parent_datasource_alias: String = parent_datasource.get_alias();
-                                filters.iter().find_map(|(fixed_datasource_alias, fixed_datasource_row_oid)| if fixed_datasource_alias == parent_datasource_alias {
-                                    Some((parent_datasource.get_schema_oid(), fixed_datasource_row_oid.clone(), column.clone()))
+                                let parent_datasource_table_oid: i64 = parent_datasource.get_schema_oid()?;
+                                filters.iter().find_map(|(fixed_datasource_alias, fixed_datasource_row_oid)| if *fixed_datasource_alias == parent_datasource_alias {
+                                    Some((parent_datasource_table_oid, fixed_datasource_row_oid.clone(), column.clone()))
                                 } else {
                                     None 
                                 })
