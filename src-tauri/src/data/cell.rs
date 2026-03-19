@@ -51,9 +51,9 @@ pub struct CellOid {
 #[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum Cell {
     MaxIndex(i64),
+    ObjectTable(i64),
     Row {
-        schema_oid: i64,
-        row_oid: Option<i64>,
+        row_identifier: Option<(i64, i64)>,
         index: i64,
         validation_failures: Vec<FailedValidation>
     },
@@ -435,16 +435,42 @@ impl Cell {
                 let Some(row) = rows_query.next()? else { break; };
                 row_count += 1;
 
+                // Load all filters used to identify the row
+                let mut filters: Vec<(String, i64)> = Vec::new();
+                for datasource_alias in datasource_aliases.iter() {
+                    if let Some(datasource_row_oid) = row.get::<_, Option<i64>>(datasource_alias) {
+                        filters.push((datasource_alias.clone(), datasource_row_oid));
+                    }
+                }
+                // Determine if there is a specific schema that can be used to identify the row
+                let lowest_level_filter: Option<(String, i64)> = {
+                    let filter_iter = filters.iter();
+                    match filter_iter.next() {
+                        None => None,
+                        Some(mut current_lowest_level_filter) => {
+                            loop {
+                                match filter_iter.next() {
+                                    Some(filter) => {
+                                        if current_lowest_level_filter.0.starts_with(filter.0) {
+                                            // Continue
+                                        } else if filter.0.starts_with(current_lowest_level_filter.0) {
+                                            current_lowest_level_filter = filter;
+                                        } else {
+                                            break None;
+                                        }
+                                    }
+                                    None => {
+                                        break Some(current_lowest_level_filter);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+
                 // First, send a header for the row
                 cell_sender.send(Cell::Row { 
-                    schema_oid, 
-                    row_oid: match row.get::<_, i64>("OID") {
-                        Ok(o) => Some(o),
-                        Err(rusqlite::Error::InvalidColumnName(_)) => None,
-                        Err(e) => {
-                            return Err(e.into());
-                        }
-                    }, 
+                    row_identifier: lowest_level_filter,
                     index: row.get("ROW_INDEX")?, 
                     validation_failures: Vec::new() 
                 })?;
@@ -644,17 +670,13 @@ impl Cell {
                                 schema_query_string: {
                                     // Compile the query string for the subreport
 
-                                    // First key is "schema_oid", which determines the schema that's pulled up when the subreport is opened
-                                    let mut qstr: String = format!("schema_oid={}", subreport_metadata.schema.oid);
-
-                                    // Then add a key for each non-null datasource
-                                    for datasource_alias in datasource_aliases.iter() {
-                                        let datasource_row_alias: String = format!("{datasource_alias}_OID");
-                                        if let Some(datasource_row) = row.get::<&str, Option<i64>>(&datasource_row_alias)? {
-                                            qstr = format!("{qstr}&{datasource_alias}={datasource_row}")
-                                        }
-                                    }
-                                    qstr
+                                    filters.iter()
+                                        .fold(
+                                            // First key is "schema_oid", which determines the schema that's pulled up when the subreport is opened
+                                            format!("schema_oid={}", subreport_metadata.schema.oid),
+                                            // Other keys identify the filters on the subreport
+                                            |acc, (datasource_alias, datasource_row_oid)| format!("{acc}&{datasource_alias}={datasource_row_oid}")
+                                        )
                                 }, 
                                 validation_failures: Vec::new() 
                             })?;

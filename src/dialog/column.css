@@ -1,3 +1,6 @@
+@import '../styles.css';
+@import './dialog.css';
+
 /**
  *  Change how the advanced parameter toggle displays depending on whether or not it is toggled.
  */

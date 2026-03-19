@@ -29,8 +29,7 @@ export type File = {
 };
 
 type RowCell = {
-    schemaOid: number,
-    rowOid: number,
+    rowIdentifier: [number, number] | null,
     index: number,
     validationFailures: ValidationFailures
 };
@@ -646,12 +645,8 @@ export function createCell(cell: Cell, isTable: boolean, filters: [string, numbe
         return row;
     } else {
         const row: HTMLTableRowElement = document.createElement('tr');
-        const id: string = `schema${cell.row.schemaOid}-row${cell.row.rowOid}-index`;
         const elem: HTMLTableCellElement = document.createElement('td');
-        elem.id = id;
-        navigator.locks.request(id, () => {
-            updateRowIndexCell(cell.row, elem);
-        });
+        updateRowIndexCell(cell.row, elem);
         row.appendChild(elem);
         return row;
     }

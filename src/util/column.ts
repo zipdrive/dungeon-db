@@ -4,6 +4,12 @@ import { openDialogAsync } from "./dialog";
 import { executeAsync } from "./action";
 import { message } from "@tauri-apps/plugin-dialog";
 
+import '@interactjs/auto-start';
+import '@interactjs/actions/drag';
+import '@interactjs/actions/resize';
+import interact from '@interactjs/interact';
+import { ResizeEvent } from '@interactjs/actions/resize/plugin';
+
 export type Primitive = 'text' | 'integer' | 'number' | 'checkbox' | 'date' | 'datetime' | 'file' | 'image' | 'jSON';
 
 export type ColumnType = {
@@ -46,6 +52,22 @@ export type FullMetadata = {
     defaultValue: string | null,
     isPrimaryKey: boolean
 };
+
+
+let resizeSetupCallbacks: (() => void)[] = [];
+
+function addResizeSetupCallback(callbackFn: () => void) {
+    navigator.locks.request('resize-setup', () => {
+        resizeSetupCallbacks.push(callbackFn);
+    });
+}
+
+export function runResizeSetupCallbacks() {
+    navigator.locks.request('resize-setup', () => {
+        resizeSetupCallbacks.forEach(callbackFn => callbackFn());
+        resizeSetupCallbacks = [];
+    });
+}
 
 
 /**
@@ -112,6 +134,23 @@ export function createColumnHeaderHTML(schemaOid: number, column: FullMetadata):
                 title: 'An error occurred while displaying context menu.',
                 kind: 'error'
             });
+        });
+    });
+
+    // Add callback function to setup column resizing
+    addResizeSetupCallback(() => {
+        interact(`.${columnClassName}`).resizable({
+            edges: { right: true },
+            onmove(event: ResizeEvent) {
+                // Do a temporary resize
+                elem.style.width = `${Math.round(event.rect.width)}px`;
+            },
+            onend(event: ResizeEvent) {
+                const widthRe: RegExp = /\bwidth\s*:\s*[^;]*;/;
+                const target = event.target as HTMLElement;
+                const width = event.rect.width;
+                //onFinalizeResizeCallbackFn(target, width);
+            }
         });
     });
 
