@@ -96,6 +96,14 @@ impl FullMetadata {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
         trans.execute("UPDATE METADATA_COLUMN SET TRASH = TRUE WHERE OID = ?1", params![oid])?;
+
+        // Regenerate the schema's surrogate view
+        surrogate::regenerate_surrogate(
+            trans,
+            trans.query_one("SELECT SCHEMA_OID FROM METADATA_COLUMN WHERE OID = ?1", params![oid], |row| row.get(0))?
+        )?;
+
+        // Commit the transaction
         trans.commit()?;
         Ok(())
     }
@@ -105,6 +113,14 @@ impl FullMetadata {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
         trans.execute("UPDATE METADATA_COLUMN SET TRASH = FALSE WHERE OID = ?1", params![oid])?;
+
+        // Regenerate the schema's surrogate view
+        surrogate::regenerate_surrogate(
+            trans,
+            trans.query_one("SELECT SCHEMA_OID FROM METADATA_COLUMN WHERE OID = ?1", params![oid], |row| row.get(0))?
+        )?;
+
+        // Commit the transaction
         trans.commit()?;
         Ok(())
     }
@@ -115,6 +131,14 @@ impl FullMetadata {
         let trans = conn.transaction()?;
         trans.execute("UPDATE METADATA_COLUMN SET TRASH = TRUE WHERE OID = ?1", params![trash_oid])?;
         trans.execute("UPDATE METADATA_COLUMN SET TRASH = FALSE WHERE OID = ?1", params![untrash_oid])?;
+
+        // Regenerate the schema's surrogate view
+        surrogate::regenerate_surrogate(
+            trans,
+            trans.query_one("SELECT SCHEMA_OID FROM METADATA_COLUMN WHERE OID = ?1", params![untrash_oid], |row| row.get(0))?
+        )?;
+
+        // Commit the transaction
         trans.commit()?;
         Ok(())
     }
@@ -323,6 +347,10 @@ impl FullMetadata {
                 // Otherwise, a virtual column that requires nothing to be done
             }
         }
+
+        // Regenerate the schema's surrogate view
+        surrogate::regenerate_surrogate(trans, self.schema.oid)?;
+
         Ok(())
     }
 

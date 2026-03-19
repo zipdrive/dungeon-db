@@ -481,6 +481,117 @@ impl<'a> QueryBuilder<'a> {
         )))
     }
 
+    /// Compiles the datasources of the query into SQL.
+    /// This compilation excludes the columns, but includes FROM, JOIN, WHERE, GROUP BY, and ORDER BY clauses.
+    pub fn compile_datasources(mut self) -> Result<Option<String>, Error> {
+        // Compile list of datasource aliases
+        let datasource_aliases: Vec<String> = self.tables_and_subqueries.iter()
+            .filter_map(|table_or_subquery| match table_or_subquery {
+                TableOrSubquery::RootDatasource { alias, .. }
+                | TableOrSubquery::DerivativeDatasource { alias, .. } => Some(alias.clone()),
+                _ => None 
+            })
+            .collect();
+
+        // Compile ORDER BY expression
+        let orderby_expression: String = if self.order_by_indices.len() > 0 {
+            self.order_by_indices.into_iter()
+                .fold(
+                    String::from("ORDER BY"),
+                    |acc, (e, sort_ascending)| if acc == "ORDER BY" { 
+                        format!("ORDER BY {} {}", e + 1, if sort_ascending { "ASC" } else { "DESC" }) 
+                    } else { 
+                        format!("{acc}, {} {}", e + 1, if sort_ascending { "ASC" } else { "DESC" }) 
+                    }
+                )
+        } else {
+            String::from("")
+        };
+
+        Ok(Some(
+            format!(
+                "FROM {} {} {} {} {orderby_expression}",
+
+                // Table and subquery expressions
+                {
+                    let mut compiled_tables_and_subqueries: String = match self.tables_and_subqueries.pop_front() {
+                        Some(TableOrSubquery::RootDatasource { datasource, alias }) => format!("TABLE{} {alias}", datasource.get_schema_oid()?),
+                        Some(TableOrSubquery::DerivativeDatasource { datasource, alias, on_clause }) => {
+                            self.pregroup_filters.push(on_clause);
+                            format!("TABLE{} {alias}", datasource.get_schema_oid()?)
+                        }
+                        Some(TableOrSubquery::Subquery { subquery, alias, on_clause }) => {
+                            self.pregroup_filters.push(on_clause);
+                            format!("({subquery}) {alias}")
+                        }
+                        Some(TableOrSubquery::Array { values, alias }) => format!("VALUES({}) {alias}", todo!("Arrays are not implemented yet!")),
+                        None => { return Ok(None); }
+                    };
+                    for table_or_subquery in self.tables_and_subqueries.into_iter() {
+                        compiled_tables_and_subqueries = format!("{compiled_tables_and_subqueries} {}",
+                            match table_or_subquery {
+                                TableOrSubquery::RootDatasource { datasource, alias } => format!("INNER JOIN TABLE{} {alias}", datasource.get_schema_oid()?),
+                                TableOrSubquery::DerivativeDatasource { datasource, alias, on_clause } => format!("LEFT JOIN TABLE{} {alias} ON {on_clause}", datasource.get_schema_oid()?),
+                                TableOrSubquery::Subquery { subquery, alias, on_clause } => format!("LEFT JOIN ({subquery}) {alias} ON {on_clause}"),
+                                TableOrSubquery::Array { values, alias } => format!("INNER JOIN VALUES({}) {alias}", todo!("Arrays are not yet implemented!"))
+                            }
+                        )
+                    }
+                    compiled_tables_and_subqueries
+                },
+
+                // WHERE expression
+                if self.pregroup_filters.len() > 0 {
+                    format!("WHERE {}",
+                        self.pregroup_filters.into_iter().reduce(|acc, e| format!("{acc} AND {e}")).unwrap_or(String::from("TRUE"))
+                    )
+                } else {
+                    String::from("")
+                },
+
+                // GROUP BY expression
+                if self.group_by_indices.len() > 0 {
+                    format!("GROUP BY {}",
+                        {
+                            let mut group_expr: Vec<String> = Vec::new();
+                            for i in self.group_by_indices {
+                                group_expr.push(match &self.columns[i] {
+                                    QueryBuilderColumn::Primitive { value_expr, .. }
+                                    | QueryBuilderColumn::File { file_expr: value_expr, .. }
+                                    | QueryBuilderColumn::Object { object_query_string_expr: value_expr, .. }
+                                    | QueryBuilderColumn::Select { select_row_expr: value_expr, .. }
+                                    | QueryBuilderColumn::Multiselect { select_row_expr: value_expr, .. } => value_expr.clone(),
+                                    QueryBuilderColumn::Formula { value_expr, deterministic, .. } => {
+                                        if *deterministic {
+                                            value_expr.clone()
+                                        } else {
+                                            return Err(Error::AdhocError("You cannot group a report by a nondeterministic column!"));
+                                        }
+                                    }
+                                    QueryBuilderColumn::Subreport { .. } => {
+                                        return Err(Error::AdhocError("You cannot group a report by a subreport column!"));
+                                    }
+                                });
+                            }
+                            group_expr.into_iter().reduce(|acc, e| format!("{acc}, {e}")).unwrap()
+                        }
+                    )
+                } else {
+                    String::from("")
+                },
+
+                // HAVING expression
+                if self.postgroup_filters.len() > 0 {
+                    format!("HAVING {}",
+                        self.postgroup_filters.into_iter().reduce(|acc, e| format!("{acc} AND {e}")).unwrap_or(String::from("TRUE"))
+                    )
+                } else {
+                    String::from("")
+                }
+            )
+        ))
+    }
+
     /// Checks if the query already has a table or subquery with the given alias.
     pub fn has_table_or_subquery_alias(&self, alias: &String) -> bool {
         if self.tables_and_subqueries.iter().any(|table_or_subquery| <TableOrSubquery as Borrow<String>>::borrow(table_or_subquery) == alias) {
