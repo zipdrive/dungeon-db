@@ -32,6 +32,12 @@ if (urlParamSchemaOid) {
      */
     function reloadAllCells() {
         navigator.locks.request('page-content', async () => {
+            const page: HTMLElement = document.getElementById('page') as HTMLElement;
+            const pageBottomSpacer: HTMLElement = document.getElementById('page-bottom-spacer') as HTMLElement;
+            pageBottomSpacer.style.height = '50%';
+            const pageHeight: number = page.scrollHeight;
+            const pageScrollTop: number = page.scrollTop;
+
             // Update page number
             const pageNumInput: HTMLInputElement = document.getElementById('page-num-input') as HTMLInputElement;
             pageNumInput.value = `${pageNum}`;
@@ -55,7 +61,7 @@ if (urlParamSchemaOid) {
             columnHeaderRow.appendChild(document.createElement('th'));
             pageContentHead.appendChild(columnHeaderRow);
             const columnChannel: Channel<ColumnFullMetadata> = new Channel<ColumnFullMetadata>((column) => {
-                console.debug(`COLUMN: ${JSON.stringify(column)}`);
+                //console.debug(`COLUMN: ${JSON.stringify(column)}`);
                 const elem: HTMLTableCellElement = createColumnHeaderHTML(schemaOid, column);
                 elem.classList.add('reorderable-column');
                 columnHeaderRow.appendChild(elem);
@@ -64,16 +70,18 @@ if (urlParamSchemaOid) {
             // Construct body
             let currentRow: HTMLElement = pageContentBody;
             const cellChannel: Channel<Cell & { maxIndex: number }> = new Channel<Cell & { maxIndex: number }>((cell) => {
-                console.debug(`CELL: ${JSON.stringify(cell)}`);
+                //console.debug(`CELL: ${JSON.stringify(cell)}`);
                 if ('maxIndex' in cell) {
                     maxPageNum = 1 + Math.floor(cell.maxIndex / pageSize);
                 } else {
-                    const elem: HTMLTableRowElement | HTMLTableCellElement = createCell(cell, true, filters);
-                    if (elem.nodeName == 'TR') {
-                        currentRow = elem;
-                        pageContentBody.appendChild(elem);
-                    } else {
-                        currentRow.appendChild(elem);
+                    const elem: HTMLTableRowElement | HTMLTableCellElement | null = createCell(cell, true, filters);
+                    if (elem) {
+                        if (elem.nodeName == 'TR') {
+                            currentRow = elem;
+                            pageContentBody.appendChild(elem);
+                        } else {
+                            currentRow.appendChild(elem);
+                        }
                     }
                 }
             });
@@ -123,6 +131,12 @@ if (urlParamSchemaOid) {
             nextPageButton.disabled = pageNum >= maxPageNum;
             const lastPageButton: HTMLButtonElement = document.getElementById('last-page-button') as HTMLButtonElement;
             lastPageButton.disabled = pageNum >= maxPageNum;
+
+            // Return the page to where it was scrolled before
+            if (pageHeight > page.scrollHeight) {
+                pageBottomSpacer.style.height = `calc(50% + ${Math.ceil(pageHeight - page.scrollHeight)}px)`;
+            }
+            page.scrollTop = pageScrollTop;
         });
     }
 

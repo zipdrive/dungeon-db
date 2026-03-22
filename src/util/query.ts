@@ -13,6 +13,7 @@ export type HierarchicalListItemMetadata = FlatListItemMetadata & {
     masterOid: number | null,
     level: number
 };
+export type SelectedHierarchicalListItemMetadata = HierarchicalListItemMetadata & { selected: boolean };
 export type ToggledHierarchicalListItemMetadata = HierarchicalListItemMetadata & { disabled: boolean };
 
 export type DropdownValue = {
@@ -40,7 +41,8 @@ export type Query = {
 } | {
     inheritorTables: {
         tableOid: number,
-        channel: Channel<HierarchicalListItemMetadata>
+        rowOid: number,
+        channel: Channel<SelectedHierarchicalListItemMetadata>
     }
 } | {
     masterSchemas: {
@@ -70,8 +72,8 @@ export type Query = {
 export async function queryAsync(query: Query): Promise<void> {
     await invoke('query', { query: query })
         .catch(async (e) => {
-            await message(e, {
-                title: 'An error occurred while querying database.',
+            await message(`Query: ${JSON.stringify(query)}\n\n${e}`, {
+                title: `An error occurred while querying database.`,
                 kind: 'error'
             })
         });

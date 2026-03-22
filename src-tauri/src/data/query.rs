@@ -705,7 +705,8 @@ impl<'a> QueryBuilder<'a> {
     }
 
     /// Compiles the SQL expressions for a column.
-    fn compile_column(&mut self, column_datasource: Datasource, column_metadata: column::FullMetadata) -> Result<QueryBuilderColumn, Error> {
+    pub fn compile_column(&mut self, column_datasource: Datasource, column_metadata: column::FullMetadata) -> Result<QueryBuilderColumn, Error> {
+        println!("COLUMN{} type = {:?}", column_metadata.oid, column_metadata.column_type);
         Ok(match column_metadata.column_type {
             column_type::ColumnType::Primitive(prim) => {
                 let datasource_alias: String = self.insert_datasource(column_datasource)?;
@@ -715,7 +716,6 @@ impl<'a> QueryBuilder<'a> {
                     column_metadata.oid
                 );
                 let label_ord: String = format!("LABEL{}", self.columns.len());
-                println!("COLUMN{} type = {prim:?}", column_metadata.oid);
                 match &prim {
                     column_type::Primitive::File 
                     | column_type::Primitive::Image => QueryBuilderColumn::File {
@@ -779,7 +779,7 @@ impl<'a> QueryBuilder<'a> {
                 let label_ord: String = format!("LABEL{}", self.columns.len());
                 QueryBuilderColumn::Object { 
                     label_expr: format!("(SELECT LABEL FROM TABLE{table_oid}_SURROGATE WHERE OID = {primitive_value_alias})"),
-                    json_expr: format!("(SELECT JSON_STRINGIFY FROM TABLE{table_oid}_SURROGATE WHERE OID = {primitive_value_alias})"),
+                    json_expr: format!("(SELECT JSON_LABEL FROM TABLE{table_oid}_SURROGATE WHERE OID = {primitive_value_alias})"),
                     object_query_string_expr: format!("'{datasource_alias}=' || FORMAT('%d', {primitive_value_alias})"),
                     label_ord, 
                     object_schema_oid: table_oid,
@@ -800,7 +800,7 @@ impl<'a> QueryBuilder<'a> {
                 let label_ord: String = format!("LABEL{}", self.columns.len());
                 QueryBuilderColumn::Select { 
                     label_expr: format!("(SELECT LABEL FROM TABLE{table_oid}_SURROGATE WHERE OID = {primitive_value_alias})"),
-                    json_expr: format!("(SELECT JSON_STRINGIFY FROM TABLE{table_oid}_SURROGATE WHERE OID = {primitive_value_alias})"),
+                    json_expr: format!("(SELECT JSON_LABEL FROM TABLE{table_oid}_SURROGATE WHERE OID = {primitive_value_alias})"),
                     select_row_expr: primitive_value_alias,
                     label_ord, 
                     select_schema_oid: table_oid,
@@ -818,27 +818,26 @@ impl<'a> QueryBuilder<'a> {
                 // Construct the SQL expression
                 let datasource_alias: String = self.insert_datasource(column_datasource)?;
                 let primitive_value_alias: String = format!(
-                    "{}.COLUMN{}", 
-                    datasource_alias,
-                    column_metadata.oid
+                    "{}.OID", 
+                    datasource_alias
                 );
                 let select_row_ord: String = format!("VALUE{}", self.columns.len());
                 let label_ord: String = format!("LABEL{}", self.columns.len());
                 QueryBuilderColumn::Multiselect { 
                     label_expr: if inverted {
                         format!("(
-                                SELECT '[' || GROUP_CONCAT(a.JSON_STRINGIFY) || ']' 
+                                SELECT '[' || GROUP_CONCAT(a.JSON_LABEL) || ']' 
                                 FROM MULTISELECT{} m
                                 INNER JOIN TABLE{}_SURROGATE a ON m.TABLE{}_OID = a.OID
                                 WHERE m.TABLE{table_oid}_OID = {primitive_value_alias}
                             )",
-                            column_metadata.schema.oid,
                             column_metadata.oid,
+                            column_metadata.schema.oid,
                             column_metadata.schema.oid
                         )
                     } else {
                         format!("(
-                                SELECT '[' || GROUP_CONCAT(a.JSON_STRINGIFY) || ']' 
+                                SELECT '[' || GROUP_CONCAT(a.JSON_LABEL) || ']' 
                                 FROM MULTISELECT{} m 
                                 INNER JOIN TABLE{table_oid}_SURROGATE a ON m.TABLE{table_oid}_OID = a.OID
                                 WHERE m.TABLE{}_OID = {primitive_value_alias}
@@ -849,7 +848,7 @@ impl<'a> QueryBuilder<'a> {
                     },
                     select_row_expr: if inverted {
                         format!("(
-                                SELECT GROUP_CONCAT(TABLE{}_OID) 
+                                SELECT GROUP_CONCAT(CAST(TABLE{}_OID AS TEXT)) 
                                 FROM MULTISELECT{} 
                                 WHERE TABLE{table_oid}_OID = {primitive_value_alias}
                             )",
@@ -858,7 +857,7 @@ impl<'a> QueryBuilder<'a> {
                         )
                     } else {
                         format!("(
-                                SELECT GROUP_CONCAT(TABLE{table_oid}_OID) 
+                                SELECT GROUP_CONCAT(CAST(TABLE{table_oid}_OID AS TEXT)) 
                                 FROM MULTISELECT{} 
                                 WHERE TABLE{}_OID = {primitive_value_alias}
                             )",

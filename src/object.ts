@@ -41,7 +41,6 @@ if (urlParamSchemaOid) {
             const columnChannel: Channel<ColumnFullMetadata> = new Channel<ColumnFullMetadata>((column) => {
                 console.debug(`COLUMN: ${JSON.stringify(column)}`);
                 const elem: HTMLTableCellElement = createColumnHeaderHTML(schemaOid, column);
-                elem.classList.add('resizable-column');
                 elem.classList.add('reorderable-column');
                 columnHeaderRow.appendChild(elem);
             });
@@ -53,12 +52,14 @@ if (urlParamSchemaOid) {
                 if ('maxIndex' in cell) {
                     // Ignore
                 } else {
-                    const elem: HTMLTableRowElement | HTMLTableCellElement = createCell(cell, false, filters);
-                    if (elem.nodeName == 'TR') {
-                        currentRow = elem;
-                        pageContentBody.appendChild(elem);
-                    } else {
-                        currentRow.appendChild(elem);
+                    const elem: HTMLTableRowElement | HTMLTableCellElement | null = createCell(cell, false, filters);
+                    if (elem) {
+                        if (elem.nodeName == 'TR') {
+                            currentRow = elem;
+                            pageContentBody.appendChild(elem);
+                        } else {
+                            currentRow.appendChild(elem);
+                        }
                     }
                 }
             });

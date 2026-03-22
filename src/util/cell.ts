@@ -3,7 +3,7 @@ import { FullMetadata as ColumnFullMetadata, Primitive } from "./column";
 import { openDialogAsync } from "./dialog";
 import { executeAsync } from "./action";
 import { open, save, message, ask } from "@tauri-apps/plugin-dialog";
-import { DropdownValue, getCellAsync, getFileBase64Async, queryAsync } from "./query";
+import { DropdownValue, getCellAsync, getFileBase64Async, queryAsync, SelectedHierarchicalListItemMetadata } from "./query";
 import { fileTypeFromBuffer, FileTypeResult } from "file-type";
 import { Channel } from "@tauri-apps/api/core";
 
@@ -579,12 +579,13 @@ function updateMultiselectEntryCell(cell: MultiselectEntryCell, elem: HTMLTableC
     addValidationFailureTooltips(elem, cell.validationFailures);
 }
 
-export function createCell(cell: Cell, isTable: boolean, filters: [string, number][]): HTMLTableCellElement | HTMLTableRowElement {
+export function createCell(cell: Cell, isSchema: boolean, filters: [string, number][]): HTMLTableCellElement | HTMLTableRowElement | null {
     function createCellElement(cellOid: CellOid, callbackFn: (e: HTMLTableCellElement) => void) {
         const id: string = `schema${cellOid.schemaOid}-row${cellOid.rowOid}-column${cellOid.columnOid}`;
         const elem: HTMLTableCellElement = document.createElement('td');
         elem.id = id;
         elem.classList.add(`column${cellOid.columnOid}`);
+        elem.tabIndex = 0;
         navigator.locks.request(id, () => {
             callbackFn(elem);
         });
@@ -601,7 +602,7 @@ export function createCell(cell: Cell, isTable: boolean, filters: [string, numbe
         });
     } else if ('primitiveEntry' in cell) {
         return createCellElement(cell.primitiveEntry.cellOid, (elem) => {
-            updatePrimitiveEntryCell(cell.primitiveEntry, elem, isTable);
+            updatePrimitiveEntryCell(cell.primitiveEntry, elem, isSchema);
         });
     } else if ('fileEntry' in cell) {
         return createCellElement(cell.fileEntry.cellOid, (elem) => {
@@ -620,39 +621,74 @@ export function createCell(cell: Cell, isTable: boolean, filters: [string, numbe
             updateMultiselectEntryCell(cell.multiselectEntry, elem);
         });
     } else if ('addNewRowButton' in cell) {
-        const row: HTMLTableRowElement = document.createElement('tr');
-        const elem: HTMLTableCellElement = document.createElement('td');
-        elem.innerText = 'Add New Row';
-        elem.classList.add('clickable-text');
-        elem.style.whiteSpace = 'nowrap';
-        elem.colSpan = 2 + cell.addNewRowButton.columnSpan;
-        elem.addEventListener('click', () => {
-            executeAsync({
-                createRow: {
-                    tableOid: cell.addNewRowButton.tableOid,
-                    rowOid: null,
-                    fixedParentDatasource: cell.addNewRowButton.fixedParentDatasource
+        if (isSchema) {
+            const row: HTMLTableRowElement = document.createElement('tr');
+            const elem: HTMLTableCellElement = document.createElement('td');
+            elem.innerText = 'Add New Row';
+            elem.classList.add('clickable-text');
+            elem.style.whiteSpace = 'nowrap';
+            elem.colSpan = 2 + cell.addNewRowButton.columnSpan;
+            elem.addEventListener('click', () => {
+                executeAsync({
+                    createRow: {
+                        tableOid: cell.addNewRowButton.tableOid,
+                        rowOid: null,
+                        fixedParentDatasource: cell.addNewRowButton.fixedParentDatasource
+                    }
+                })
+                .catch(async (e) => {
+                    await message(e, {
+                        title: 'An error occurred while adding new row.',
+                        kind: 'error'
+                    });
+                })
+            });
+            row.appendChild(elem);
+            return row;
+        } else {
+            // Do not add an Add New Row button if is an Object form
+            return null;
+        }
+    } else {
+        if (isSchema) {
+            // Create a new row, if the page is showing a schema
+            const row: HTMLTableRowElement = document.createElement('tr');
+            const elem: HTMLTableCellElement = document.createElement('td');
+            updateRowIndexCell(cell.row, elem);
+            row.appendChild(elem);
+            return row;
+        } else if (cell.row.rowIdentifier) {
+            // Show dropdown that allows user to select the Object subtype
+            const row: HTMLTableRowElement = document.createElement('tr');
+            row.innerHTML = '<td>Object Type:</td>'
+            const elem: HTMLTableCellElement = document.createElement('td');
+            const selectElem: HTMLSelectElement = document.createElement('select');
+            queryAsync({
+                inheritorTables: {
+                    tableOid: cell.row.rowIdentifier[0],
+                    rowOid: cell.row.rowIdentifier[1],
+                    channel: new Channel<SelectedHierarchicalListItemMetadata>((objectType) => {
+                        const optionElem: HTMLOptionElement = document.createElement('option');
+                        optionElem.value = `${objectType.oid}:${objectType.masterOid}`;
+                        optionElem.innerText = `${' '.repeat(objectType.level)}${objectType.name}`;
+                        selectElem.appendChild(optionElem);
+                    })
                 }
             })
             .catch(async (e) => {
                 await message(e, {
-                    title: 'An error occurred while adding new row.',
+                    title: 'An error occurred while querying for Object type.',
                     kind: 'error'
                 });
-            })
-        });
-        row.appendChild(elem);
-        return row;
-    } else {
-        const row: HTMLTableRowElement = document.createElement('tr');
-        const elem: HTMLTableCellElement = document.createElement('td');
-        updateRowIndexCell(cell.row, elem);
-        row.appendChild(elem);
-        return row;
+            });
+            elem.appendChild(selectElem);
+            row.appendChild(elem);
+            return row;
+        }
     }
 }
 
-export function updateCell(cellOid: CellOid, isTable: boolean) {
+export function updateCell(cellOid: CellOid, isSchema: boolean) {
     const id: string = `schema${cellOid.schemaOid}-row${cellOid.rowOid}-column${cellOid.columnOid}`;
     navigator.locks.request(id, async () => {
         const prevElem: HTMLTableCellElement | null = document.getElementById(id) as HTMLTableCellElement;
@@ -660,6 +696,7 @@ export function updateCell(cellOid: CellOid, isTable: boolean) {
             // Construct replacement element
             const elem: HTMLTableCellElement = document.createElement('td');
             elem.classList.add(`column${cellOid.columnOid}`);
+            elem.tabIndex = 0;
             prevElem.replaceWith(elem);
             elem.id = id;
 
@@ -671,7 +708,7 @@ export function updateCell(cellOid: CellOid, isTable: boolean) {
             } else if ('subreport' in cell) {
                 updateSubreportCell(cell.subreport, elem);
             } else if ('primitiveEntry' in cell) {
-                updatePrimitiveEntryCell(cell.primitiveEntry, elem, isTable);
+                updatePrimitiveEntryCell(cell.primitiveEntry, elem, isSchema);
             } else if ('fileEntry' in cell) {
                 updateFileEntryCell(cell.fileEntry, elem);
             } else if ('object' in cell) {
@@ -681,6 +718,9 @@ export function updateCell(cellOid: CellOid, isTable: boolean) {
             } else if ('multiselectEntry' in cell) {
                 updateMultiselectEntryCell(cell.multiselectEntry, elem);
             } // Ignore everything else
+
+            // Query for dropdowns
+            runDropdownValueQueries();
         }
     });
 }

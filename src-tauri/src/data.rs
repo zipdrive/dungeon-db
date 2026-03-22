@@ -36,6 +36,7 @@ pub enum QueryStream {
     },
     InheritorTables {
         table_oid: i64,
+        row_oid: i64,
         channel: JavaScriptChannelId
     },
     MasterSchemas {
@@ -68,8 +69,8 @@ impl QueryStream {
             Self::Reports { channel} => 
                 schema::HierarchicalListItemMetadata::query_reports(Sender::Channel(channel.channel_on(webview))),
 
-            Self::InheritorTables { channel, table_oid } => 
-                schema::HierarchicalListItemMetadata::query_inheritor_tables(Sender::Channel(channel.channel_on(webview)), table_oid),
+            Self::InheritorTables { channel, table_oid, row_oid } => 
+                schema::SelectedHierarchicalListItemMetadata::query_inheritor_tables(Sender::Channel(channel.channel_on(webview)), table_oid, row_oid),
 
             Self::MasterSchemas { schema_oid, is_table, channel } => 
                 schema::ToggledHierarchicalListItemMetadata::query_master_schemas(Sender::Channel(channel.channel_on(webview)), schema_oid, is_table),

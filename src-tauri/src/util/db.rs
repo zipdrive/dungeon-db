@@ -222,7 +222,6 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
         TABLE_OID INTEGER NOT NULL REFERENCES METADATA_TABLE (OID)
             ON UPDATE CASCADE
     );
-    CREATE UNIQUE INDEX IF NOT EXISTS METADATA_COLUMN_TYPE__MULTISELECT_INDEX_BY_TABLE_OID ON METADATA_COLUMN_TYPE__MULTISELECT (TABLE_OID);
 
 
 
@@ -373,6 +372,7 @@ pub fn open() -> Result<Connection, error::Error> {
             PRAGMA journal_mode = WAL;
             ",
             )?;
+            rusqlite::vtab::array::load_module(&conn)?;
             return Ok(conn);
         }
         None => {

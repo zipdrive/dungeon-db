@@ -4,7 +4,7 @@ use crate::util::error::Error;
 use crate::data::{datasource, table, report};
 use rusqlite::{Connection, Transaction, OptionalExtension, params};
 use serde::{Serialize, Deserialize};
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use std::hash::{Hash, Hasher};
 use std::borrow::Borrow;
 
@@ -94,56 +94,13 @@ impl HierarchicalListItemMetadata {
                 FROM TABLE_HIERARCHY h
                 INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID AND NOT inh.TRASH
                 INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID AND NOT s.TRASH
+                WHERE EXISTS(SELECT OID FROM METADATA_TABLE WHERE OID = s.OID)
 
                 ORDER BY LEVEL DESC, NAME -- Order depth first, then by name within a depth
             )
             SELECT * FROM TABLE_HIERARCHY
             ")?
             .query_and_then([], |row| {
-                Ok::<Self, rusqlite::Error>(Self {
-                    oid: row.get("OID")?,
-                    name: row.get("NAME")?,
-                    master_oid: row.get("MASTER_OID")?,
-                    level: row.get("LEVEL")?
-                })
-            })? {
-            
-            sender.send(list_item_result?)?;
-        }
-        Ok(())
-    }
-
-    /// Queries for all tables inheriting from this one.
-    pub fn query_inheritor_tables<'a>(mut sender: Sender<'a, Self>, master_table_oid: i64) -> Result<(), Error> {
-        let conn: Connection = db::open()?;
-
-        // Run query for flat table data
-        for list_item_result in conn.prepare("
-            WITH TABLE_HIERARCHY (OID, NAME, MASTER_OID, LEVEL) AS (
-                SELECT
-                    s.OID,
-                    s.NAME,
-                    NULL AS MASTER_OID,
-                    0 AS LEVEL
-                FROM METADATA_SCHEMA s
-                WHERE s.OID = ?1 AND NOT s.TRASH
-
-                UNION
-
-                SELECT
-                    s.OID,
-                    s.NAME,
-                    h.OID AS MASTER_OID,
-                    h.LEVEL + 1 AS LEVEL
-                FROM TABLE_HIERARCHY h
-                INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID AND NOT inh.TRASH
-                INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID AND NOT s.TRASH
-
-                ORDER BY LEVEL DESC, NAME -- Order depth first, then by name within a depth
-            )
-            SELECT * FROM TABLE_HIERARCHY
-            ")?
-            .query_and_then(params![master_table_oid], |row| {
                 Ok::<Self, rusqlite::Error>(Self {
                     oid: row.get("OID")?,
                     name: row.get("NAME")?,
@@ -182,8 +139,8 @@ impl HierarchicalListItemMetadata {
                     h.LEVEL + 1 AS LEVEL
                 FROM REPORT_HIERARCHY h
                 INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID AND NOT inh.TRASH
-                INNER JOIN METADATA_REPORT r ON r.OID = inh.INHERITOR_SCHEMA_OID
                 INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID AND NOT s.TRASH
+                WHERE EXISTS(SELECT OID FROM METADATA_REPORT WHERE OID = s.OID)
 
                 ORDER BY LEVEL DESC, NAME -- Order depth first, then by name within a depth
             )
@@ -199,6 +156,83 @@ impl HierarchicalListItemMetadata {
             })? {
             
             sender.send(list_item_result?)?;
+        }
+        Ok(())
+    }
+}
+
+
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all="camelCase")]
+pub struct SelectedHierarchicalListItemMetadata {
+    oid: i64,
+    name: String,
+    master_oid: Option<i64>,
+    level: i64,
+    selected: bool
+}
+
+impl SelectedHierarchicalListItemMetadata {
+    /// Queries for all tables inheriting from this one.
+    pub fn query_inheritor_tables<'a>(mut sender: Sender<'a, Self>, table_oid: i64, row_oid: i64) -> Result<(), Error> {
+        let conn: Connection = db::open()?;
+
+        let mut sub_row_oids: HashMap<i64, i64> = HashMap::new();
+
+        // Run query for flat table data
+        for list_item_result in conn.prepare("
+            WITH TABLE_HIERARCHY (OID, NAME, MASTER_OID, LEVEL) AS (
+                SELECT
+                    s.OID,
+                    s.NAME,
+                    NULL AS MASTER_OID,
+                    0 AS LEVEL
+                FROM METADATA_SCHEMA s
+                WHERE s.OID = ?1 AND NOT s.TRASH
+
+                UNION
+
+                SELECT
+                    s.OID,
+                    s.NAME,
+                    h.OID AS MASTER_OID,
+                    h.LEVEL + 1 AS LEVEL
+                FROM TABLE_HIERARCHY h
+                INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID AND NOT inh.TRASH
+                INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID AND NOT s.TRASH
+                WHERE EXISTS(SELECT OID FROM METADATA_TABLE WHERE OID = s.OID)
+
+                ORDER BY LEVEL DESC, NAME -- Order depth first, then by name within a depth
+            )
+            SELECT * FROM TABLE_HIERARCHY
+            ")?
+            .query_map(params![table_oid], |row| {
+                Ok::<Self, rusqlite::Error>(Self {
+                    oid: row.get("OID")?,
+                    name: row.get("NAME")?,
+                    master_oid: row.get("MASTER_OID")?,
+                    level: row.get("LEVEL")?,
+                    selected: false
+                })
+            })? {
+            
+            // Query to see if the subtype is currently selected
+            let mut list_item: Self = list_item_result?;
+            if let Some(master_table_oid) = list_item.master_oid {
+                if let Some(master_row_oid) = sub_row_oids.get(&master_table_oid) {
+                    let sql_select: String = format!("SELECT OID FROM TABLE{} WHERE MASTER{master_table_oid} = ?1 AND NOT TRASH", list_item.oid);
+                    if let Some(inheritor_row_oid) = conn.query_one(&sql_select, params![master_row_oid], |row| row.get(0)).optional()? {
+                        sub_row_oids.insert(list_item.oid, inheritor_row_oid);
+                        list_item.selected = true;
+                    }
+                }
+            } else {
+                sub_row_oids.insert(table_oid, row_oid);
+                list_item.selected = true;
+            }
+            // Send the subtype as a payload
+            sender.send(list_item)?;
         }
         Ok(())
     }

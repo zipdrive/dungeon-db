@@ -2,9 +2,9 @@ use crate::util::error::Error;
 use crate::util::db;
 use crate::util::channel::Sender;
 use crate::data::schema;
+use crate::data::surrogate;
 use crate::data::column_type;
-use rusqlite::Transaction;
-use rusqlite::{params};
+use rusqlite::{Connection, Transaction, params};
 use serde::{Serialize, Deserialize};
 use std::hash::{Hash, Hasher};
 
@@ -38,8 +38,7 @@ impl Hash for FullMetadata {
 
 impl FullMetadata {
     /// Get the metadata of a column from its OID.
-    pub fn get(oid: i64) -> Result<FullMetadata, Error> {
-        let conn = db::open()?;
+    pub fn get_transact(conn: &Connection, oid: i64) -> Result<FullMetadata, Error> {
         let (
             hidden,
             schema_oid,
@@ -91,6 +90,12 @@ impl FullMetadata {
         })
     }
 
+    /// Get the metadata of a column from its OID.
+    pub fn get(oid: i64) -> Result<FullMetadata, Error> {
+        let conn = db::open()?;
+        Self::get_transact(&conn, oid)
+    }
+
     /// Flags the column for garbage collection.
     pub fn trash(oid: i64) -> Result<(), Error> {
         let mut conn = db::open()?;
@@ -99,7 +104,7 @@ impl FullMetadata {
 
         // Regenerate the schema's surrogate view
         surrogate::regenerate_surrogate(
-            trans,
+            &trans,
             trans.query_one("SELECT SCHEMA_OID FROM METADATA_COLUMN WHERE OID = ?1", params![oid], |row| row.get(0))?
         )?;
 
@@ -116,7 +121,7 @@ impl FullMetadata {
 
         // Regenerate the schema's surrogate view
         surrogate::regenerate_surrogate(
-            trans,
+            &trans,
             trans.query_one("SELECT SCHEMA_OID FROM METADATA_COLUMN WHERE OID = ?1", params![oid], |row| row.get(0))?
         )?;
 
@@ -134,7 +139,7 @@ impl FullMetadata {
 
         // Regenerate the schema's surrogate view
         surrogate::regenerate_surrogate(
-            trans,
+            &trans,
             trans.query_one("SELECT SCHEMA_OID FROM METADATA_COLUMN WHERE OID = ?1", params![untrash_oid], |row| row.get(0))?
         )?;
 
@@ -282,6 +287,7 @@ impl FullMetadata {
         self.oid = trans.last_insert_rowid();
 
         // If the column is not virtual, add it to the table
+        println!("Now adding column {:?} to table...", self.column_type);
         match &self.column_type {
             column_type::ColumnType::Primitive(prim) => {
                 let cmd: String = format!(
@@ -339,6 +345,7 @@ impl FullMetadata {
                     table_oid
                 );
                 trans.execute(&cmd, [])?;
+                println!("Created Multiselect table.");
             }
             column_type::ColumnType::Formula { oid, formula } => {
                 // If the column is a formula, make a view for the values therein

@@ -34,7 +34,7 @@ impl Primitive {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 #[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum ColumnType {
     Formula {
@@ -285,35 +285,23 @@ impl ColumnType {
                 }
             }
             Self::Multiselect { table_oid, .. } => {
-                match conn.query_one(
-                    "SELECT OID FROM METADATA_COLUMN_TYPE__MULTISELECT WHERE TABLE_OID = ?1",
-                    params![table_oid],
-                    |row| row.get(0)
-                ).optional()? {
-                    Some(oid) => {
-                        return Ok(Self::Multiselect {
-                            oid,
-                            table_oid
-                        });
-                    }
-                    None => {
-                        let trans = conn.transaction()?;
+                // Always create a new Multiselect column type
 
-                        // Create the column type metadata
-                        trans.execute("INSERT INTO METADATA_COLUMN_TYPE DEFAULT VALUES", [])?;
-                        let oid: i64 = trans.last_insert_rowid();
+                let trans = conn.transaction()?;
 
-                        // Create the multiselect column type metadata
-                        trans.execute("INSERT INTO METADATA_COLUMN_TYPE__MULTISELECT (OID, TABLE_OID) VALUES (?1, ?2)", params![oid, table_oid])?;
+                // Create the column type metadata
+                trans.execute("INSERT INTO METADATA_COLUMN_TYPE DEFAULT VALUES", [])?;
+                let oid: i64 = trans.last_insert_rowid();
 
-                        // Commit the transaction
-                        trans.commit()?;
-                        return Ok(Self::Select {
-                            oid,
-                            table_oid
-                        });
-                    }
-                }
+                // Create the multiselect column type metadata
+                trans.execute("INSERT INTO METADATA_COLUMN_TYPE__MULTISELECT (OID, TABLE_OID) VALUES (?1, ?2)", params![oid, table_oid])?;
+
+                // Commit the transaction
+                trans.commit()?;
+                return Ok(Self::Multiselect {
+                    oid,
+                    table_oid
+                });
             }
         }
     }

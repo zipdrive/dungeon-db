@@ -51,7 +51,6 @@ pub struct CellOid {
 #[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum Cell {
     MaxIndex(i64),
-    ObjectTable(i64),
     Row {
         row_identifier: Option<(i64, i64)>,
         index: i64,
@@ -180,7 +179,7 @@ impl Cell {
                                 f.LABEL
                             FROM {table_name}
                             LEFT JOIN METADATA_FILE_VIEW f ON f.OID = {column_name}
-                            WHERE OID = ?1
+                            WHERE t.OID = ?1
                             "
                         );
                         let (oid, label) = conn.query_one(
@@ -241,7 +240,7 @@ impl Cell {
                     SELECT 
                         COLUMN{} AS SELECT_ROW_OID
                     FROM TABLE{}
-                    WHERE t.OID = ?1
+                    WHERE OID = ?1
                     ", 
                     cell_oid.column_oid, 
                     cell_oid.schema_oid
@@ -269,7 +268,7 @@ impl Cell {
                     "
                     SELECT 
                         GROUP_CONCAT(CAST(m.TABLE{table_oid}_OID AS TEXT)) AS VALUE, 
-                        '[' || GROUP_CONCAT(a.JSON_STRINGIFY) || ']' AS LABEL
+                        '[' || GROUP_CONCAT(a.JSON_LABEL) || ']' AS LABEL
                     FROM {multiselect_name} m
                     INNER JOIN TABLE{table_oid}_SURROGATE a ON a.OID = m.TABLE{table_oid}_OID
                     WHERE m.{table_name}_OID = ?1
@@ -410,6 +409,7 @@ impl Cell {
         // Compile and run the query
         let conn: Connection = db::open()?;
         if let Some((cmd_query, cols, datasource_aliases)) = query.compile()? {
+            println!("{cmd_query}");
 
             // First, get the maximum index
             let cmd_max_index_query = format!("SELECT ROW_INDEX FROM ({cmd_query}) ORDER BY ROW_INDEX DESC LIMIT 1");
@@ -425,7 +425,6 @@ impl Cell {
                 RetrievalLimit::SingleRow => format!("{cmd_query} LIMIT 1"),
                 RetrievalLimit::Page { num, size } => format!("{cmd_query} LIMIT {size} OFFSET {}", size * (num - 1))
             };
-            println!("{cmd_query}");
 
             // Run the query
             let mut stmt_query = conn.prepare(&cmd_query)?;
@@ -438,33 +437,39 @@ impl Cell {
                 // Load all filters used to identify the row
                 let mut filters: Vec<(String, i64)> = Vec::new();
                 for datasource_alias in datasource_aliases.iter() {
-                    if let Some(datasource_row_oid) = row.get::<_, Option<i64>>(datasource_alias) {
+                    let datasource_row_alias: String = format!("{datasource_alias}_OID");
+                    if let Some(datasource_row_oid) = row.get::<&str, Option<i64>>(&datasource_row_alias)? {
                         filters.push((datasource_alias.clone(), datasource_row_oid));
                     }
                 }
                 // Determine if there is a specific schema that can be used to identify the row
-                let lowest_level_filter: Option<(String, i64)> = {
-                    let filter_iter = filters.iter();
-                    match filter_iter.next() {
+                let lowest_level_filter: Option<(i64, i64)> = {
+                    let mut filter_iter = filters.iter();
+                    if let Some((lowest_level_datasource_alias, lowest_level_datasource_row_oid)) = match filter_iter.next() {
                         None => None,
                         Some(mut current_lowest_level_filter) => {
                             loop {
                                 match filter_iter.next() {
                                     Some(filter) => {
-                                        if current_lowest_level_filter.0.starts_with(filter.0) {
+                                        if current_lowest_level_filter.0.starts_with(&filter.0) {
                                             // Continue
-                                        } else if filter.0.starts_with(current_lowest_level_filter.0) {
+                                        } else if filter.0.starts_with(&current_lowest_level_filter.0) {
                                             current_lowest_level_filter = filter;
                                         } else {
                                             break None;
                                         }
                                     }
                                     None => {
-                                        break Some(current_lowest_level_filter);
+                                        break Some(current_lowest_level_filter.clone());
                                     }
                                 }
                             }
                         }
+                    } {
+                        let lowest_level_datasource: Datasource = Datasource::from_path(lowest_level_datasource_alias.split('_').map(|s| String::from(s)).collect())?;
+                        Some((lowest_level_datasource.get_schema_oid()?, lowest_level_datasource_row_oid))
+                    } else {
+                        None
                     }
                 };
 
@@ -813,7 +818,7 @@ impl Cell {
             Self::MultiselectEntry { value_oid, multiselect_schema_oid, multiselect_row_oid, .. } => {
                 // Delete the rows selected in the database that were deselected
                 let sql_delete: String = format!(
-                    "DELETE FROM MULTISELECT{} WHERE TABLE{}_OID = ?1 AND TABLE{}_OID NOT IN ?2",
+                    "DELETE FROM MULTISELECT{} WHERE TABLE{}_OID = ?1 AND TABLE{}_OID NOT IN rarray(?2)",
                     value_oid.column_oid,
                     value_oid.schema_oid,
                     multiselect_schema_oid

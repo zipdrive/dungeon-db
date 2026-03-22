@@ -1,7 +1,8 @@
 use crate::util::channel::Sender;
 use crate::util::error::Error;
 use crate::util::db;
-use crate::data::{schema, datasource};
+use crate::data::schema;
+use crate::data::surrogate;
 use rusqlite::{Transaction, OptionalExtension, params};
 use serde::{Serialize, Deserialize};
 use std::collections::{HashMap, HashSet};

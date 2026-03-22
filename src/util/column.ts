@@ -87,7 +87,9 @@ export function createColumnHeaderHTML(schemaOid: number, column: FullMetadata):
     columnStylesheet?.insertAdjacentText('beforeend', `.${columnClassName} { ${column.style} } `);
 
     // Attach context menu
-    elem.addEventListener('contextmenu', async () => {
+    elem.addEventListener('contextmenu', async (e) => {
+        e.preventDefault();
+
         const contextMenu: Menu = await Menu.new({
             items: await Promise.all([
                 MenuItem.new({
