@@ -44,6 +44,10 @@ pub enum QueryStream {
         is_table: bool,
         channel: JavaScriptChannelId
     },
+    Columns {
+        schema_oid: i64,
+        channel: JavaScriptChannelId
+    },
     ColumnAssociatedTables {
         channel: JavaScriptChannelId
     },
@@ -74,6 +78,9 @@ impl QueryStream {
 
             Self::MasterSchemas { schema_oid, is_table, channel } => 
                 schema::ToggledHierarchicalListItemMetadata::query_master_schemas(Sender::Channel(channel.channel_on(webview)), schema_oid, is_table),
+
+            Self::Columns { schema_oid, channel } => 
+                column::FullMetadata::query_by_schema(Sender::Channel(channel.channel_on(webview)), schema_oid),
 
             Self::ColumnAssociatedTables { channel } => 
                 column::FullMetadata::query_associated_tables(Sender::Channel(channel.channel_on(webview))),

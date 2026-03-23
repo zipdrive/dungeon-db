@@ -51,6 +51,11 @@ export type Query = {
         channel: Channel<ToggledHierarchicalListItemMetadata>
     }
 } | {
+    columns: {
+        schemaOid: number,
+        channel: Channel<DropdownValue>
+    }
+} | {
     columnAssociatedTables: {
         channel: Channel<DropdownValue>
     }

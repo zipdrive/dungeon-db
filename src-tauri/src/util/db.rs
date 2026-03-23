@@ -322,6 +322,36 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
         )
         SELECT * FROM FLATTENING
     ;
+
+    -- METADATA_SCHEMA_ORDERBY_VIEW is a view that filters out any bad METADATA_SCHEMA_ORDERBY rows.
+    CREATE VIEW IF NOT EXISTS METADATA_SCHEMA_ORDERBY_VIEW AS
+        SELECT 
+            u.SCHEMA_OID,
+            u.COLUMN_OID,
+            u.SORT_ASCENDING
+        FROM METADATA_SCHEMA_ORDERBY u
+        INNER JOIN METADATA_COLUMN c ON c.OID = u.COLUMN_OID
+        WHERE NOT u.TRASH
+            AND NOT c.TRASH
+            AND (c.SCHEMA_OID = u.SCHEMA_OID 
+                OR EXISTS(SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE WHERE INHERITOR_SCHEMA_OID = u.SCHEMA_OID)
+            )
+        ORDER BY u.ORDERING
+    ;
+
+    -- METADATA_REPORT_GROUPBY_VIEW is a view that filters out any bad METADATA_REPORT_GROUPBY rows.
+    CREATE VIEW IF NOT EXISTS METADATA_REPORT_GROUPBY_VIEW AS
+        SELECT 
+            u.REPORT_OID,
+            u.COLUMN_OID
+        FROM METADATA_REPORT_GROUPBY u
+        INNER JOIN METADATA_COLUMN c ON c.OID = u.COLUMN_OID
+        WHERE NOT u.TRASH
+            AND NOT c.TRASH
+            AND (c.SCHEMA_OID = u.REPORT_OID 
+                OR EXISTS(SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE WHERE INHERITOR_SCHEMA_OID = u.REPORT_OID)
+            )
+    ;
     
 
 

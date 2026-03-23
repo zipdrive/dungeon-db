@@ -10,5 +10,6 @@ export type Schema = {
 export type FullMetadata = {
     oid: number,
     name: string,
-    masterSchemaOids: number[]
+    masterSchemaOids: number[],
+    orderByColumnOids: [number, boolean][]
 };

@@ -387,7 +387,14 @@ impl Cell {
         }
 
         // Group rows in the query based on the METADATA_REPORT_GROUPBY table
-        let mut stmt_groupby = conn.prepare("SELECT COLUMN_OID FROM METADATA_REPORT_GROUPBY WHERE REPORT_OID = ?1 AND TRASH = 0")?;
+        let mut stmt_groupby = conn.prepare(
+            "
+            SELECT 
+                COLUMN_OID 
+            FROM METADATA_REPORT_GROUPBY_VIEW
+            WHERE REPORT_OID = ?1 
+            "
+        )?;
         for row_result in stmt_groupby.query_and_then(params![schema_oid], |row| row.get::<_, i64>("COLUMN_OID"))? {
             let column_oid = row_result?;
             // Insert GROUP BY clause
@@ -395,7 +402,15 @@ impl Cell {
         }
 
         // Order the query based on the METADATA_SCHEMA_ORDERBY table
-        let mut stmt_orderby = conn.prepare("SELECT COLUMN_OID, SORT_ASCENDING FROM METADATA_SCHEMA_ORDERBY WHERE SCHEMA_OID = ?1 AND TRASH = 0 ORDER BY ORDERING")?;
+        let mut stmt_orderby = conn.prepare(
+            "
+            SELECT 
+                COLUMN_OID, 
+                SORT_ASCENDING 
+            FROM METADATA_SCHEMA_ORDERBY_VIEW
+            WHERE SCHEMA_OID = ?1 
+            "
+        )?;
         for row_result in stmt_orderby.query_and_then(params![schema_oid], |row| { Ok::<(i64, bool), rusqlite::Error>((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, bool>("SORT_ASCENDING")?)) })? {
             let (column_oid, sort_ascending) = row_result?;
             // Insert ORDER BY clause

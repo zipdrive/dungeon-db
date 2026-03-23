@@ -390,7 +390,8 @@ impl Schema {
 pub struct FullMetadata {
     pub oid: i64,
     pub name: String,
-    pub master_schema_oids: HashSet<i64>
+    pub master_schema_oids: HashSet<i64>,
+    pub order_by_column_oids: Vec<(i64, bool)>
 }
 
 impl Hash for FullMetadata {
@@ -430,6 +431,34 @@ impl FullMetadata {
             }
         }
 
+        // Query for ORDER BY columns
+        let mut order_by_column_oids: Vec<(i64, bool)> = Vec::new();
+        {
+            let mut order_by_column_oids_statement = conn.prepare(
+                "
+                SELECT 
+                    COLUMN_OID,
+                    SORT_ASCENDING
+                FROM METADATA_SCHEMA_ORDERBY_VIEW
+                WHERE SCHEMA_OID = ?1
+                "
+            )?;
+            let order_by_column_oids_rows = order_by_column_oids_statement.query_and_then(
+                params![oid], 
+                |row| Ok::<(i64, String, bool), rusqlite::Error>(
+                    row.get("COLUMN_OID")?,
+                    row.get("SORT_ASCENDING")?
+                )
+            )?;
+            for order_by_column_oids_result in order_by_column_oids_rows {
+                let (order_by_column_oid, order_by_column_ascending) = order_by_column_oids_result?;
+                order_by_column_oids.insert((
+                    order_by_column_oid, 
+                    order_by_column_ascending
+                ));
+            }
+        }
+
         // Query for name of schema
         Ok(conn.query_one(
             "SELECT NAME FROM METADATA_SCHEMA WHERE OID = ?1",
@@ -438,7 +467,8 @@ impl FullMetadata {
                 Ok(Self {
                     oid,
                     name: row.get("NAME")?,
-                    master_schema_oids: master_schemas
+                    master_schema_oids: master_schemas,
+                    order_by_column_oids
                 })
             }
         )?)
@@ -469,7 +499,7 @@ impl FullMetadata {
         self.oid = trans.last_insert_rowid();
 
         // Create the inheritance pattern
-        self.set_inheritance(trans)?;
+        self.set_transact(trans)?;
         Ok(())
     }
 
@@ -479,12 +509,12 @@ impl FullMetadata {
         trans.execute("UPDATE METADATA_SCHEMA SET NAME = ?1 WHERE OID = ?2", params![&self.name, self.oid])?;
 
         // Overwrite the inheritance pattern
-        self.set_inheritance(trans)?;
+        self.set_transact(trans)?;
         Ok(())
     }
 
     /// Sets the inheritance pattern for the schema.
-    fn set_inheritance(&self, trans: &Transaction) -> Result<(), Error> {
+    fn set_transact(&self, trans: &Transaction) -> Result<(), Error> {
         // Clear all metadata describing inheritance
         trans.execute(
             "UPDATE METADATA_SCHEMA_INHERITANCE SET TRASH = TRUE WHERE INHERITOR_SCHEMA_OID = ?1",
@@ -522,6 +552,37 @@ impl FullMetadata {
                 }
             }
         }
+
+        // Trash all previous rows of ORDER BY
+        trans.execute("UPDATE METADATA_SCHEMA_ORDERBY SET TRASH = TRUE WHERE SCHEMA_OID = ?1", params![self.oid])?;
+        // Set new rows of ORDER BY
+        for (order_by_column_ordering, (order_by_column_oid, order_by_column_ascending)) in self.order_by_column_oids.iter().enumerate() {
+            
+            trans.execute(
+                "
+                INSERT INTO METADATA_SCHEMA_ORDERBY 
+                    (SCHEMA_OID, COLUMN_OID, ORDERING, SORT_ASCENDING)
+                    VALUES
+                    (?1, ?2, ?3, ?4)
+                ON CONFLICT DO UPDATE SET 
+                    TRASH = FALSE,
+                    ORDERING = excluded.ORDERING,
+                    SORT_ASCENDING = excluded.SORT_ASCENDING
+                WHERE EXISTS(
+                    SELECT
+                        c.OID
+                    FROM METADATA_COLUMN c
+                    WHERE c.OID = excluded.COLUMN_OID
+                        AND NOT c.TRASH
+                        AND (c.SCHEMA_OID = excluded.SCHEMA_OID
+                            OR EXISTS(SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE WHERE INHERITOR_SCHEMA_OID = excluded.SCHEMA_OID)
+                        )
+                )
+                ",
+                params![self.oid, order_by_column_oid, order_by_column_ordering, order_by_column_ascending]
+            )?;
+        }
+
         Ok(())
     }
 }
