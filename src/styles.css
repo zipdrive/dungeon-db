@@ -227,3 +227,9 @@ body {
     visibility: visible;
   }
 }
+sup[tooltip] {
+  font-weight: 500;
+  color: var(--text-color-link);
+  text-decoration: underline dashed;
+  cursor: default;
+}

@@ -21,14 +21,14 @@
                     </colgroup>
                     <tbody>
                         <tr>
-                            <td><label for="column-name">Column Name:</label></td>
+                            <td><label for="column-name">Column Name:<sup tooltip="The name of the column. Names are not strictly required to be unique, but you should make them unique to avoid confusion.">?</sup></label></td>
                             <td><input name="column-name" id="column-name" type="text" class="input" /></td>
                         </tr>
                         <tr>
-                            <td><label for="column-type">Column Type:</label></td>
+                            <td><label for="column-type">Column Type:<sup tooltip="The type of the column.&#10;Plain Text columns contain raw, unformatted text values.&#10;Checkbox columns contain binary flags, represented by a checkbox.&#10;Integer columns are restricted to whole number values.&#10;Number columns are restricted to decimal number values.&#10;Date columns are restricted to values representing a date.&#10;Datetime columns are restricted to values representing a date and time.&#10;Object columns contain a unique reference to a row in another table. This Object is displayed as a link, which opens a form where you can inspect and edit the polymorphic behavior of the linked row.&#10;Select columns contain references to a single row in another table, selected via a dropdown menu.&#10;Multiselect columns contain references to any number of rows in another table.&#10;File columns contain files. These files can either be uploaded as a link referencing a filepath on your computer (in which case they will change when the linked file is changed), or they can be uploaded directly into this .db file (in which case they will remain the same even if the original file is altered or deleted). Image files will be displayed as an image thumbnail.&#10;JSON columns contain text values in JSON format.&#10;Formula columns are defined by a formula.&#10;Subreports are represented as a link to a report, which opens with the same filters of the parent row automatically applied to it.">?</sup></label></td>
                             <td>
                                 <select name="column-type" id="column-type" class="input">
-                                    <option class="exclusive-table" value="primitive-text">Text</option>
+                                    <option class="exclusive-table" value="primitive-text">Plain Text</option>
                                     <option class="exclusive-table" value="primitive-checkbox">Checkbox</option>
                                     <option class="exclusive-table" value="primitive-integer">Integer</option>
                                     <option class="exclusive-table" value="primitive-number">Number</option>
@@ -45,7 +45,7 @@
                             </td>
                         </tr>
                         <tr>
-                            <td><label for="column-hidden">Is Hidden?</label></td>
+                            <td><label for="column-hidden">Is Hidden?<sup tooltip="Hidden columns are not displayed in the schema, but can still be referenced by formulas.">?</sup></label></td>
                             <td>
                                 <input name="column-hidden" id="column-hidden" type="checkbox" />
                             </td>
@@ -62,7 +62,7 @@
                             parameter-select
                             parameter-multiselect 
                         ">
-                            <td><label for="column-is-primary-key">Is Key Column?</label></td>
+                            <td><label for="column-is-primary-key">Is Key Column?<sup tooltip="Key columns are used to identify rows for Object, Select, and Multiselect columns.">?</sup></label></td>
                             <td>
                                 <input name="column-is-primary-key" id="column-is-primary-key" type="checkbox" />
                             </td>
@@ -76,7 +76,7 @@
                             parameter-primitive-datetime
                             parameter-primitive-jSON
                         ">
-                            <td><label for="column-default-value">Default Value:</label></td>
+                            <td><label for="column-default-value">Default Value:<sup tooltip="The default value of this column when a new row is created.">?</sup></label></td>
                             <td>
                                 <input name="column-default-value" id="column-default-value" type="text" class="input" />
                             </td>
@@ -86,7 +86,7 @@
                             parameter-select 
                             parameter-multiselect
                         ">
-                            <td><label for="column-associated-table">Table:</label></td>
+                            <td><label for="column-associated-table">Table:<sup tooltip="The table referenced by this column.">?</sup></label></td>
                             <td>
                                 <select name="column-associated-table" id="column-associated-table" class="input">
                                 </select>
@@ -95,12 +95,21 @@
                         <tr class="
                             parameter-formula
                         ">
-                            <td><label for="column-formula">Formula:</label></td>
+                            <td><label for="column-formula">Formula:<sup tooltip="The formula for the value of this column. To use a value from a table into the formula, click the &quot;Insert Parameter&quot; button. To verify that the formula has no errors, click the &quot;Error Check&quot; button.&#10;If the formula for a particular cell returns a column without any modifications, then the referenced column can be edited through that cell. Otherwise, the cell will be a readonly value.&#10;Caution: A formula will return one value per row in the schema. If a formula would return multiple values per row, then the number of rows will be multiplied by the number of values returned.">?</sup></label></td>
                             <td>
                                 <textarea name="column-formula" id="column-formula" class="input">
                                 </textarea>
                                 <button id="add-parameter-button">Insert Parameter</button>
                                 <button id="validate-formula-button">Error Check</button>
+                            </td>
+                        </tr>
+                        <tr class="
+                            parameter-subreport
+                        ">
+                            <td><label for="column-associated-report">Report:<sup tooltip="The report referenced by this column.">?</sup></label></td>
+                            <td>
+                                <select name="column-associated-report" id="column-associated-report" class="input">
+                                </select>
                             </td>
                         </tr>
                         <tr>
@@ -112,7 +121,7 @@
                             </td>
                         </tr>
                         <tr class="parameter-advanced">
-                            <td><label for="column-style">Column Style:</label></td>
+                            <td><label for="column-style">Column Style:<sup tooltip="The CSS style for cells in the column.">?</sup></label></td>
                             <td>
                                 <textarea name="column-style" id="column-style" class="input" rows="20">
 width: 180px;
@@ -203,7 +212,9 @@ padding: 2px 6px;
                     </tbody>
                 </table>
             </div>
+
         </div>
+        
         <div class="dialog-buttons">
             <button id="confirm-button">OK</button>
             <button id="cancel-button">Cancel</button>

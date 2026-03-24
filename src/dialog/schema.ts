@@ -30,6 +30,37 @@ function loadColumns(callbackFns: ((dropdownValue: DropdownValue) => void)[]) {
     }
 }
 
+function createNewOrderingColumn(columnSortAscending: boolean): HTMLSelectElement {
+    const schemaOrderingElem: HTMLElement = document.querySelector('#schema-ordering > tbody') as HTMLElement;
+
+    const rowElem: HTMLTableRowElement = document.createElement('tr');
+    rowElem.classList.add('schema-ordering-column');
+    rowElem.innerHTML = '<td><img class="orderby-column-icon" src="/src-tauri/icons/swap_vert.png"></td>';
+    schemaOrderingElem.appendChild(rowElem);
+
+    const selectTdElem: HTMLTableCellElement = document.createElement('td');
+    const selectElem: HTMLSelectElement = document.createElement('select');
+    selectElem.classList.add('input');
+    selectElem.classList.add('column-oid');
+    selectTdElem.appendChild(selectElem);
+    rowElem.appendChild(selectTdElem);
+
+    const sortAscendingTdElem: HTMLTableCellElement = document.createElement('td');
+    const sortAscendingElem: HTMLSelectElement = document.createElement('select');
+    sortAscendingElem.classList.add('input');
+    sortAscendingElem.classList.add('column-ascending');
+    sortAscendingElem.innerHTML = '<option value="asc">ASCENDING</option><option value="desc">DESCENDING</option>';
+    sortAscendingElem.value = columnSortAscending ? 'asc' : 'desc';
+    sortAscendingTdElem.appendChild(sortAscendingElem);
+    rowElem.appendChild(sortAscendingTdElem);
+
+    return selectElem;
+}
+
+function createNewGroupingColumn(): HTMLSelectElement {
+
+}
+
 
 function populateNewSchemaMetadata() {
     // Query the list of master schemas
@@ -79,26 +110,7 @@ function populatePreexistingSchemaMetadata(schema: SchemaFullMetadata): ((dropdo
     const schemaOrderingElem: HTMLElement = document.querySelector('#schema-ordering > tbody') as HTMLElement;
     schemaOrderingElem.innerHTML = '';
     return schema.orderByColumnOids.map(([columnOid, columnSortAscending]) => {
-        const rowElem: HTMLTableRowElement = document.createElement('tr');
-        rowElem.classList.add('schema-ordering-column');
-        rowElem.innerHTML = '<td><img class="orderby-column-icon" src="/src-tauri/icons/swap_vert.png"></td>';
-        schemaOrderingElem.appendChild(rowElem);
-
-        const selectTdElem: HTMLTableCellElement = document.createElement('td');
-        const selectElem: HTMLSelectElement = document.createElement('select');
-        selectElem.classList.add('input');
-        selectElem.classList.add('column-oid');
-        selectTdElem.appendChild(selectElem);
-        rowElem.appendChild(selectTdElem);
-
-        const sortAscendingTdElem: HTMLTableCellElement = document.createElement('td');
-        const sortAscendingElem: HTMLSelectElement = document.createElement('select');
-        sortAscendingElem.classList.add('input');
-        sortAscendingElem.classList.add('column-ascending');
-        sortAscendingElem.innerHTML = '<option value="asc">ASCENDING</option><option value="desc">DESCENDING</option>';
-        sortAscendingElem.value = columnSortAscending ? 'asc' : 'desc';
-        sortAscendingTdElem.appendChild(sortAscendingElem);
-        rowElem.appendChild(sortAscendingTdElem);
+        const selectElem: HTMLSelectElement = createNewOrderingColumn(columnSortAscending);
 
         return (dropdownValue: DropdownValue) => {
             const optionElem: HTMLOptionElement = document.createElement('option');
@@ -122,11 +134,53 @@ function populateSchemaMetadata() {
         } else {
             getReportMetadataAsync(schemaOid).then((report) => {
                 let callbackFns: ((dropdownValue: DropdownValue) => void)[] = populatePreexistingSchemaMetadata(report.schema);
+
+                // Populate in the filter formula
+                const filterFormulaElem: HTMLTextAreaElement = document.getElementById('schema-filter') as HTMLTextAreaElement;
+                filterFormulaElem.value = report.filterFormula ?? '';
+
+                // Populate in the GROUP BY columns
+                report.groupByColumnOid.forEach((columnOid) => {
+                    const selectElem: HTMLSelectElement = createNewGroupingColumn();
+                    callbackFns.push((dropdownValue) => {
+                        const optionElem: HTMLOptionElement = document.createElement('option');
+                        optionElem.value = dropdownValue.value.toString();
+                        optionElem.innerText = dropdownValue.label;
+                        if (dropdownValue.value == columnOid) {
+                            optionElem.selected = true;
+                        }
+                        selectElem.appendChild(optionElem);
+                    });
+                });
+
                 loadColumns(callbackFns);
             });
         }
     } else {
         populateNewSchemaMetadata();
+    }
+
+    // Hide tabs if necessary
+    if (!schemaOid) {
+        // Hide "Sort By" tab
+        const sortByTab: HTMLElement = document.getElementById('ordering-tab') as HTMLElement;
+        sortByTab.style.display = 'none';
+
+        // Hide "Group By" tab
+        const groupByTab: HTMLElement = document.getElementById('grouping-tab') as HTMLElement;
+        groupByTab.style.display = 'none';
+
+        // Hide "Filter" tab
+        const filterTab: HTMLElement = document.getElementById('filter-tab') as HTMLElement;
+        filterTab.style.display = 'none';
+    } else if (mode == 'table') {
+        // Hide "Group By" tab
+        const groupByTab: HTMLElement = document.getElementById('grouping-tab') as HTMLElement;
+        groupByTab.style.display = 'none';
+
+        // Hide "Filter" tab
+        const filterTab: HTMLElement = document.getElementById('filter-tab') as HTMLElement;
+        filterTab.style.display = 'none';
     }
 }
 
@@ -176,8 +230,21 @@ function compileTable(): TableFullMetadata {
  * Compiles the inputted metadata for a report.
  */
 function compileReport(): ReportFullMetadata {
+    const filterFormulaElem: HTMLTextAreaElement = document.getElementById('schema-filter') as HTMLTextAreaElement;
+
+    let groupByColumnOid: number[] = [];
+    document.querySelectorAll('#schema-grouping .schema-grouping-column').forEach((columnElem) => {
+        const columnOidElem: HTMLSelectElement = columnElem.querySelector('.column-oid') as HTMLSelectElement;
+        const columnOid: number = parseInt(columnOidElem.value);
+        if (isFinite(columnOid)) {
+            groupByColumnOid.push(columnOid);
+        }
+    });
+
     return {
-        schema: compileSchema()
+        schema: compileSchema(),
+        filterFormula: filterFormulaElem.value ? filterFormulaElem.value : '',
+        groupByColumnOid: groupByColumnOid
     };
 }
 
@@ -252,26 +319,20 @@ window.addEventListener("DOMContentLoaded", () => {
         e.preventDefault();
 
         // Create a new ORDER BY row
-        const schemaOrderingElem: HTMLElement = document.querySelector('#schema-ordering > tbody') as HTMLElement;
-        const rowElem: HTMLTableRowElement = document.createElement('tr');
-        rowElem.classList.add('schema-ordering-column');
-        rowElem.innerHTML = '<td><img class="orderby-column-icon" src="/src-tauri/icons/swap_vert.png"></td>';
-        schemaOrderingElem.appendChild(rowElem);
+        const selectElem: HTMLSelectElement = createNewOrderingColumn(true);
 
-        const selectTdElem: HTMLTableCellElement = document.createElement('td');
-        const selectElem: HTMLSelectElement = document.createElement('select');
-        selectElem.classList.add('input');
-        selectElem.classList.add('column-oid');
-        selectTdElem.appendChild(selectElem);
-        rowElem.appendChild(selectTdElem);
+        columns.forEach((dropdownValue: DropdownValue) => {
+            const optionElem: HTMLOptionElement = document.createElement('option');
+            optionElem.value = dropdownValue.value.toString();
+            optionElem.innerText = dropdownValue.label;
+            selectElem.appendChild(optionElem);
+        });
+    });
+    document.getElementById('add-schema-grouping-column-button')?.addEventListener("click", async (e) => {
+        e.preventDefault();
 
-        const sortAscendingTdElem: HTMLTableCellElement = document.createElement('td');
-        const sortAscendingElem: HTMLSelectElement = document.createElement('select');
-        sortAscendingElem.classList.add('input');
-        sortAscendingElem.classList.add('column-ascending');
-        sortAscendingElem.innerHTML = '<option value="asc">ASCENDING</option><option value="desc">DESCENDING</option>';
-        sortAscendingTdElem.appendChild(sortAscendingElem);
-        rowElem.appendChild(sortAscendingTdElem);
+        // Create a new GROUP BY row
+        const selectElem: HTMLSelectElement = createNewGroupingColumn();
 
         columns.forEach((dropdownValue: DropdownValue) => {
             const optionElem: HTMLOptionElement = document.createElement('option');

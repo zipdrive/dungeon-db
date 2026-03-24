@@ -98,12 +98,13 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
             ON DELETE CASCADE
     );
 
-    -- METADATA_REPORT stores all user-defined schemas that do not store data, but rather pull data from other schemas.
+    -- METADATA_REPORT stores all user-defined schemas that do not store data, but rather pull data from one or more tables (and/or array literals?).
     -- A report can only be associated with virtual columns.
     CREATE TABLE IF NOT EXISTS METADATA_REPORT (
         OID INTEGER PRIMARY KEY REFERENCES METADATA_SCHEMA (OID) 
             ON UPDATE CASCADE
-            ON DELETE CASCADE
+            ON DELETE CASCADE,
+        FILTER_FORMULA TEXT
     );
 
 
@@ -289,18 +290,6 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
         TRASH BOOLEAN NOT NULL DEFAULT FALSE,
         PRIMARY KEY (REPORT_OID, COLUMN_OID)
     );
-
-    -- METADATA_REPORT_FILTER stores what filters are applied to the report.
-    -- A filter takes the form of a boolean formula that is evaluated for each row in the report.
-    CREATE TABLE IF NOT EXISTS METADATA_REPORT_FILTER (
-        OID INTEGER PRIMARY KEY,
-        TRASH BOOLEAN NOT NULL DEFAULT FALSE,
-        REPORT_OID INTEGER NOT NULL REFERENCES METADATA_REPORT (OID)
-            ON UPDATE CASCADE
-            ON DELETE CASCADE,
-        FORMULA TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS METADATA_REPORT_FILTER_INDEX_BY_REPORT_OID ON METADATA_REPORT_FILTER (REPORT_OID);
 
 
 

@@ -1,5 +1,7 @@
 import { FullMetadata as SchemaFullMetadata } from "./schema";
 
 export type FullMetadata = {
-    schema: SchemaFullMetadata
+    schema: SchemaFullMetadata,
+    filterFormula: string | null,
+    groupByColumnOid: number[]
 }
