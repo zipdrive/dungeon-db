@@ -1,6 +1,6 @@
 use rusqlite::{Connection, Transaction, params};
 use crate::data::datasource::Datasource;
-use crate::data::{column, column_type, datasource, report, schema, table};
+use crate::data::{self, column, column_type, datasource, report, schema, table};
 use crate::util::formula::Formula;
 use crate::util::db;
 use crate::util::error::Error;
@@ -353,12 +353,23 @@ impl<'a> QueryBuilder<'a> {
         // Compile ORDER BY expression
         let orderby_expression: String = if self.order_by_indices.len() > 0 {
             self.order_by_indices.into_iter()
+                .filter_map(|(e, sort_ascending)| match &self.columns[e] {
+                    QueryBuilderColumn::Primitive { value_expr, .. }
+                    | QueryBuilderColumn::Formula { value_expr, .. } => Some((value_expr.clone(), sort_ascending)),
+                    QueryBuilderColumn::File { file_expr, .. } => Some((format!("LENGTH({file_expr})"), sort_ascending)),
+                    QueryBuilderColumn::Object { label_expr, .. }
+                    | QueryBuilderColumn::Select { label_expr, .. }
+                    | QueryBuilderColumn::Multiselect { label_expr, .. } => Some((label_expr.clone(), sort_ascending)),
+                    QueryBuilderColumn::Subreport { .. } => None
+                })
                 .fold(
                     String::from("ORDER BY"),
-                    |acc, (e, sort_ascending)| if acc == "ORDER BY" { 
-                        format!("ORDER BY {} {}", e + 1, if sort_ascending { "ASC" } else { "DESC" }) 
-                    } else { 
-                        format!("{acc}, {} {}", e + 1, if sort_ascending { "ASC" } else { "DESC" }) 
+                    |acc, (value_expr, sort_ascending)| {
+                        if acc == "ORDER BY" { 
+                            format!("ORDER BY {value_expr} {} NULLS LAST", if sort_ascending { "ASC" } else { "DESC" }) 
+                        } else { 
+                            format!("{acc}, {value_expr} {} NULLS LAST", if sort_ascending { "ASC" } else { "DESC" }) 
+                        }
                     }
                 )
         } else {
@@ -367,7 +378,7 @@ impl<'a> QueryBuilder<'a> {
 
         Ok(Some((
             format!(
-                "SELECT ROW_NUMBER() OVER ({orderby_expression}) AS ROW_INDEX, {} FROM {} {} {} {} {orderby_expression}",
+                "SELECT ROW_NUMBER() OVER ({orderby_expression}) AS ROW_INDEX, {} FROM {} {} {} {} ORDER BY 1",
 
                 // Column expressions
                 {
@@ -483,7 +494,7 @@ impl<'a> QueryBuilder<'a> {
 
     /// Compiles the datasources of the query into SQL.
     /// This compilation excludes the columns, but includes FROM, JOIN, WHERE, GROUP BY, and ORDER BY clauses.
-    pub fn compile_datasources(mut self) -> Result<Option<String>, Error> {
+    pub fn compile_datasources(mut self) -> Result<Option<(String, Vec<String>)>, Error> {
         // Compile list of datasource aliases
         let datasource_aliases: Vec<String> = self.tables_and_subqueries.iter()
             .filter_map(|table_or_subquery| match table_or_subquery {
@@ -496,21 +507,32 @@ impl<'a> QueryBuilder<'a> {
         // Compile ORDER BY expression
         let orderby_expression: String = if self.order_by_indices.len() > 0 {
             self.order_by_indices.into_iter()
+                .filter_map(|(e, sort_ascending)| match &self.columns[e] {
+                    QueryBuilderColumn::Primitive { value_expr, .. }
+                    | QueryBuilderColumn::Formula { value_expr, .. } => Some((value_expr.clone(), sort_ascending)),
+                    QueryBuilderColumn::File { file_expr, .. } => Some((format!("LENGTH({file_expr})"), sort_ascending)),
+                    QueryBuilderColumn::Object { label_expr, .. }
+                    | QueryBuilderColumn::Select { label_expr, .. }
+                    | QueryBuilderColumn::Multiselect { label_expr, .. } => Some((label_expr.clone(), sort_ascending)),
+                    QueryBuilderColumn::Subreport { .. } => None
+                })
                 .fold(
                     String::from("ORDER BY"),
-                    |acc, (e, sort_ascending)| if acc == "ORDER BY" { 
-                        format!("ORDER BY {} {}", e + 1, if sort_ascending { "ASC" } else { "DESC" }) 
-                    } else { 
-                        format!("{acc}, {} {}", e + 1, if sort_ascending { "ASC" } else { "DESC" }) 
+                    |acc, (value_expr, sort_ascending)| {
+                        if acc == "ORDER BY" { 
+                            format!("ORDER BY {value_expr} {} NULLS LAST", if sort_ascending { "ASC" } else { "DESC" }) 
+                        } else { 
+                            format!("{acc}, {value_expr} {} NULLS LAST", if sort_ascending { "ASC" } else { "DESC" }) 
+                        }
                     }
                 )
         } else {
             String::from("")
         };
 
-        Ok(Some(
+        Ok(Some((
             format!(
-                "FROM {} {} {} {} {orderby_expression}",
+                ", ROW_NUMBER() OVER ({orderby_expression}) AS ROW_INDEX FROM {} {} {} {}",
 
                 // Table and subquery expressions
                 {
@@ -588,8 +610,9 @@ impl<'a> QueryBuilder<'a> {
                 } else {
                     String::from("")
                 }
-            )
-        ))
+            ),
+            datasource_aliases
+        )))
     }
 
     /// Checks if the query already has a table or subquery with the given alias.

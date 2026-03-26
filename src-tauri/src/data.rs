@@ -48,6 +48,13 @@ pub enum QueryStream {
         schema_oid: i64,
         channel: JavaScriptChannelId
     },
+    RootDatasources {
+        channel: JavaScriptChannelId
+    },
+    LinkedDatasources {
+        parent_datasource: datasource::Datasource,
+        channel: JavaScriptChannelId
+    },
     ColumnAssociatedTables {
         channel: JavaScriptChannelId
     },
@@ -82,6 +89,10 @@ impl QueryStream {
             Self::Columns { schema_oid, channel } => 
                 column::FullMetadata::query_by_schema(Sender::Channel(channel.channel_on(webview)), schema_oid),
 
+            Self::RootDatasources { channel } =>
+                datasource::Datasource::query_roots(Sender::Channel(channel.channel_on(webview))),
+            Self::LinkedDatasources { parent_datasource, channel } => 
+                parent_datasource.query_links(Sender::Channel(channel.channel_on(webview))),
             Self::ColumnAssociatedTables { channel } => 
                 column::FullMetadata::query_associated_tables(Sender::Channel(channel.channel_on(webview))),
             Self::ColumnValues { schema_oid, channel } => 

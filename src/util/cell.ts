@@ -104,32 +104,29 @@ let dropdownValueCallbacks: {
 } = {};
 
 function addDropdownValueCallback(schemaOid: number, callbackFn: (dropdownValue: DropdownValue) => Promise<void>) {
-    navigator.locks.request('dropdown-values', () => {
-        if (schemaOid in dropdownValueCallbacks) {
-            dropdownValueCallbacks[schemaOid].push(callbackFn);
-        } else {
-            dropdownValueCallbacks[schemaOid] = [callbackFn];
-        }
-    });
+    if (schemaOid in dropdownValueCallbacks) {
+        dropdownValueCallbacks[schemaOid].push(callbackFn);
+    } else {
+        dropdownValueCallbacks[schemaOid] = [callbackFn];
+    }
 }
 
 export function runDropdownValueQueries() {
-    navigator.locks.request('dropdown-values', async () => {
-        let promises: Promise<void>[] = [];
-        for (let schemaOidStr in dropdownValueCallbacks) {
-            const schemaOid: number = parseInt(schemaOidStr);
-            promises.push(queryAsync({
-                columnValues: {
-                    schemaOid: schemaOid,
-                    channel: new Channel<DropdownValue>(async (dropdownValue) => {
-                        await Promise.all(dropdownValueCallbacks[schemaOid].map(callbackFn => callbackFn(dropdownValue)));
-                    })
-                }
-            }));
-        }
-        await Promise.all(promises);
+    let promises: Promise<void>[] = [];
+    for (let schemaOidStr in dropdownValueCallbacks) {
+        const schemaOid: number = parseInt(schemaOidStr);
+        promises.push(queryAsync({
+            columnValues: {
+                schemaOid: schemaOid,
+                channel: new Channel<DropdownValue>(async (dropdownValue) => {
+                    await Promise.all(dropdownValueCallbacks[schemaOid].map(callbackFn => callbackFn(dropdownValue)));
+                })
+            }
+        }));
+    }
+    Promise.all(promises).then(() => {
         dropdownValueCallbacks = {};
-    });
+    })
 }
 
 
@@ -579,16 +576,14 @@ function updateMultiselectEntryCell(cell: MultiselectEntryCell, elem: HTMLTableC
     addValidationFailureTooltips(elem, cell.validationFailures);
 }
 
-export function createCell(cell: Cell, isSchema: boolean, filters: [string, number][]): HTMLTableCellElement | HTMLTableRowElement | null {
+export function createCellAsync(cell: Cell, isSchema: boolean, filters: [string, number][]): HTMLTableCellElement | HTMLTableRowElement | null {
     function createCellElement(cellOid: CellOid, callbackFn: (e: HTMLTableCellElement) => void) {
         const id: string = `schema${cellOid.schemaOid}-row${cellOid.rowOid}-column${cellOid.columnOid}`;
         const elem: HTMLTableCellElement = document.createElement('td');
         elem.id = id;
         elem.classList.add(`column${cellOid.columnOid}`);
         elem.tabIndex = 0;
-        navigator.locks.request(id, () => {
-            callbackFn(elem);
-        });
+        callbackFn(elem);
         return elem;
     }
 
@@ -686,6 +681,7 @@ export function createCell(cell: Cell, isSchema: boolean, filters: [string, numb
             return row;
         }
     }
+    return null;
 }
 
 export function updateCell(cellOid: CellOid, isSchema: boolean) {

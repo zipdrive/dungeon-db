@@ -119,6 +119,88 @@ fn drop_surrogate(trans: &Transaction, table_oid: i64, dependencies: &mut HashMa
 fn create_surrogate(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
     let mut query: query::QueryBuilder = query::QueryBuilder::new(Vec::new());
 
+    // Apply ordering to the query
+    let mut stmt_orderby = trans.prepare(
+        "
+        WITH RECURSIVE ROOT_DATASOURCE (DATASOURCE_ALIAS) AS (
+            SELECT 
+                'ROOT' || FORMAT('%d', MIN(OID)) AS DATASOURCE_ALIAS
+            FROM METADATA_DATASOURCE
+            WHERE TABLE_OID = ?1
+        ), NON_OPTIONAL_DATASOURCES (DATASOURCE_ALIAS, DATASOURCE_TABLE_OID) AS (
+            SELECT
+                DATASOURCE_ALIAS,
+                ?1 AS DATASOURCE_TABLE_OID
+            FROM ROOT_DATASOURCE
+
+            UNION
+
+            SELECT
+                d.DATASOURCE_ALIAS || '_MASTER' || FORMAT('%d', inh.MASTER_SCHEMA_OID) AS DATASOURCE_ALIAS,
+                inh.MASTER_SCHEMA_OID AS DATASOURCE_TABLE_OID
+            FROM NON_OPTIONAL_DATASOURCES d
+            INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.INHERITOR_SCHEMA_OID = d.DATASOURCE_TABLE_OID
+            INNER JOIN METADATA_SCHEMA s ON s.OID = inh.MASTER_SCHEMA_OID
+            WHERE EXISTS(SELECT OID FROM METADATA_TABLE WHERE OID = s.OID) AND NOT inh.TRASH AND NOT s.TRASH
+        ), OPTIONAL_DATASOURCES (DATASOURCE_ALIAS, DATASOURCE_TABLE_OID) AS (
+            SELECT
+                r.DATASOURCE_ALIAS || '_INHERITOR' || FORMAT('%d', inh.INHERITOR_SCHEMA_OID) AS DATASOURCE_ALIAS,
+                s.OID AS DATASOURCE_TABLE_OID
+            FROM ROOT_DATASOURCE r
+            INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = ?1
+            INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID
+            WHERE EXISTS(SELECT OID FROM METADATA_TABLE WHERE OID = s.OID) AND NOT inh.TRASH AND NOT s.TRASH
+
+            UNION
+
+            SELECT
+                d.DATASOURCE_ALIAS || '_INHERITOR' || FORMAT('%d', inh.INHERITOR_SCHEMA_OID) AS DATASOURCE_ALIAS,
+                s.OID AS DATASOURCE_TABLE_OID
+            FROM NON_OPTIONAL_DATASOURCES d
+            INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = ?1
+            INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID
+            WHERE EXISTS(SELECT OID FROM METADATA_TABLE WHERE OID = s.OID) AND NOT inh.TRASH AND NOT s.TRASH
+        )
+        
+        SELECT
+            d.DATASOURCE_ALIAS,
+            c.COLUMN_OID, 
+            c.SORT_ASCENDING 
+        FROM METADATA_SCHEMA_ORDERBY_VIEW c
+        INNER JOIN (
+            SELECT
+                DATASOURCE_ALIAS,
+                DATASOURCE_TABLE_OID,
+                FALSE AS IS_OPTIONAL
+            FROM NON_OPTIONAL_DATASOURCES
+
+            UNION
+
+            SELECT
+                DATASOURCE_ALIAS,
+                DATASOURCE_TABLE_OID,
+                TRUE AS IS_OPTIONAL
+            FROM OPTIONAL_DATASOURCES
+        ) d ON c.SCHEMA_OID = d.DATASOURCE_TABLE_OID
+        "
+    )?;
+    for row_result in stmt_orderby.query_and_then(params![table_oid], |row| { Ok::<(String, i64, bool), rusqlite::Error>((row.get("DATASOURCE_ALIAS")?, row.get::<_, i64>("COLUMN_OID")?, row.get::<_, bool>("SORT_ASCENDING")?)) })? {
+        let (datasource_alias, column_oid, sort_ascending) = row_result?;
+
+        // Construct the datasource
+        let datasource_path: Vec<String> = datasource_alias.split('_').map(|s| String::from(s)).collect();
+        let datasource: datasource::Datasource = datasource::Datasource::from_path(datasource_path)?;
+        
+        // Construct the column metadata
+        let column: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
+
+        // Compile and insert column
+        query.insert_column(datasource, column)?;
+
+        // Insert ORDER BY clause
+        query.insert_ordering(column_oid, sort_ascending)?;
+    }
+
     // Query for datasources + primary key columns
     let columns = {
         let column_results: Vec<_> = trans.prepare(
@@ -210,28 +292,21 @@ fn create_surrogate(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
         columns
     };
 
-    if columns.len() == 0 {
-        // Table has no primary key
-        let sql_view: String = format!("
-            CREATE VIEW TABLE{table_oid}_SURROGATE AS 
-            SELECT 
-                OID, 
+    let sql_surrogate_label: String = if columns.len() == 0 {
+        format!(
+            "
                 '— NO PRIMARY KEY —' AS LABEL,
                 'null' AS JSON_LABEL 
-            FROM TABLE{table_oid}
-            ");
-        trans.execute(&sql_view, [])?;
+            "
+        )
     } else if columns.len() == 1 {
         // Table has a single column that serves as its primary key
         let (datasource, column, _) = columns.into_iter().next().unwrap();
-        let root_oid_expr: String = format!("{}.OID", datasource.get_alias().split('_').next().unwrap());
-        let sql_column: String = match query.compile_column(datasource, column)? {
+        match query.compile_column(datasource, column)? {
             query::QueryBuilderColumn::Primitive { primitive_type, label_expr, value_expr, .. } => {
                 let label_expr: String = format!("COALESCE({label_expr}, '— NO PRIMARY KEY —')");
                 format!(
                     "
-                    SELECT
-                        {root_oid_expr},
                         {label_expr} AS LABEL,
                         {} AS JSON_LABEL 
                     ", 
@@ -251,8 +326,6 @@ fn create_surrogate(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
                 let json_expr: String = format!("COALESCE({json_expr}, 'null')");
                 format!(
                     "
-                    SELECT
-                        {root_oid_expr},
                         {label_expr} AS LABEL,
                         {json_expr} AS JSON_LABEL 
                     "
@@ -262,8 +335,6 @@ fn create_surrogate(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
                 let label_expr: String = format!("COALESCE({label_expr}, '[]')");
                 format!(
                     "
-                    SELECT
-                        {root_oid_expr},
                         {label_expr} AS LABEL,
                         {label_expr} AS JSON_LABEL 
                     "
@@ -272,22 +343,11 @@ fn create_surrogate(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
             _ => {
                 return Err(Error::AdhocError("Table has primary key with a column type disallowed to be a primary key."));
             }
-        };
-        if let Some(sql_datasources) = query.compile_datasources()? {
-            let sql_view: String = format!(
-                "
-                CREATE VIEW TABLE{table_oid}_SURROGATE AS
-                {sql_column}
-                {sql_datasources}
-                "
-            );
-            trans.execute(&sql_view, [])?;
-        } else {
-            return Err(Error::AdhocError("Surrogate view has no datasources.")); // This case shouldn't occur
         }
     } else {
         // Table's primary key is the combination of multiple columns
-        let root_oid_expr: String = format!("{}.OID", columns[0].0.get_alias().split('_').next().unwrap());
+
+        // Compile JSON expression for each primary key
         let mut json_exprs: Vec<String> = Vec::new();
         for (idx, (datasource, column, column_is_optional)) in columns.into_iter().enumerate() {
             let column_name_expr: String = format!(
@@ -322,22 +382,26 @@ fn create_surrogate(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
                 format!("{column_name_expr}COALESCE({value_expr}, 'null')")
             });
         }
+
+        // Construct label of table as JSON object comprised of the non-null values
         let compiled_values_expr: String = format!("VALUES ({})", json_exprs.into_iter().reduce(|acc, e| format!("{acc}), ({e}")).unwrap());
-        if let Some(sql_datasources) = query.compile_datasources()? {
-            let sql_view: String = format!(
-                "
-                CREATE VIEW TABLE{table_oid}_SURROGATE AS
-                SELECT
-                    {root_oid_expr},
-                    '{{' || COALESCE((SELECT GROUP_CONCAT(COLUMN1, ',') OVER () FROM ({compiled_values_expr})), '') || '}}' AS LABEL,
-                    '{{' || COALESCE((SELECT GROUP_CONCAT(COLUMN1, ',') OVER () FROM ({compiled_values_expr})), '') || '}}' AS JSON_LABEL 
-                {sql_datasources}
-                "
-            );
-            trans.execute(&sql_view, [])?;
-        } else {
-            return Err(Error::AdhocError("Surrogate view has no datasources.")); // This case shouldn't occur
-        }
+        format!(
+            "
+                '{{' || COALESCE((SELECT GROUP_CONCAT(COLUMN1, ',') OVER () FROM ({compiled_values_expr})), '') || '}}' AS LABEL,
+                '{{' || COALESCE((SELECT GROUP_CONCAT(COLUMN1, ',') OVER () FROM ({compiled_values_expr})), '') || '}}' AS JSON_LABEL 
+            "
+        )
+    };
+
+    if let Some((sql_surrogate_from, datasource_aliases)) = query.compile_datasources()? {
+        // Construct the expression to retrieve the table's OID
+        let root_oid_expr: String = format!("{}.OID", datasource_aliases.into_iter().next().unwrap());
+        
+        // Construct the surrogate view
+        let sql_view: String = format!("CREATE VIEW TABLE{table_oid}_SURROGATE AS SELECT {root_oid_expr} AS OID, {sql_surrogate_label} {sql_surrogate_from}");
+        trans.execute(&sql_view, [])?;
+    } else {
+        return Err(Error::AdhocError("Surrogate view has no datasources.")); // This case shouldn't occur
     }
     Ok(())
 }

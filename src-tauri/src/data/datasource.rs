@@ -1,13 +1,16 @@
+use crate::data::column::DropdownValue;
+use crate::util::channel::Sender;
 use crate::util::error::Error;
 use crate::util::db;
 use crate::data::{column, column_type, schema, table};
 use regex::Regex;
-use rusqlite::OptionalExtension;
+use rusqlite::{Connection, OptionalExtension};
 use rusqlite::types::Value;
 use rusqlite::{Transaction, params, vtab::array::Array};
 use std::hash::{Hash, Hasher};
 use std::borrow::Borrow;
 use std::rc::Rc;
+use serde::{Deserialize, Serialize};
 
 
 
@@ -19,12 +22,12 @@ pub enum Relationship {
 
 
 
-#[derive(PartialEq, Eq, Clone)]
+#[derive(PartialEq, Eq, Clone, Deserialize, Serialize)]
+#[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum Datasource {
     Table {
         oid: i64,
-        table_oid: i64,
-        label: String
+        table_oid: i64
     },
     MasterTable {
         parent_datasource: Box<Datasource>,
@@ -125,8 +128,7 @@ impl Datasource {
 
         Ok(Self::Table {
             oid,
-            table_oid,
-            label
+            table_oid
         })
     }
 
@@ -163,6 +165,144 @@ impl Datasource {
                 }
             }
         })
+    }
+
+    /// Queries for all root datasources.
+    pub fn query_roots(mut sender: Sender<(Self, String)>) -> Result<(), Error> {
+        let conn: Connection = db::open()?;
+        for root_result in conn.prepare("SELECT OID, TABLE_OID, LABEL FROM METADATA_DATASOURCE")?
+                .query_and_then([], |row| Ok::<(i64, i64, String), rusqlite::Error>((row.get("OID")?,row.get("TABLE_OID")?,row.get("LABEL")?)))? {
+            
+            let (datasource_oid, table_oid, datasource_label) = root_result?;
+            sender.send((Self::Table { oid: datasource_oid, table_oid }, datasource_label))?;
+        }
+        Ok(())
+    }
+
+    /// Queries for links from this datasource to another.
+    pub fn query_links(&self, mut sender: Sender<(Self, String)>) -> Result<(), Error> {
+        let conn: Connection = db::open()?;
+        let table_oid: i64 = self.get_schema_oid()?;
+
+        // Query for columns on the schema for self
+        for column_oid_result in conn.prepare(
+            "
+            SELECT 
+                c.OID
+            FROM METADATA_COLUMN c
+            WHERE c.SCHEMA_OID = ?1
+                AND NOT c.TRASH
+                AND c.TYPE_OID IN (
+                    SELECT OID FROM METADATA_COLUMN_TYPE__OBJECT
+                    UNION
+                    SELECT OID FROM METADATA_COLUMN_TYPE__SELECT
+                    UNION
+                    SELECT OID FROM METADATA_COLUMN_TYPE__MULTISELECT
+                )
+            ")?
+            .query_map(params![table_oid], |row| row.get("OID"))? {
+
+            let column_oid = column_oid_result?;
+            let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(&conn, column_oid)?;
+            let datasource_label: String = format!("REFERENCE: {}", column_metadata.name);
+            sender.send((Self::Column { 
+                parent_datasource: Box::new(self.clone()), 
+                column: column_metadata
+            }, datasource_label))?;
+        }
+
+        // Query for master tables
+        for master_table_result in conn.prepare(
+            "
+            SELECT 
+                s.OID
+            FROM METADATA_SCHEMA_INHERITANCE inh
+            INNER JOIN METADATA_SCHEMA s ON s.OID = inh.MASTER_SCHEMA_OID
+            WHERE inh.INHERITOR_SCHEMA_OID = ?1
+                AND NOT inh.TRASH
+                AND NOT s.TRASH
+                AND EXISTS(SELECT OID FROM METADATA_TABLE WHERE OID = inh.MASTER_SCHEMA_OID)
+            ")?
+            .query_map(params![table_oid], |row| Ok::<(i64, String), rusqlite::Error>((row.get("OID")?, row.get("NAME")?)))? {
+
+            let (master_table_oid, master_table_name) = master_table_result?;
+            let datasource_label: String = format!("MASTER: {master_table_name}");
+            sender.send((Self::MasterTable { 
+                parent_datasource: Box::new(self.clone()), 
+                table_oid: master_table_oid
+            }, datasource_label))?;
+        }
+
+        // Query for inheritor tables
+        for inheritor_table_result in conn.prepare(
+            "
+            SELECT 
+                s.OID
+            FROM METADATA_SCHEMA_INHERITANCE inh
+            INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID
+            WHERE inh.MASTER_SCHEMA_OID = ?1
+                AND NOT inh.TRASH
+                AND NOT s.TRASH
+                AND EXISTS(SELECT OID FROM METADATA_TABLE WHERE OID = inh.INHERITOR_SCHEMA_OID)
+            ")?
+            .query_map(params![table_oid], |row| Ok::<(i64, String), rusqlite::Error>((row.get("OID")?, row.get("NAME")?)))? {
+
+            let (inheritor_table_oid, inheritor_table_name) = inheritor_table_result?;
+            let datasource_label: String = format!("INHERITOR: {inheritor_table_name}");
+            sender.send((Self::InheritorTable { 
+                parent_datasource: Box::new(self.clone()), 
+                table_oid: inheritor_table_oid
+            }, datasource_label))?;
+        }
+
+        // Query for columns on other tables referencing this one
+        for column_oid_result in conn.prepare(
+            "
+            SELECT 
+                c.OID AS COLUMN_OID,
+                s.NAME AS SCHEMA_NAME
+            FROM METADATA_COLUMN_TYPE__OBJECT typ
+            INNER JOIN METADATA_COLUMN c ON typ.OID = c.TYPE_OID
+            INNER JOIN METADATA_SCHEMA s ON s.OID = c.SCHEMA_OID
+            WHERE typ.TABLE_OID = ?1
+                AND NOT c.TRASH
+                AND NOT s.TRASH
+
+            UNION
+
+            SELECT 
+                c.OID AS COLUMN_OID,
+                s.NAME AS SCHEMA_NAME
+            FROM METADATA_COLUMN_TYPE__SELECT typ
+            INNER JOIN METADATA_COLUMN c ON typ.OID = c.TYPE_OID
+            INNER JOIN METADATA_SCHEMA s ON s.OID = c.SCHEMA_OID
+            WHERE typ.TABLE_OID = ?1
+                AND NOT c.TRASH
+                AND NOT s.TRASH
+            
+            UNION
+
+            SELECT 
+                c.OID AS COLUMN_OID,
+                s.NAME AS SCHEMA_NAME
+            FROM METADATA_COLUMN_TYPE__MULTISELECT typ
+            INNER JOIN METADATA_COLUMN c ON typ.OID = c.TYPE_OID
+            INNER JOIN METADATA_SCHEMA s ON s.OID = c.SCHEMA_OID
+            WHERE typ.TABLE_OID = ?1
+                AND NOT c.TRASH
+                AND NOT s.TRASH
+            ")?
+            .query_map(params![table_oid], |row| Ok::<(i64, String), rusqlite::Error>((row.get("COLUMN_OID")?, row.get("SCHEMA_NAME")?)))? {
+
+            let (column_oid, schema_name) = column_oid_result?;
+            let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(&conn, column_oid)?;
+            let datasource_label: String = format!("BACKREFERENCE: {schema_name} / {}", column_metadata.name);
+            sender.send((Self::Column { 
+                parent_datasource: Box::new(self.clone()), 
+                column: column_metadata
+            }, datasource_label))?;
+        }
+        Ok(())
     }
 
     /// Seeks the deepest parent which is either (a) a Table datasource, or (b) has a 1-to-* relationship with its parent.

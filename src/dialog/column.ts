@@ -222,7 +222,8 @@ function compileColumn(): ColumnFullMetadata {
             // Everything but the OID here is ignored
             oid: schemaOid ?? -1,
             name: '',
-            masterSchemaOids: []
+            masterSchemaOids: [],
+            orderByColumnOids: []
         }
     };
 }

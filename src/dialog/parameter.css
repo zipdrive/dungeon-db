@@ -1,0 +1,8 @@
+@import '../styles.css';
+@import './dialog.css';
+
+.chain tbody td:last-child::after {
+    content: "↓";
+    text-align: center;
+    width: 100%;
+}

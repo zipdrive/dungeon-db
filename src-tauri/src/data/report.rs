@@ -13,7 +13,7 @@ use std::borrow::Borrow;
 pub struct FullMetadata {
     pub schema: schema::FullMetadata,
     pub filter_formula: Option<String>,
-    pub group_by_column_oid: Vec<i64>
+    pub group_by_column_oids: Vec<i64>
 }
 
 impl Hash for FullMetadata {
@@ -59,7 +59,7 @@ impl FullMetadata {
                 |row| row.get::<_, i64>(0)
             )?;
             for group_by_column_oids_result in group_by_column_oids_rows {
-                group_by_column_oids.insert(group_by_column_oids_result?);
+                group_by_column_oids.push(group_by_column_oids_result?);
             }
         }
 
@@ -110,11 +110,11 @@ impl FullMetadata {
         // Update the filter formula applied to each row of the table
         trans.execute(
             "UPDATE METADATA_REPORT SET FILTER_FORMULA = ?1 WHERE OID = ?2",
-            params![self.filter_formula, self.oid]
+            params![self.filter_formula, self.schema.oid]
         )?;
 
         // Trash all previous rows of GROUP BY
-        trans.execute("UPDATE METADATA_REPORT_GROUPBY SET TRASH = TRUE WHERE REPORT_OID = ?1", params![self.oid])?;
+        trans.execute("UPDATE METADATA_REPORT_GROUPBY SET TRASH = TRUE WHERE REPORT_OID = ?1", params![self.schema.oid])?;
         // Set new rows of GROUP BY
         for group_by_column_oid in self.group_by_column_oids.iter() {
             trans.execute(
@@ -136,8 +136,9 @@ impl FullMetadata {
                         )
                 )
                 ",
-                params![self.oid, group_by_column_oid]
+                params![self.schema.oid, group_by_column_oid]
             )?;
         }
+        Ok(())
     }
 }

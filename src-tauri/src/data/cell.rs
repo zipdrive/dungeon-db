@@ -765,8 +765,7 @@ impl Cell {
                     let conn = db::open()?;
                     let table_datasource: datasource::Datasource = datasource::Datasource::Table { 
                         oid: conn.query_row("SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = ?1", params![table_metadata.schema.oid], |row| row.get(0))?,
-                        table_oid: table_metadata.schema.oid,
-                        label: table_metadata.schema.name.clone()
+                        table_oid: table_metadata.schema.oid
                     };
                     vec![table_datasource]
                 }

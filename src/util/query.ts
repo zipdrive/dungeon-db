@@ -4,6 +4,7 @@ import { FullMetadata as ReportFullMetadata } from "./report";
 import { FullMetadata as ColumnFullMetadata } from "./column";
 import { Cell, CellOid, File } from "./cell";
 import { message } from "@tauri-apps/plugin-dialog";
+import { Datasource } from "./datasource";
 
 export type FlatListItemMetadata = {
     oid: number,
@@ -53,7 +54,16 @@ export type Query = {
 } | {
     columns: {
         schemaOid: number,
-        channel: Channel<DropdownValue>
+        channel: Channel<ColumnFullMetadata>
+    }
+} | {
+    rootDatasources: {
+        channel: Channel<[Datasource, string]>
+    }
+} | {
+    linkedDatasources: {
+        parentDatasource: Datasource,
+        channel: Channel<[Datasource, string]>
     }
 } | {
     columnAssociatedTables: {

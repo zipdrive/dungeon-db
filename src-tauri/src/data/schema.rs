@@ -445,14 +445,14 @@ impl FullMetadata {
             )?;
             let order_by_column_oids_rows = order_by_column_oids_statement.query_and_then(
                 params![oid], 
-                |row| Ok::<(i64, String, bool), rusqlite::Error>(
+                |row| Ok::<(i64, bool), rusqlite::Error>((
                     row.get("COLUMN_OID")?,
                     row.get("SORT_ASCENDING")?
-                )
+                ))
             )?;
             for order_by_column_oids_result in order_by_column_oids_rows {
                 let (order_by_column_oid, order_by_column_ascending) = order_by_column_oids_result?;
-                order_by_column_oids.insert((
+                order_by_column_oids.push((
                     order_by_column_oid, 
                     order_by_column_ascending
                 ));
@@ -558,6 +558,12 @@ impl FullMetadata {
         // Set new rows of ORDER BY
         for (order_by_column_ordering, (order_by_column_oid, order_by_column_ascending)) in self.order_by_column_oids.iter().enumerate() {
             
+            let order_by_column_ordering: i64 = match i64::try_from(order_by_column_ordering) {
+                Ok(len) => len,
+                Err(_) => {
+                    return Err(Error::AdhocError("More than 9,223,372,036,854,775,807 columns."));
+                }
+            };
             trans.execute(
                 "
                 INSERT INTO METADATA_SCHEMA_ORDERBY 

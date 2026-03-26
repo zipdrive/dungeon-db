@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <link rel="stylesheet" href="./parameter.css" />
+        <title>DungeonDB</title>
+        <script type="module" src="./parameter.ts"></script>
+    </head>
+
+    <body>
+        <div class="tab-bar">
+            <label for="general-tab-button" id="general-tab" class="input tab" tabindex="0">
+                <input type="radio" name="tabs" id="general-tab-button" class="hidden" checked>
+                General
+            </label>
+            <div class="container">
+                <table class="form chain">
+                    <colgroup>
+                        <col span="1" class="field-name-cell">
+                        <col span="1" class="field-input-cell">
+                    </colgroup>
+                    <tbody>
+                        <tr>
+                            <td><label for="param-link0">Root Datasource:<sup tooltip="The root datasource that the parameter is to draw data from. If a schema has values that come from multiple root datasources, then the rows from each root datasource will be cross-joined to produce the final schema (i.e. a row will be produced in the final schema for every unique combination of a row in the first table + a row in the second table).">?</sup></label></td>
+                            <td><select id="param-link0" class="input"></select></td>
+                        </tr>
+                        <tr>
+                            <td><label for="param-link1">Intermediary Path:<sup tooltip="The links along the path to a column of a table.&#10;REFERENCE types link to the row(s) referenced on another table by an Object, Select, or Multiselect column.&#10;MASTER types link to the associated row on a master list.&#10;INHERITOR types link to the associated row on a table that uses the previous table as a master list.&#10;BACKREFERENCE types link to the row(s) on another table where the row of the previous table is referenced by an Object, Select, or Multiselect column.">?</sup></label></td>
+                            <td>
+                                <select id="param-link1" class="input">
+                                    <option value=""></option>
+                                </select>
+                            </td>
+                        </tr>
+                    </tbody>
+                    <tfoot>
+                        <tr>
+                            <td><label for="param-root-datasource">Column:<sup tooltip="The column whose value is referenced by this parameter.">?</sup></label></td>
+                            <td><select id="param-column" class="input"></select></td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </div>
+
+        <div class="dialog-buttons">
+            <button id="confirm-button">OK</button>
+            <button id="cancel-button">Cancel</button>
+        </div>
+    </body>
+</html>

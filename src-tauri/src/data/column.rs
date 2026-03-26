@@ -10,8 +10,8 @@ use std::hash::{Hash, Hasher};
 
 #[derive(Serialize, Clone)]
 pub struct DropdownValue {
-    label: String,
-    value: i64
+    pub label: String,
+    pub value: i64
 }
 
 

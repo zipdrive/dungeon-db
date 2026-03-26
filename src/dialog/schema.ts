@@ -7,6 +7,7 @@ import { FullMetadata as ReportFullMetadata } from "../util/report";
 import { executeAsync } from "../util/action";
 import { listen } from "@tauri-apps/api/event";
 import { Channel } from "@tauri-apps/api/core";
+import { FullMetadata as ColumnFullMetadata } from "../util/column";
 
 const urlParams = new URLSearchParams(window.location.search);
 const mode: 'table' | 'report' = urlParams.get('mode') as ('table' | 'report') ?? 'table';
@@ -21,12 +22,17 @@ function loadColumns(callbackFns: ((dropdownValue: DropdownValue) => void)[]) {
         queryAsync({
             columns: {
                 schemaOid: schemaOid,
-                channel: new Channel<DropdownValue>((dropdownValue) => {
+                channel: new Channel<ColumnFullMetadata>((column) => {
+                    const dropdownValue: DropdownValue = {
+                        value: column.oid,
+                        label: column.name
+                    };
                     columns.push(dropdownValue);
                     callbackFns.forEach((fn) => fn(dropdownValue));
                 })
             }
-        });
+        })
+        .then(() => console.debug(JSON.stringify(columns)))
     }
 }
 
@@ -359,18 +365,18 @@ window.addEventListener("DOMContentLoaded", () => {
 });
 
 
-listen<number>('schema', (updateSchemaOid) => {
-    if (updateSchemaOid == schemaOid) {
+listen<number>('schema', (e) => {
+    if (e.payload == schemaOid) {
         populateSchemaMetadata();
     }
 });
-listen<number>('table', (updateSchemaOid) => {
-    if (updateSchemaOid == schemaOid) {
+listen<number>('table', (e) => {
+    if (e.payload == schemaOid) {
         populateSchemaMetadata();
     }
 });
-listen<number>('report', (updateSchemaOid) => {
-    if (updateSchemaOid == schemaOid) {
+listen<number>('report', (e) => {
+    if (e.payload == schemaOid) {
         populateSchemaMetadata();
     }
 });
