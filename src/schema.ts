@@ -32,11 +32,16 @@ if (urlParamSchemaOid) {
      */
     function reloadAllCells() {
         navigator.locks.request('page-content', async () => {
+            // Record the scroll height
             const page: HTMLElement = document.getElementById('page') as HTMLElement;
             const pageBottomSpacer: HTMLElement = document.getElementById('page-bottom-spacer') as HTMLElement;
             pageBottomSpacer.style.height = '50%';
             const pageHeight: number = page.scrollHeight;
             const pageScrollTop: number = page.scrollTop;
+
+            // Reset the stylesheet for columns
+            const columnStylesheet: HTMLStyleElement | null = document.getElementById('column-stylesheet') as HTMLStyleElement;
+            columnStylesheet.innerHTML = '';
 
             // Update page number
             const pageNumInput: HTMLInputElement = document.getElementById('page-num-input') as HTMLInputElement;

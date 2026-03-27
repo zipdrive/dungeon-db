@@ -148,6 +148,7 @@ export function createColumnHeaderHTML(schemaOid: number, column: FullMetadata):
                 elem.style.width = `${Math.round(event.rect.width)}px`;
             },
             onend(event: ResizeEvent) {
+                
                 const widthRe: RegExp = /\bwidth\s*:\s*[^;]*;/;
                 const target = event.target as HTMLElement;
                 const width = event.rect.width;

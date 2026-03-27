@@ -248,7 +248,7 @@ impl FullMetadata {
     fn _create(&mut self, trans: &Transaction) -> Result<(), Error> {
         // Find the column type OID
         let column_type: column_type::ColumnType = self.column_type.clone();
-        self.column_type = column_type.find()?;
+        self.column_type = column_type.find_transact()?;
 
         // Insert the column metadata
         trans.execute(

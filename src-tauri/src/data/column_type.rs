@@ -160,14 +160,10 @@ impl ColumnType {
         )?)
     }
 
-    /// Find the column type matching the metadata.
-    pub fn find(self) -> Result<Self, Error> {
-        let mut conn = db::open()?;
-
+    /// Finds or creates the OID of the column type, as part of a transaction.
+    pub fn find_transact(self, trans: &Transaction) -> Result<Self, Error> {
         match self {
             Self::Formula { formula, .. } => {
-                let trans = conn.transaction()?;
-
                 // Create the column type metadata
                 trans.execute("INSERT INTO METADATA_COLUMN_TYPE DEFAULT VALUES", [])?;
                 let oid: i64 = trans.last_insert_rowid();
@@ -178,15 +174,13 @@ impl ColumnType {
                     params![oid, formula]
                 )?;
 
-                // Commit the transaction
-                trans.commit()?;
                 return Ok(Self::Formula {
                     oid,
                     formula
                 });
             }
             Self::Subreport { report_oid, .. } => {
-                match conn.query_one(
+                match trans.query_one(
                     "SELECT OID FROM METADATA_COLUMN_TYPE__SUBREPORT WHERE REPORT_OID = ?1",
                     params![report_oid],
                     |row| row.get(0)
@@ -198,8 +192,6 @@ impl ColumnType {
                         });
                     }
                     None => {
-                        let trans = conn.transaction()?;
-
                         // Create the column type metadata
                         trans.execute("INSERT INTO METADATA_COLUMN_TYPE DEFAULT VALUES", [])?;
                         let oid: i64 = trans.last_insert_rowid();
@@ -210,8 +202,6 @@ impl ColumnType {
                             params![oid, report_oid]
                         )?;
 
-                        // Commit the transaction
-                        trans.commit()?;
                         return Ok(Self::Subreport {
                             oid,
                             report_oid
@@ -223,7 +213,7 @@ impl ColumnType {
                 return Ok(self);
             }
             Self::Object { table_oid, .. } => {
-                match conn.query_one(
+                match trans.query_one(
                     "SELECT OID FROM METADATA_COLUMN_TYPE__OBJECT WHERE TABLE_OID = ?1",
                     params![table_oid],
                     |row| row.get(0)
@@ -235,8 +225,6 @@ impl ColumnType {
                         });
                     }
                     None => {
-                        let trans = conn.transaction()?;
-
                         // Create the column type metadata
                         trans.execute("INSERT INTO METADATA_COLUMN_TYPE DEFAULT VALUES", [])?;
                         let oid: i64 = trans.last_insert_rowid();
@@ -244,8 +232,6 @@ impl ColumnType {
                         // Create the object column type metadata
                         trans.execute("INSERT INTO METADATA_COLUMN_TYPE__OBJECT (OID, TABLE_OID) VALUES (?1, ?2)", params![oid, table_oid])?;
 
-                        // Commit the transaction
-                        trans.commit()?;
                         return Ok(Self::Object {
                             oid,
                             table_oid
@@ -254,7 +240,7 @@ impl ColumnType {
                 }
             }
             Self::Select { table_oid, .. } => {
-                match conn.query_one(
+                match trans.query_one(
                     "SELECT OID FROM METADATA_COLUMN_TYPE__SELECT WHERE TABLE_OID = ?1",
                     params![table_oid],
                     |row| row.get(0)
@@ -266,8 +252,6 @@ impl ColumnType {
                         });
                     }
                     None => {
-                        let trans = conn.transaction()?;
-
                         // Create the column type metadata
                         trans.execute("INSERT INTO METADATA_COLUMN_TYPE DEFAULT VALUES", [])?;
                         let oid: i64 = trans.last_insert_rowid();
@@ -275,8 +259,6 @@ impl ColumnType {
                         // Create the select column type metadata
                         trans.execute("INSERT INTO METADATA_COLUMN_TYPE__SELECT (OID, TABLE_OID) VALUES (?1, ?2)", params![oid, table_oid])?;
 
-                        // Commit the transaction
-                        trans.commit()?;
                         return Ok(Self::Select {
                             oid,
                             table_oid
@@ -287,8 +269,6 @@ impl ColumnType {
             Self::Multiselect { table_oid, .. } => {
                 // Always create a new Multiselect column type
 
-                let trans = conn.transaction()?;
-
                 // Create the column type metadata
                 trans.execute("INSERT INTO METADATA_COLUMN_TYPE DEFAULT VALUES", [])?;
                 let oid: i64 = trans.last_insert_rowid();
@@ -296,14 +276,19 @@ impl ColumnType {
                 // Create the multiselect column type metadata
                 trans.execute("INSERT INTO METADATA_COLUMN_TYPE__MULTISELECT (OID, TABLE_OID) VALUES (?1, ?2)", params![oid, table_oid])?;
 
-                // Commit the transaction
-                trans.commit()?;
                 return Ok(Self::Multiselect {
                     oid,
                     table_oid
                 });
             }
         }
+    }
+
+    /// Find or create the column type matching the metadata.
+    pub fn find(self) -> Result<Self, Error> {
+        let mut conn = db::open()?;
+        let trans: Transaction = conn.transaction()?;
+        self.find_transact(&trans)
     }
 
     /// Get the OID associated with the column type.
