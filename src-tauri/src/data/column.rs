@@ -4,6 +4,7 @@ use crate::util::channel::Sender;
 use crate::data::schema;
 use crate::data::surrogate;
 use crate::data::column_type;
+use rusqlite::OptionalExtension;
 use rusqlite::{Connection, Transaction, params};
 use serde::{Serialize, Deserialize};
 use std::hash::{Hash, Hasher};
@@ -248,7 +249,18 @@ impl FullMetadata {
     fn _create(&mut self, trans: &Transaction) -> Result<(), Error> {
         // Find the column type OID
         let column_type: column_type::ColumnType = self.column_type.clone();
-        self.column_type = column_type.find_transact()?;
+        self.column_type = column_type.find_transact(trans)?;
+
+        
+        if self.ordering < 0 {
+            // Set the ordering to the maximum
+            self.ordering = trans.query_one("SELECT MAX(ORDERING) + 1 AS ORDERING FROM METADATA_COLUMN", [], |row| row.get(0)).optional()?.unwrap_or(1);
+        } else {
+            // Make space for the column by adjusting the ordering of any columns to the left of it
+            let max_ordering: i64 = trans.query_one("SELECT MAX(ORDERING) + 1 AS ORDERING FROM METADATA_COLUMN", [], |row| row.get(0)).optional()?.unwrap_or(1);
+            trans.execute("UPDATE METADATA_COLUMN SET ORDERING = ORDERING + ?2 WHERE ORDERING >= ?1", params![self.ordering, max_ordering - self.ordering])?;
+            trans.execute("UPDATE METADATA_COLUMN SET ORDERING = ORDERING - ?2 WHERE ORDERING >= ?1", params![max_ordering, max_ordering - self.ordering + 1])?;
+        }
 
         // Insert the column metadata
         trans.execute(
@@ -979,6 +991,20 @@ impl FullMetadata {
                 }
             }
         }
+
+        // Commit the transaction
+        trans.commit()?;
+        Ok(())
+    }
+
+    /// Sets only the CSS style of the column.
+    pub fn set_style(&mut self, new_style: String) -> Result<(), Error> {
+        let mut conn = db::open()?;
+        let trans = conn.transaction()?;
+
+        // Update the style in the database
+        self.style = new_style;
+        trans.execute("UPDATE METADATA_COLUMN SET STYLE = ?1 WHERE OID = ?2", params![self.style, self.oid])?;
 
         // Commit the transaction
         trans.commit()?;

@@ -242,10 +242,12 @@ window.addEventListener("DOMContentLoaded", () => {
     document.getElementById('confirm-button')?.addEventListener("click", async (e) => {
         e.preventDefault();
 
+        const column: ColumnFullMetadata = compileColumn();
+
         if (columnOid) {
             // Edit the column's metadata
             await executeAsync({
-                editColumn: compileColumn()
+                editColumn: column
             })
             .then(closeDialogAsync)
             .catch(async (e) => {
@@ -257,7 +259,7 @@ window.addEventListener("DOMContentLoaded", () => {
         } else {
             // Create a new column
             await executeAsync({
-                createColumn: compileColumn()
+                createColumn: column
             })
             .then(closeDialogAsync)
             .catch(async (e) => {

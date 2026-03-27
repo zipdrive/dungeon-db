@@ -1,6 +1,6 @@
 use crate::util::error::Error;
 use crate::util::db;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, Transaction, params};
 use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]

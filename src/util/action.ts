@@ -19,6 +19,11 @@ export type Action = {
 } | {
     editColumn: ColumnFullMetadata
 } | {
+    editColumnStyle: {
+        metadata: ColumnFullMetadata,
+        newColumnStyle: string
+    }
+} | {
     trashColumn: number
 } | {
     createRow: {

@@ -148,11 +148,23 @@ export function createColumnHeaderHTML(schemaOid: number, column: FullMetadata):
                 elem.style.width = `${Math.round(event.rect.width)}px`;
             },
             onend(event: ResizeEvent) {
-                
-                const widthRe: RegExp = /\bwidth\s*:\s*[^;]*;/;
-                const target = event.target as HTMLElement;
-                const width = event.rect.width;
-                //onFinalizeResizeCallbackFn(target, width);
+                // Replace the width property in the CSS style
+                const widthRe: RegExp = /(?<!\{[^\}]*)(?<=^|[;\{\}])(\s*width\s*:\s*)(?:[^;]|"(?:[^\\"]|\\"|\\\\)*")*;/;
+                let newColumnStyle: string = column.style.replace(widthRe, `$1${Math.round(event.rect.width)}px;`);
+
+                // Update the CSS style in the database
+                executeAsync({
+                    editColumnStyle: {
+                        metadata: column,
+                        newColumnStyle: newColumnStyle
+                    }
+                })
+                .catch(async (e) => {
+                    await message(e, {
+                        title: 'An error occurred while updating column width.',
+                        kind: 'error'
+                    });
+                });
             }
         });
     });

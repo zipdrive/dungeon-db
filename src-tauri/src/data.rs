@@ -173,6 +173,10 @@ pub enum Action {
 
     CreateColumn(column::FullMetadata),
     EditColumn(column::FullMetadata),
+    EditColumnStyle {
+        metadata: column::FullMetadata,
+        new_column_style: String
+    },
     TrashColumn(i64),
     UntrashColumn(i64),
     RestoreColumn {
@@ -298,6 +302,18 @@ impl Action {
                 record_action(Self::RestoreColumn { 
                     trash_column_oid: metadata.oid, 
                     untrash_column_oid: old_column_oid
+                }, is_forward);
+
+                // Send signal to update schema
+                app.emit(UPDATE_SCHEMA_SIGNAL, metadata.schema.oid)?;
+            }
+            Self::EditColumnStyle { mut metadata, new_column_style } => {
+                // Update the column style
+                let old_column_style: String = metadata.style.clone();
+                metadata.set_style(new_column_style)?;
+                record_action(Self::EditColumnStyle { 
+                    metadata: metadata.clone(), 
+                    new_column_style: old_column_style
                 }, is_forward);
 
                 // Send signal to update schema
