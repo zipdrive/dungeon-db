@@ -386,9 +386,9 @@ impl Action {
             Self::EditCellContents(cell) => {
                 let execution_result: Result<(), Error> = {
                     // Update the contents of the cell
-                    match cell.get_value_oid() {
-                        Ok(value_oid) => {
-                            match cell::Cell::get(value_oid) {
+                    match cell.get_cell_oid() {
+                        Ok(cell_oid) => {
+                            match cell::Cell::get(cell_oid) {
                                 Ok(old_cell) => {
                                     match cell.set() {
                                         Ok(_) => {
@@ -411,7 +411,6 @@ impl Action {
                 
                 // Throw error if execution failed
                 if let Err(e) = execution_result {
-                    println!("Here - Error occurred during cell update.");
                     return Err(e);
                 }
             }

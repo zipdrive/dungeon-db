@@ -238,6 +238,7 @@ pub enum QueryBuilderColumn {
     },
     Formula {
         schema_oid: i64,
+        schema_row_ord: Option<String>,
         column_oid: i64,
 
         /// The ordinal pointing to a possible '{DATASOURCE}:{COLUMN}' String 
@@ -271,6 +272,7 @@ pub enum QueryBuilderColumn {
     },
     Subreport {
         schema_oid: i64,
+        schema_row_ord: Option<String>,
         column_oid: i64,
 
         /// The metadata of the subreport.
@@ -927,6 +929,10 @@ impl<'a> QueryBuilder<'a> {
                 // Construct column
                 QueryBuilderColumn::Formula { 
                     schema_oid: column_metadata.schema.oid, 
+                    schema_row_ord: match column_datasource {
+                        Some(column_datasource) => Some(format!("{}_OID", column_datasource.get_alias())),
+                        None => None
+                    },
                     column_oid: column_metadata.oid, 
                     param_ord, 
                     param_expr: scalar_sql.param_expr, 
@@ -943,6 +949,10 @@ impl<'a> QueryBuilder<'a> {
                 let subreport_metadata: report::FullMetadata = report::FullMetadata::get(report_oid)?;
                 QueryBuilderColumn::Subreport { 
                     schema_oid: column_metadata.schema.oid, 
+                    schema_row_ord: match column_datasource {
+                        Some(column_datasource) => Some(format!("{}_OID", column_datasource.get_alias())),
+                        None => None
+                    },
                     column_oid: column_metadata.oid, 
                     subreport_metadata
                 }

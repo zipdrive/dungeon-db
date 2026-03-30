@@ -15,6 +15,9 @@ type ValidationFailures = {
 export type CellOid = {
     schemaOid: number,
     columnOid: number,
+    rowOid: number
+} | {
+    columnOid: number,
     filters: [string, number][]
 };
 
@@ -627,14 +630,18 @@ function updateMultiselectEntryCell(cell: MultiselectEntryCell, elem: HTMLTableC
     addValidationFailureTooltips(elem, cell.validationFailures);
 }
 
-export function createCellAsync(cell: Cell, isSchema: boolean, filters: [string, number][]): HTMLTableCellElement | HTMLTableRowElement | null {
+export function createCellAsync(cell: Cell, isSchema: boolean): HTMLTableCellElement | HTMLTableRowElement | null {
     function createCellElement(cellOid: CellOid, callbackFn: (e: HTMLTableCellElement) => void) {
         const elem: HTMLTableCellElement = document.createElement('td');
         elem.dataset.cellOid = JSON.stringify(cellOid);
         elem.classList.add(`column${cellOid.columnOid}`);
-        cellOid.filters.forEach(([datasourceAlias, datasourceRowOid]) => {
-            elem.classList.add(`${datasourceAlias}__${datasourceRowOid}`);
-        });
+        if ('filters' in cellOid) {
+            cellOid.filters.forEach(([datasourceAlias, datasourceRowOid]) => {
+                elem.classList.add(`${datasourceAlias}__${datasourceRowOid}`);
+            });
+        } else {
+            elem.id = `column${cellOid.columnOid}-row${cellOid.rowOid}`;
+        }
         elem.tabIndex = 0;
         callbackFn(elem);
         return elem;
@@ -738,15 +745,22 @@ export function createCellAsync(cell: Cell, isSchema: boolean, filters: [string,
 }
 
 export function updateCell(cellOid: CellOid, isSchema: boolean) {
-    const query: string = `.column${cellOid.columnOid}${cellOid.filters.map(([datasourceAlias, datasourceRowOid]) => `.${datasourceAlias}__${datasourceRowOid}`).join('')}`;
+    const query: string = 'filters' in cellOid ? 
+        `.column${cellOid.columnOid}${cellOid.filters.map(([datasourceAlias, datasourceRowOid]) => `.${datasourceAlias}__${datasourceRowOid}`).join('')}` :
+        `#column${cellOid.columnOid}-row${cellOid.rowOid}`
+    ;
     console.debug(`  Query string: "${query}"`);
     document.querySelectorAll(query).forEach(async (prevElem) => {
         console.debug(prevElem);
 
         // Construct replacement element
         const elem: HTMLTableCellElement = document.createElement('td');
+        elem.id = prevElem.id;
+        elem.classList.add(`column${cellOid.columnOid}`);
         prevElem.classList.forEach((prevElemClass) => {
-            elem.classList.add(prevElemClass);
+            if (prevElemClass.toUpperCase().startsWith('ROOT')) {
+                elem.classList.add(prevElemClass);
+            }
         });
         elem.tabIndex = 0;
         prevElem.replaceWith(elem);
