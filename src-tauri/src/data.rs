@@ -197,6 +197,11 @@ pub enum Action {
         table_oid: i64,
         row_oid: i64
     },
+    EditRowSubtype {
+        table_oid: i64,
+        row_oid: i64,
+        inheritor_table_oid: i64
+    },
 
     EditCellContents(cell::Cell)
 }
@@ -375,6 +380,17 @@ impl Action {
                 record_action(Self::TrashRow {
                     table_oid,
                     row_oid
+                }, is_forward);
+
+                // Send signal to update table
+                app.emit(UPDATE_TABLE_SIGNAL, table_oid)?;
+            }
+            Self::EditRowSubtype { table_oid, row_oid, inheritor_table_oid } => {
+                let old_inheritor_table_oid: i64 = row::change_object_type(table_oid, row_oid, inheritor_table_oid)?;
+                record_action(Self::EditRowSubtype { 
+                    table_oid, 
+                    row_oid, 
+                    inheritor_table_oid: old_inheritor_table_oid 
                 }, is_forward);
 
                 // Send signal to update table

@@ -78,7 +78,7 @@ if (urlParamSchemaOid) {
                 if ('maxIndex' in cell) {
                     maxPageNum = 1 + Math.floor(cell.maxIndex / pageSize);
                 } else {
-                    const elem: HTMLTableRowElement | HTMLTableCellElement | null = createCell(cell, true, filters);
+                    const elem: HTMLTableRowElement | HTMLTableCellElement | null = createCell(cell, true);
                     if (elem) {
                         if (elem.nodeName == 'TR') {
                             currentRow = elem;

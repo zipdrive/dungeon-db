@@ -37,6 +37,12 @@ export type Action = {
         rowOid: number
     }
 } | {
+    editRowSubtype: {
+        tableOid: number,
+        rowOid: number,
+        inheritorTableOid: number
+    }
+} | {
     editCellContents: Cell
 };
 

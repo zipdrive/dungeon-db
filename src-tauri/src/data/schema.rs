@@ -221,7 +221,7 @@ impl SelectedHierarchicalListItemMetadata {
             let mut list_item: Self = list_item_result?;
             if let Some(master_table_oid) = list_item.master_oid {
                 if let Some(master_row_oid) = sub_row_oids.get(&master_table_oid) {
-                    let sql_select: String = format!("SELECT OID FROM TABLE{} WHERE MASTER{master_table_oid} = ?1 AND NOT TRASH", list_item.oid);
+                    let sql_select: String = format!("SELECT OID FROM TABLE{} WHERE MASTER{master_table_oid}_OID = ?1 AND NOT TRASH", list_item.oid);
                     if let Some(inheritor_row_oid) = conn.query_one(&sql_select, params![master_row_oid], |row| row.get(0)).optional()? {
                         sub_row_oids.insert(list_item.oid, inheritor_row_oid);
                         list_item.selected = true;

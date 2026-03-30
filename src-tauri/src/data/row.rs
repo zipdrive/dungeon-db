@@ -1,9 +1,65 @@
 use std::collections::{HashMap, HashSet};
+use rusqlite::Connection;
 use rusqlite::{OptionalExtension, Transaction, params};
 use crate::data::column;
 use crate::data::column_type;
 use crate::util::db;
 use crate::util::error::Error;
+
+
+
+/// Constructs a mapping of all associated rows in master tables.
+fn map_all_master_tables(conn: &Connection, table_oid: i64, row_oid: i64, mapped_table_oid: &mut HashMap<i64, Option<i64>>) -> Result<(), Error> {
+    if !mapped_table_oid.contains_key(&table_oid) {
+        mapped_table_oid.insert(table_oid, Some(row_oid));
+
+        for master_table_oid_result in conn.prepare("SELECT inh.MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE inh INNER JOIN METADATA_SCHEMA s ON s.OID = inh.MASTER_SCHEMA_OID WHERE inh.INHERITOR_SCHEMA_OID = ?1 AND NOT inh.TRASH AND NOT s.TRASH")?.query_map(params![table_oid], |row| row.get::<_, i64>(0))? {
+            // Query for the associated row in the master table
+            let master_table_oid: i64 = master_table_oid_result?;
+            let sql_select: String = format!("SELECT MASTER{master_table_oid}_OID FROM TABLE{table_oid} WHERE OID = ?1");
+            let master_row_oid: i64 = conn.query_one(&sql_select, params![row_oid], |row| row.get(0))?;
+
+            // Map all master tables of the master table
+            map_all_master_tables(conn, master_table_oid, master_row_oid, mapped_table_oid)?;
+        }
+    }
+    Ok(())
+}
+
+/// Constructs a mapping of all associated rows in inheritor tables.
+fn map_all_inheritor_tables(conn: &Connection, table_oid: i64, row_oid: Option<i64>, mapped_table_oid: &mut HashMap<i64, Option<i64>>) -> Result<(usize, Option<i64>), Error> {
+    if !mapped_table_oid.contains_key(&table_oid) {
+        mapped_table_oid.insert(table_oid, row_oid);
+
+        let mut deepest_level: usize = 0;
+        let mut deepest_table_oid: Option<i64> = None;
+
+        for inheritor_table_oid_result in conn.prepare("SELECT inh.INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE inh INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID WHERE inh.MASTER_SCHEMA_OID = ?1 AND NOT inh.TRASH AND NOT s.TRASH")?.query_map(params![table_oid], |row| row.get::<_, i64>(0))? {
+            // Query for the associated row in the inheritor table
+            let inheritor_table_oid: i64 = inheritor_table_oid_result?;
+            let sql_select: String = format!("SELECT OID, TRASH FROM TABLE{inheritor_table_oid} WHERE MASTER{table_oid}_OID = ?1");
+            if let Some(row_oid) = row_oid {
+                match conn.query_one(&sql_select, params![row_oid], |row| Ok((row.get::<_, i64>("OID")?, row.get::<_, bool>("TRASH")?))).optional()? {
+                    Some((inheritor_row_oid, inheritor_row_is_trashed)) => {
+                        // Map all inheritor tables of the inheritor table
+                        let (deepest_mapped_level, deepest_mapped_table_oid) = map_all_inheritor_tables(conn, inheritor_table_oid, Some(inheritor_row_oid), mapped_table_oid)?;
+                        if !inheritor_row_is_trashed && deepest_mapped_level > deepest_level {
+                            deepest_level = deepest_mapped_level;
+                            deepest_table_oid = deepest_mapped_table_oid;
+                        }
+                    }
+                    None => {
+                        map_all_inheritor_tables(conn, inheritor_table_oid, None, mapped_table_oid)?;        
+                    }
+                }
+            } else {
+                map_all_inheritor_tables(conn, inheritor_table_oid, None, mapped_table_oid)?;
+            };
+        }
+        return Ok((deepest_level + 1, deepest_table_oid));
+    }
+    Ok((0, None))
+}
 
 
 
@@ -217,7 +273,7 @@ pub fn trash(table_oid: i64, row_oid: i64) -> Result<Option<(i64, i64)>, Error> 
     let mut conn = db::open()?;
     let trans: Transaction = conn.transaction()?;
 
-    // Insert the row into the table, + related rows for each master table
+    // Trash the row + all related rows up and down the inheritance tree
     let mut completed_table_oid: HashSet<i64> = HashSet::new();
     let deepest_level_trashed_table_and_row: Option<(i64, i64)> = trash_transact(&trans, table_oid, row_oid, &mut completed_table_oid)?;
 
@@ -260,4 +316,41 @@ pub fn untrash(table_oid: i64, row_oid: i64) -> Result<(), Error> {
     // Commit the transaction
     trans.commit()?;
     Ok(())
+}
+
+/// Change the object type of a row in a table.
+pub fn change_object_type(table_oid: i64, row_oid: i64, inheritor_table_oid: i64) -> Result<i64, Error> {
+    // Start a transaction
+    let mut conn = db::open()?;
+
+    // Map all existing related rows, up and down the inheritance tree
+    let mut mapped_table_oid: HashMap<i64, Option<i64>> = HashMap::new();
+    map_all_master_tables(&conn, table_oid, row_oid, &mut mapped_table_oid)?;
+    mapped_table_oid.remove(&table_oid);
+    let (_, deepest_untrashed_table_oid) = map_all_inheritor_tables(&conn, table_oid, Some(row_oid), &mut mapped_table_oid)?;
+    println!("  Changing object type. {:?}", mapped_table_oid);
+
+    // Trash the row + all related rows up and down the inheritance tree
+    let trans: Transaction = conn.transaction()?;
+    for (related_table_oid, related_row_oid) in mapped_table_oid.iter() {
+        if let Some(related_row_oid) = related_row_oid {
+            let sql_update: String = format!("UPDATE TABLE{related_table_oid} SET TRASH = TRUE WHERE OID = ?1");
+            trans.execute(&sql_update, params![related_row_oid])?;
+        }
+    }
+
+    // Check whether a row already exists in the table for the new type
+    if let Some(Some(inheritor_row_oid)) = mapped_table_oid.get(&inheritor_table_oid) {
+        // If a row does already exist, untrash it
+        let mut completed_untrash_table_oid: HashSet<i64> = HashSet::new();
+        untrash_transact(&trans, inheritor_table_oid, inheritor_row_oid.clone(), &mut completed_untrash_table_oid)?;
+    } else {
+        // If a row does not already exist, create a new row associated with the known rows
+        let mut master_rows: HashMap<i64, i64> = mapped_table_oid.into_iter().filter_map(|(table_oid, row_oid)| if let Some(row_oid) = row_oid { Some((table_oid, row_oid)) } else { None }).collect();
+        insert_transact(&trans, inheritor_table_oid, None, &mut master_rows)?;
+    }
+
+    // Commit the transaction
+    trans.commit()?;
+    Ok(deepest_untrashed_table_oid.unwrap_or(table_oid))
 }

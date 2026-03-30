@@ -5,6 +5,7 @@ import { FullMetadata as ColumnFullMetadata, createColumnHeaderHTML } from "./ut
 import { Cell, ValueOid, createCellAsync, runDropdownValueQueries, updateCell } from "./util/cell";
 import { listen } from "@tauri-apps/api/event";
 import { openDialogAsync } from "./util/dialog";
+import { executeAsync } from "./util/action";
 
 const urlParams = new URLSearchParams(window.location.search);
 const urlParamSchemaOid: string | null = urlParams.get('schema_oid');
@@ -36,6 +37,8 @@ if (urlParamSchemaOid) {
 
             let objectSchemaOid: number = schemaOid;
             if (filters.length == 1) {
+                const rowOid: number = filters[0][1];
+
                 // Construct a selector for the object type
                 const objectTypeRow: HTMLTableRowElement = document.createElement('tr');
                 const objectTypeLabel: HTMLTableCellElement = document.createElement('td');
@@ -52,7 +55,7 @@ if (urlParamSchemaOid) {
                 await queryAsync({
                     inheritorTables: {
                         tableOid: schemaOid,
-                        rowOid: filters[0][1],
+                        rowOid: rowOid,
                         channel: new Channel<SelectedHierarchicalListItemMetadata>((dropdownValue) => {
                             const objectTypeOption: HTMLOptionElement = document.createElement('option');
                             objectTypeOption.value = `${dropdownValue.oid}:${dropdownValue.masterOid}`;
@@ -67,7 +70,21 @@ if (urlParamSchemaOid) {
                 });
 
                 // Add event listener for when object type is changed
-                
+                objectTypeSelect.addEventListener('change', async () => {
+                    await executeAsync({
+                        editRowSubtype: {
+                            tableOid: schemaOid,
+                            rowOid: rowOid,
+                            inheritorTableOid: parseInt(objectTypeSelect.value.split(':')[0])
+                        }
+                    })
+                    .catch(async (e) => {
+                        await message(e, {
+                            title: 'An error occurred while changing object subtype.',
+                            kind: 'error'
+                        });
+                    });
+                });
 
                 // Add a horizontal line to separate
                 pageContentBody.insertAdjacentHTML('beforeend', '<tr><td colspan="2"><hr></td></tr>');
@@ -88,7 +105,7 @@ if (urlParamSchemaOid) {
                 if ('maxIndex' in cell) {
                     // Ignore
                 } else {
-                    const elem: HTMLTableRowElement | HTMLTableCellElement | null = createCellAsync(cell, false, filters);
+                    const elem: HTMLTableRowElement | HTMLTableCellElement | null = createCellAsync(cell, false);
                     if (elem) {
                         if (elem.nodeName == 'TR') {
                             // Ignore
