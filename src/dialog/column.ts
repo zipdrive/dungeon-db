@@ -238,6 +238,11 @@ window.addEventListener("DOMContentLoaded", () => {
         populateNewColumnMetadata();
     }
 
+    // 
+    document.getElementById('add-parameter-button')?.addEventListener('click', async (e) => {
+        
+    });
+
     // Create listeners for the buttons
     document.getElementById('confirm-button')?.addEventListener("click", async (e) => {
         e.preventDefault();

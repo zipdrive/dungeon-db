@@ -168,8 +168,12 @@ impl FullMetadata {
                 c.IS_UNIQUE,
                 c.IS_PRIMARY_KEY
             FROM METADATA_COLUMN c
-            LEFT JOIN METADATA_SCHEMA_INHERITANCE_VIEW s ON c.SCHEMA_OID = s.MASTER_SCHEMA_OID
-            WHERE COALESCE(s.INHERITOR_SCHEMA_OID, c.SCHEMA_OID) = ?1 AND NOT c.TRASH
+            INNER JOIN (
+                SELECT ?1 AS OID
+                UNION
+                SELECT MASTER_SCHEMA_OID AS OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE INHERITOR_SCHEMA_OID = ?1
+            ) s ON c.SCHEMA_OID = s.OID
+            WHERE NOT c.TRASH
             ORDER BY c.ORDERING
             "
         )?;
@@ -220,7 +224,7 @@ impl FullMetadata {
     pub fn query_associated_tables(mut sender: Sender<DropdownValue>) -> Result<(), Error> {
         let conn = db::open()?;
 
-        let mut select_stmt = conn.prepare("SELECT s.OID, s.NAME AS LABEL FROM METADATA_SCHEMA s INNER JOIN METADATA_TABLE t ON s.OID = t.OID")?;
+        let mut select_stmt = conn.prepare("SELECT s.OID, s.NAME AS LABEL FROM METADATA_SCHEMA s INNER JOIN METADATA_TABLE t ON s.OID = t.OID WHERE NOT s.TRASH ORDER BY s.NAME")?;
         let select_rows = select_stmt.query_and_then([], |row| Ok::<(i64, String), rusqlite::Error>((row.get::<_, i64>("OID")?, row.get::<_, String>("LABEL")?)))?;
         for row_result in select_rows {
             let (value, label) = row_result?;
@@ -251,17 +255,16 @@ impl FullMetadata {
         let column_type: column_type::ColumnType = self.column_type.clone();
         self.column_type = column_type.find_transact(trans)?;
 
-        
+        let max_ordering: i64 = trans.query_one("SELECT MAX(ORDERING) + 1 AS ORDERING FROM METADATA_COLUMN", [], |row| row.get::<_, Option<i64>>("ORDERING")).optional()?.unwrap_or(Some(1)).unwrap_or(1);
         if self.ordering < 0 {
             // Set the ordering to the maximum
-            self.ordering = trans.query_one("SELECT MAX(ORDERING) + 1 AS ORDERING FROM METADATA_COLUMN", [], |row| row.get(0)).optional()?.unwrap_or(1);
+            self.ordering = max_ordering;
         } else {
             // Make space for the column by adjusting the ordering of any columns to the left of it
-            let max_ordering: i64 = trans.query_one("SELECT MAX(ORDERING) + 1 AS ORDERING FROM METADATA_COLUMN", [], |row| row.get(0)).optional()?.unwrap_or(1);
             trans.execute("UPDATE METADATA_COLUMN SET ORDERING = ORDERING + ?2 WHERE ORDERING >= ?1", params![self.ordering, max_ordering - self.ordering])?;
             trans.execute("UPDATE METADATA_COLUMN SET ORDERING = ORDERING - ?2 WHERE ORDERING >= ?1", params![max_ordering, max_ordering - self.ordering + 1])?;
         }
-
+        
         // Insert the column metadata
         trans.execute(
             "
@@ -299,7 +302,6 @@ impl FullMetadata {
         self.oid = trans.last_insert_rowid();
 
         // If the column is not virtual, add it to the table
-        println!("Now adding column {:?} to table...", self.column_type);
         match &self.column_type {
             column_type::ColumnType::Primitive(prim) => {
                 let cmd: String = format!(
@@ -357,7 +359,6 @@ impl FullMetadata {
                     table_oid
                 );
                 trans.execute(&cmd, [])?;
-                println!("Created Multiselect table.");
             }
             column_type::ColumnType::Formula { oid, formula } => {
                 // If the column is a formula, make a view for the values therein

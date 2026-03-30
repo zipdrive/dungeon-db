@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use rusqlite::OptionalExtension;
 use rusqlite::{Transaction, params, types::Value, vtab::array::Array};
 use crate::util::error::Error;
 use crate::data::query;
@@ -117,6 +118,8 @@ fn drop_surrogate(trans: &Transaction, table_oid: i64, dependencies: &mut HashMa
 
 /// Creates the surrogate view for the given table.
 fn create_surrogate(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
+    println!("Now constructing TABLE{table_oid}_SURROGATE.");
+
     let mut query: query::QueryBuilder = query::QueryBuilder::new(Vec::new());
 
     // Apply ordering to the query
@@ -184,18 +187,18 @@ fn create_surrogate(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
         ) d ON c.SCHEMA_OID = d.DATASOURCE_TABLE_OID
         "
     )?;
-    for row_result in stmt_orderby.query_and_then(params![table_oid], |row| { Ok::<(String, i64, bool), rusqlite::Error>((row.get("DATASOURCE_ALIAS")?, row.get::<_, i64>("COLUMN_OID")?, row.get::<_, bool>("SORT_ASCENDING")?)) })? {
+    for row_result in stmt_orderby.query_map(params![table_oid], |row| { Ok::<(String, i64, bool), rusqlite::Error>((row.get("DATASOURCE_ALIAS")?, row.get::<_, i64>("COLUMN_OID")?, row.get::<_, bool>("SORT_ASCENDING")?)) })? {
         let (datasource_alias, column_oid, sort_ascending) = row_result?;
 
         // Construct the datasource
         let datasource_path: Vec<String> = datasource_alias.split('_').map(|s| String::from(s)).collect();
-        let datasource: datasource::Datasource = datasource::Datasource::from_path(datasource_path)?;
+        let datasource: datasource::Datasource = datasource::Datasource::from_path_transact(trans, datasource_path)?;
         
         // Construct the column metadata
         let column: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
 
         // Compile and insert column
-        query.insert_column(datasource, column)?;
+        query.insert_column(Some(&datasource), column)?;
 
         // Insert ORDER BY clause
         query.insert_ordering(column_oid, sort_ascending)?;
@@ -281,7 +284,7 @@ fn create_surrogate(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
 
             // Construct the datasource
             let datasource_path: Vec<String> = datasource_alias.split('_').map(|s| String::from(s)).collect();
-            let datasource: datasource::Datasource = datasource::Datasource::from_path(datasource_path)?;
+            let datasource: datasource::Datasource = datasource::Datasource::from_path_transact(trans, datasource_path)?;
             
             // Construct the column metadata
             let column: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
@@ -302,7 +305,7 @@ fn create_surrogate(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
     } else if columns.len() == 1 {
         // Table has a single column that serves as its primary key
         let (datasource, column, _) = columns.into_iter().next().unwrap();
-        match query.compile_column(datasource, column)? {
+        match query.compile_column(Some(&datasource), column)? {
             query::QueryBuilderColumn::Primitive { primitive_type, label_expr, value_expr, .. } => {
                 let label_expr: String = format!("COALESCE({label_expr}, '— NO PRIMARY KEY —')");
                 format!(
@@ -354,7 +357,7 @@ fn create_surrogate(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
                 r#"'"{}": ' || "#, 
                 column.name.replace(r#"\"#, r#"\\"#).replace(r#"""#, r#"\""#).replace(r#"'"#, r#"''"#)
             );
-            let value_expr: String = match query.compile_column(datasource, column)? {
+            let value_expr: String = match query.compile_column(Some(&datasource), column)? {
                 query::QueryBuilderColumn::Primitive { primitive_type, label_expr, value_expr, .. } => {
                     match primitive_type {
                         column_type::Primitive::Text => format!(r#"'"' || REPLACE(REPLACE({value_expr}, '\', '\\'), '"', '\"') || '"'"#),
@@ -399,9 +402,13 @@ fn create_surrogate(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
         
         // Construct the surrogate view
         let sql_view: String = format!("CREATE VIEW TABLE{table_oid}_SURROGATE AS SELECT {root_oid_expr} AS OID, {sql_surrogate_label} {sql_surrogate_from}");
+        println!("{sql_view}");
         trans.execute(&sql_view, [])?;
     } else {
-        return Err(Error::AdhocError("Surrogate view has no datasources.")); // This case shouldn't occur
+        // Construct the surrogate view
+        let sql_view: String = format!("CREATE VIEW TABLE{table_oid}_SURROGATE AS SELECT OID, '— NO PRIMARY KEY —' AS LABEL, 'null' AS JSON_LABEL FROM TABLE{table_oid}");
+        println!("{sql_view}");
+        trans.execute(&sql_view, [])?;
     }
     Ok(())
 }

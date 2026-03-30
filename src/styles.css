@@ -107,6 +107,9 @@
   background-color: var(--main-color-dark);
   border: 1px solid transparent;
 }
+.input option {
+  white-space: preserve nowrap;
+}
 
 
 .clickable-text {

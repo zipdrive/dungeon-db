@@ -1,8 +1,9 @@
 use base64::{Engine, prelude::{BASE64_STANDARD as base64standard}};
-use rusqlite::{OptionalExtension, types::Value};
+use rusqlite::{AndThenRows, OptionalExtension, types::Value};
 use rusqlite::vtab::array::Array;
 use rusqlite::{Connection, Params, Transaction, params};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::value};
+use tauri::{AppHandle, Emitter};
 use std::{cell, collections::HashSet};
 use std::collections::HashMap;
 use std::fs::File;
@@ -40,12 +41,49 @@ impl RetrievalLimit {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all="camelCase", rename_all_fields="camelCase")]
+pub enum CellOid {
+    TableCell {
+        schema_oid: i64,
+        column_oid: i64,
+        row_oid: i64
+    },
+    ReportCell {
+        column_oid: i64,
+        filters: Vec<(String, i64)>
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all="camelCase")]
-pub struct CellOid {
+pub struct ValueOid {
     schema_oid: i64,
     row_oid: i64,
     column_oid: i64
 }
+
+const UPDATE_CELL_SIGNAL: &'static str = "cell";
+
+impl ValueOid {
+    /// Sends a signal to update any affected cells.
+    pub fn query_affected_cells(&self, app: &AppHandle) -> Result<(), Error> {
+        let conn = db::open()?;
+
+        // Send signal for the cell that the value belongs to
+        {
+            let default_datasource = Datasource::get_default_datasource_transact(&conn, self.schema_oid.clone())?;
+            app.emit(UPDATE_CELL_SIGNAL, CellOid {
+                schema_oid: self.schema_oid.clone(),
+                column_oid: self.column_oid.clone(),
+                filters: vec![(default_datasource.get_alias(), self.row_oid.clone())]
+            })?;
+        }
+
+        Ok(())
+    }
+}
+
+
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all="camelCase", rename_all_fields="camelCase")]
@@ -69,21 +107,21 @@ pub enum Cell {
     },
     PrimitiveEntry {
         cell_oid: CellOid,
-        value_oid: CellOid,
+        value_oid: ValueOid,
         label: Option<String>,
         primitive_type: column_type::Primitive,
         validation_failures: Vec<FailedValidation>
     },
     FileEntry {
         cell_oid: CellOid,
-        value_oid: CellOid,
+        value_oid: ValueOid,
         file_oid: Option<i64>,
         label: Option<String>,
         validation_failures: Vec<FailedValidation>
     },
     Object {
         cell_oid: CellOid,
-        value_oid: CellOid,
+        value_oid: ValueOid,
         object_schema_oid: i64,
         object_query_string: Option<String>,
         label: Option<String>,
@@ -91,14 +129,14 @@ pub enum Cell {
     },
     SelectEntry {
         cell_oid: CellOid,
-        value_oid: CellOid,
+        value_oid: ValueOid,
         select_schema_oid: i64,
         select_row_oid: Option<i64>,
         validation_failures: Vec<FailedValidation>
     },
     MultiselectEntry {
         cell_oid: CellOid,
-        value_oid: CellOid,
+        value_oid: ValueOid,
         multiselect_schema_oid: i64,
         multiselect_row_oid: Vec<i64>,
         label: Option<String>,
@@ -115,18 +153,21 @@ pub enum Cell {
 
 impl Cell {
     /// Retrieves the value of a cell.
-    pub fn get(cell_oid: CellOid) -> Result<Self, Error> {
+    pub fn get(cell_oid: Cell) -> Result<Self, Error> {
+        let conn = db::open()?;
+
+        // Load column metadata
         let column_metadata: column::FullMetadata = column::FullMetadata::get(cell_oid.column_oid)?;
+
         match column_metadata.column_type {
             column_type::ColumnType::Primitive(prim) => {
-                let conn = db::open()?;
                 Ok(match prim {
                     column_type::Primitive::Text
                     | column_type::Primitive::JSON => {
                         let sql_select: String = format!("SELECT COLUMN{} FROM TABLE{} WHERE OID = ?1", cell_oid.column_oid, cell_oid.schema_oid);
                         let label: Option<String> = conn.query_one(&sql_select, params![cell_oid.row_oid], |row| row.get(0))?;
                         Self::PrimitiveEntry { 
-                            cell_oid: cell_oid.clone(), 
+                            cell_oid, 
                             value_oid: cell_oid, 
                             label, 
                             primitive_type: prim, 
@@ -139,7 +180,7 @@ impl Cell {
                         let sql_select: String = format!("SELECT CAST(COLUMN{} AS TEXT) FROM TABLE{} WHERE OID = ?1", cell_oid.column_oid, cell_oid.schema_oid);
                         let label: Option<String> = conn.query_one(&sql_select, params![cell_oid.row_oid], |row| row.get(0))?;
                         Self::PrimitiveEntry { 
-                            cell_oid: cell_oid.clone(), 
+                            cell_oid, 
                             value_oid: cell_oid, 
                             label, 
                             primitive_type: prim, 
@@ -150,7 +191,7 @@ impl Cell {
                         let sql_select: String = format!("SELECT DATE(COLUMN{}, 'julianday') FROM TABLE{} WHERE OID = ?1", cell_oid.column_oid, cell_oid.schema_oid);
                         let label: Option<String> = conn.query_one(&sql_select, params![cell_oid.row_oid], |row| row.get(0))?;
                         Self::PrimitiveEntry { 
-                            cell_oid: cell_oid.clone(), 
+                            cell_oid, 
                             value_oid: cell_oid, 
                             label, 
                             primitive_type: prim, 
@@ -161,7 +202,7 @@ impl Cell {
                         let sql_select: String = format!("SELECT STRFTIME('%FT%TZ', COLUMN{}, 'julianday') FROM TABLE{} WHERE OID = ?1", cell_oid.column_oid, cell_oid.schema_oid);
                         let label: Option<String> = conn.query_one(&sql_select, params![cell_oid.row_oid], |row| row.get(0))?;
                         Self::PrimitiveEntry { 
-                            cell_oid: cell_oid.clone(), 
+                            cell_oid, 
                             value_oid: cell_oid, 
                             label, 
                             primitive_type: prim, 
@@ -188,7 +229,7 @@ impl Cell {
                             |row| Ok::<(Option<i64>, Option<String>), rusqlite::Error>((row.get("OID")?, row.get("LABEL")?))
                         )?;
                         Self::FileEntry { 
-                            cell_oid: cell_oid.clone(), 
+                            cell_oid, 
                             value_oid: cell_oid, 
                             label, 
                             file_oid: oid, 
@@ -198,9 +239,7 @@ impl Cell {
                 })                
             }
             column_type::ColumnType::Object { table_oid, .. } => {
-                let conn = db::open()?;
-
-                let datasource_oid: i64 = conn.query_row("SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = ?1", params![cell_oid.schema_oid], |row| row.get(0))?;
+                let datasource: Datasource = Datasource::get_default_datasource_transact(&conn, table_oid)?;
 
                 let column_name: String = format!("COLUMN{}", cell_oid.column_oid);
                 let table_name: String = format!("TABLE{}", cell_oid.schema_oid);
@@ -221,11 +260,11 @@ impl Cell {
                 )?;
 
                 Ok(Self::Object { 
-                    cell_oid: cell_oid.clone(), 
+                    cell_oid, 
                     value_oid: cell_oid, 
                     object_schema_oid: table_oid, 
                     object_query_string: match object_row_oid {
-                        Some(o) => Some(format!("d{datasource_oid}={o}")), 
+                        Some(o) => Some(format!("{}={o}", datasource.get_alias())), 
                         None => None
                     },
                     label, 
@@ -233,8 +272,6 @@ impl Cell {
                 })
             }
             column_type::ColumnType::Select { table_oid, .. } => {
-                let conn = db::open()?;
-
                 let sql_select: String = format!(
                     "
                     SELECT 
@@ -252,7 +289,7 @@ impl Cell {
                 )?;
 
                 Ok(Self::SelectEntry { 
-                    cell_oid: cell_oid.clone(), 
+                    cell_oid, 
                     value_oid: cell_oid, 
                     select_schema_oid: table_oid, 
                     select_row_oid, 
@@ -260,8 +297,6 @@ impl Cell {
                 })
             }
             column_type::ColumnType::Multiselect { table_oid, .. } => {
-                let conn = db::open()?;
-
                 let multiselect_name: String = format!("MULTISELECT{}", cell_oid.column_oid);
                 let table_name: String = format!("TABLE{}", cell_oid.schema_oid);
                 let sql_select: String = format!(
@@ -285,7 +320,7 @@ impl Cell {
                 };
 
                 Ok(Self::MultiselectEntry { 
-                    cell_oid: cell_oid.clone(), 
+                    cell_oid, 
                     value_oid: cell_oid, 
                     multiselect_schema_oid: table_oid, 
                     multiselect_row_oid, 
@@ -301,7 +336,7 @@ impl Cell {
     }
 
     /// Gets the OIDs pointing to the value of the cell.
-    pub fn get_value_oid(&self) -> Result<CellOid, Error> {
+    pub fn get_value_oid(&self) -> Result<ValueOid, Error> {
         match self {
             Self::PrimitiveEntry { value_oid, .. }
             | Self::FileEntry { value_oid, .. }
@@ -361,8 +396,7 @@ impl Cell {
         column::FullMetadata::query_by_schema(
             Sender::Callback(Box::new(|col: column::FullMetadata| -> Result<(), Error> {
                 // Add column to query
-                let datasource: datasource::Datasource = schema_to_datasource[&col.schema.oid].clone();
-                query.insert_column(datasource, col.clone())?;
+                query.insert_column(schema_to_datasource.get(&col.schema.oid), col.clone())?;
 
                 // Send column metadata over the provided Sender object
                 column_sender.send(col)?;
@@ -373,10 +407,8 @@ impl Cell {
 
         let conn: Connection = db::open()?;
 
-        // Filter rows in the query based on the METADATA_REPORT_FILTER table
-        let mut stmt_filter = conn.prepare("SELECT FORMULA FROM METADATA_REPORT_FILTER WHERE REPORT_OID = ?1 AND TRASH = 0")?;
-        for row_result in stmt_filter.query_and_then(params![schema_oid], |row| row.get::<_, String>("FORMULA"))? {
-            let filter_formula = row_result?;
+        // Filter rows in the query based on the METADATA_REPORT.FILTER_FORMULA formula
+        if let Some(Some(filter_formula)) = conn.query_one("SELECT FILTER_FORMULA FROM METADATA_REPORT WHERE OID = ?1", params![schema_oid], |row| row.get::<_, Option<String>>("FILTER_FORMULA")).optional()? {
             // Insert WHERE clause
             query.insert_filter(filter_formula)?;
         }
@@ -420,11 +452,11 @@ impl Cell {
         Ok(query)
     }
 
-    fn run_query(mut cell_sender: Sender<Self>, schema_oid: i64, query: query::QueryBuilder, filters: Vec<(String, i64)>, limit: RetrievalLimit) -> Result<(), Error> {
+    fn run_query(mut cell_sender: Sender<Self>, table_datasource: Option<Datasource>, query: query::QueryBuilder, filters: Vec<(String, i64)>, limit: RetrievalLimit) -> Result<(), Error> {
         // Compile and run the query
         let conn: Connection = db::open()?;
         if let Some((cmd_query, cols, datasource_aliases)) = query.compile()? {
-            println!("{cmd_query}");
+            println!("Query compiled successfully.\n{cmd_query}");
 
             // First, get the maximum index
             let cmd_max_index_query = format!("SELECT ROW_INDEX FROM ({cmd_query}) ORDER BY ROW_INDEX DESC LIMIT 1");
@@ -448,6 +480,9 @@ impl Cell {
             loop {
                 let Some(row) = rows_query.next()? else { break; };
                 row_count += 1;
+
+                // Load the row OID
+                
 
                 // Load all filters used to identify the row
                 let mut filters: Vec<(String, i64)> = Vec::new();
@@ -497,16 +532,23 @@ impl Cell {
                 
                 // Then, send a cell for each column
                 for c in cols.iter() {
+                    // Construct the cell OID
+                    
                     match c {
                         query::QueryBuilderColumn::Primitive { schema_oid, schema_row_ord, column_oid, label_ord, primitive_type, .. } => {
                             let label: Option<String> = row.get::<&str, Option<String>>(label_ord)?;
-                            let value_oid: CellOid = CellOid { 
+                            let cell_oid: CellOid = CellOid {
+                                schema_oid: schema_oid.clone(),
+                                column_oid: column_oid.clone(),
+                                filters: filters.clone()
+                            };
+                            let value_oid: ValueOid = ValueOid { 
                                 schema_oid: schema_oid.clone(), 
                                 row_oid: row.get::<&str, i64>(schema_row_ord)?, 
                                 column_oid: column_oid.clone()
                             };
                             cell_sender.send(Cell::PrimitiveEntry { 
-                                cell_oid: value_oid.clone(), 
+                                cell_oid, 
                                 value_oid,
                                 label, 
                                 primitive_type: primitive_type.clone(),
@@ -516,47 +558,58 @@ impl Cell {
                         query::QueryBuilderColumn::File { schema_oid, schema_row_ord, column_oid, label_ord, file_ord, .. } => {
                             let label: Option<String> = row.get::<&str, Option<String>>(label_ord)?;
                             let file_oid: Option<i64> = row.get::<&str, Option<i64>>(file_ord)?;
-                            let value_oid: CellOid = CellOid { 
+                            let cell_oid: CellOid = CellOid {
+                                schema_oid: schema_oid.clone(),
+                                column_oid: column_oid.clone(),
+                                filters: filters.clone()
+                            };
+                            let value_oid: ValueOid = ValueOid { 
                                 schema_oid: schema_oid.clone(), 
                                 row_oid: row.get::<&str, i64>(schema_row_ord)?, 
                                 column_oid: column_oid.clone()
                             };
                             cell_sender.send(Cell::FileEntry { 
-                                cell_oid: value_oid.clone(), 
+                                cell_oid, 
                                 value_oid, 
                                 file_oid, 
                                 label, 
                                 validation_failures: Vec::new() 
                             })?;
                         }
-                        query::QueryBuilderColumn::Object { schema_oid, schema_row_ord, column_oid, label_ord, object_schema_oid, object_query_string_ord: object_datasource_row_ord, .. } => {
+                        query::QueryBuilderColumn::Object { schema_oid, schema_row_ord, column_oid, label_ord, object_schema_oid, object_query_string_ord, .. } => {
                             let label: Option<String> = row.get::<&str, Option<String>>(label_ord)?;
-                            let value_oid: CellOid = CellOid { 
+                            let cell_oid: CellOid = CellOid {
+                                schema_oid: schema_oid.clone(),
+                                column_oid: column_oid.clone(),
+                                filters: filters.clone()
+                            };
+                            let value_oid: ValueOid = ValueOid { 
                                 schema_oid: schema_oid.clone(), 
                                 row_oid: row.get::<&str, i64>(schema_row_ord)?, 
                                 column_oid: column_oid.clone()
                             };
                             cell_sender.send(Cell::Object { 
-                                cell_oid: value_oid.clone(), 
+                                cell_oid, 
                                 value_oid,
                                 object_schema_oid: object_schema_oid.clone(),
-                                object_query_string: if let Some(object_datasource_row_oid) = row.get::<&str, Option<i64>>(object_datasource_row_ord)? {
-                                    Some(format!("{object_schema_oid}={object_datasource_row_oid}"))
-                                } else {
-                                    None
-                                },
+                                object_query_string: row.get::<&str, Option<String>>(object_query_string_ord)?,
                                 label, 
                                 validation_failures: Vec::new() 
                             })?;
                         }
                         query::QueryBuilderColumn::Select { schema_oid, schema_row_ord, column_oid, select_schema_oid, select_row_ord, .. } => {
-                            let value_oid: CellOid = CellOid { 
+                            let cell_oid: CellOid = CellOid {
+                                schema_oid: schema_oid.clone(),
+                                column_oid: column_oid.clone(),
+                                filters: filters.clone()
+                            };
+                            let value_oid: ValueOid = ValueOid { 
                                 schema_oid: schema_oid.clone(), 
                                 row_oid: row.get::<&str, i64>(schema_row_ord)?, 
                                 column_oid: column_oid.clone()
                             };
                             cell_sender.send(Cell::SelectEntry { 
-                                cell_oid: value_oid.clone(), 
+                                cell_oid, 
                                 value_oid,
                                 select_schema_oid: select_schema_oid.clone(),
                                 select_row_oid: row.get::<&str, Option<i64>>(select_row_ord)?,
@@ -565,7 +618,12 @@ impl Cell {
                         }
                         query::QueryBuilderColumn::Multiselect { schema_oid, schema_row_ord, column_oid, label_ord, select_schema_oid, select_row_ord, .. } => {
                             let label: Option<String> = row.get::<&str, Option<String>>(label_ord)?;
-                            let value_oid: CellOid = CellOid { 
+                            let cell_oid: CellOid = CellOid {
+                                schema_oid: schema_oid.clone(),
+                                column_oid: column_oid.clone(),
+                                filters: filters.clone()
+                            };
+                            let value_oid: ValueOid = ValueOid { 
                                 schema_oid: schema_oid.clone(), 
                                 row_oid: row.get::<&str, i64>(schema_row_ord)?, 
                                 column_oid: column_oid.clone()
@@ -577,7 +635,7 @@ impl Cell {
                             };
 
                             cell_sender.send(Cell::MultiselectEntry { 
-                                cell_oid: value_oid.clone(), 
+                                cell_oid, 
                                 value_oid,
                                 multiselect_schema_oid: select_schema_oid.clone(),
                                 multiselect_row_oid,
@@ -585,12 +643,12 @@ impl Cell {
                                 validation_failures: Vec::new() 
                             })?;
                         }
-                        query::QueryBuilderColumn::Formula { schema_oid, schema_row_ord, column_oid, param_ord, label_ord, value_ord, .. } => {
+                        query::QueryBuilderColumn::Formula { schema_oid, column_oid, param_ord, label_ord, value_ord, .. } => {
                             let label: Option<String> = row.get::<&str, Option<String>>(label_ord)?;
-                            let cell_oid: CellOid = CellOid { 
-                                schema_oid: schema_oid.clone(), 
-                                row_oid: row.get::<&str, i64>(schema_row_ord)?, 
-                                column_oid: column_oid.clone()
+                            let cell_oid: CellOid = CellOid {
+                                schema_oid: schema_oid.clone(),
+                                column_oid: column_oid.clone(),
+                                filters: filters.clone()
                             };
 
                             if let Some(param) = row.get::<&str, Option<String>>(param_ord)? {
@@ -607,7 +665,7 @@ impl Cell {
                                 let value_column = column::FullMetadata::get(value_column_oid)?;
                                 
                                 let value_row_ord: String = format!("{}_OID", value_datasource.get_alias());
-                                let value_oid: CellOid = CellOid {
+                                let value_oid: ValueOid = ValueOid {
                                     schema_oid: value_datasource.get_schema_oid()?,
                                     row_oid: row.get::<&str, i64>(&value_row_ord)?,
                                     column_oid: value_column.oid.clone()
@@ -677,11 +735,11 @@ impl Cell {
                                 })?;
                             }
                         }
-                        query::QueryBuilderColumn::Subreport { schema_oid, schema_row_ord, column_oid, subreport_metadata } => {
-                            let cell_oid: CellOid = CellOid { 
-                                schema_oid: schema_oid.clone(), 
-                                row_oid: row.get::<&str, i64>(schema_row_ord)?, 
-                                column_oid: column_oid.clone()
+                        query::QueryBuilderColumn::Subreport { schema_oid, column_oid, subreport_metadata } => {
+                            let cell_oid: CellOid = CellOid {
+                                schema_oid: schema_oid.clone(),
+                                column_oid: column_oid.clone(),
+                                filters: filters.clone()
                             };
 
                             cell_sender.send(Cell::Subreport { 
@@ -757,25 +815,25 @@ impl Cell {
     pub fn query_by_schema(column_sender: Sender<column::FullMetadata>, cell_sender: Sender<Self>, schema_oid: i64, filters: Vec<(String, i64)>, limit: RetrievalLimit) -> Result<(), Error> {
         let schema: schema::Schema = schema::Schema::get(schema_oid)?;
 
+        let table_datasource: Option<Datasource> = match &schema {
+            schema::Schema::Table(table_metadata) => {
+                let conn = db::open()?;
+                Some(Datasource::get_default_datasource_transact(&conn, table_metadata.schema.oid)?)
+            }
+            schema::Schema::Report(_) => None 
+        };
+
         // Build the base query and retrieve columns
         let query = Self::build_query(column_sender, schema_oid, 
-            match schema {
-                schema::Schema::Table(table_metadata) => {
-                    // Find the default datasource for the table
-                    let conn = db::open()?;
-                    let table_datasource: datasource::Datasource = datasource::Datasource::Table { 
-                        oid: conn.query_row("SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = ?1", params![table_metadata.schema.oid], |row| row.get(0))?,
-                        table_oid: table_metadata.schema.oid
-                    };
-                    vec![table_datasource]
-                }
-                schema::Schema::Report(_) => Vec::new() // Reports have no default datasource
+            match &table_datasource {
+                Some(table_datasource) => vec![table_datasource.clone()],
+                None => Vec::new()
             },
             filters.clone()
         )?;
 
         // Compile and run the query
-        Self::run_query(cell_sender, schema_oid, query, filters, limit)?;
+        Self::run_query(cell_sender, table_datasource, query, filters, limit)?;
         Ok(())
     }
 
@@ -801,7 +859,7 @@ impl Cell {
             Self::Object { value_oid, object_schema_oid, object_query_string, .. } => {
                 // Trash the previous object
                 let sql_trash_previous: String = format!(
-                    "UPDATE TABLE{} AS o SET o.TRASH = TRUE FROM (SELECT COLUMN{} AS O_OID FROM TABLE{} WHERE OID = ?1) AS t WHERE o.OID = t.O_OID",
+                    "UPDATE TABLE{} SET TRASH = TRUE WHERE OID = (SELECT COLUMN{} AS O_OID FROM TABLE{} WHERE OID = ?1)",
                     object_schema_oid,
                     value_oid.column_oid,
                     value_oid.schema_oid
@@ -870,7 +928,7 @@ impl Cell {
 
 #[derive(Deserialize)]
 pub struct Blob {
-    pub blob_oid: CellOid
+    pub blob_oid: ValueOid
 }
 
 impl Blob {

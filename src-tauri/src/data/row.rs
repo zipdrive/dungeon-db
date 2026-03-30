@@ -95,7 +95,7 @@ pub fn insert_transact(trans: &Transaction, table_oid: i64, row_oid: Option<i64>
                 (String::from(""), String::from("")), 
                 |(acc_column_names, acc_column_params), (e_idx, (e_column_name, _))| (
                     if acc_column_names == "" { e_column_name } else { format!("{acc_column_names}, {e_column_name}") }, 
-                    if acc_column_params == "" { format!("?{e_idx}") } else { format!("{acc_column_params}, ?{e_idx}") }
+                    if acc_column_params == "" { format!("?{}", e_idx + 1) } else { format!("{acc_column_params}, ?{}", e_idx + 1) }
                 )
             );
             format!("({column_names}) VALUES ({column_params})")

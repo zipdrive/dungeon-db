@@ -107,9 +107,26 @@ impl Datasource {
         };
     }
 
-    /// Retrieve a root datasource by OID.
-    pub fn get(oid: i64) -> Result<Self, Error> {
-        let conn = db::open()?;
+    /// Construct a datasource from a path.
+    pub fn from_path_transact(trans: &Transaction, path: Vec<String>) -> Result<Self, Error> {
+        if path.len() == 0 {
+            return Err(Error::AdhocError("Datasource cannot be empty!"));
+        }
+
+        // Check for root datasource
+        let root_regex: Regex = Regex::new(r#"^ROOT(\d+)$"#).unwrap();
+        if let Some(root_caps) = root_regex.captures(&path[0]) {
+            let (_, [root_datasource_oid_str]) = root_caps.extract();
+            let root_datasource_oid: i64 = root_datasource_oid_str.parse().unwrap();
+            let root: Self = Self::get_transact(trans, root_datasource_oid)?;
+            return Self::from_parent_and_path(root, &path[1..]);
+        } else {
+            return Err(Error::AdhocError("Root datasource is expected to be an OID of a row in METADATA_DATASOURCE."));
+        };
+    }
+
+    /// Retrieve a root datasource by OID, as part of a transaction.
+    fn get_transact(conn: &Connection, oid: i64) -> Result<Self, Error> {
         let (table_oid, label) = conn.query_one(
             "
             SELECT
@@ -128,6 +145,20 @@ impl Datasource {
 
         Ok(Self::Table {
             oid,
+            table_oid
+        })
+    }
+
+    /// Retrieve a root datasource by OID.
+    pub fn get(oid: i64) -> Result<Self, Error> {
+        let conn = db::open()?;
+        Self::get_transact(&conn, oid)
+    }
+
+    /// Retrieves the default root datasource for a particular table.
+    pub fn get_default_datasource_transact(conn: &Connection, table_oid: i64) -> Result<Self, Error> {
+        Ok(Self::Table {
+            oid: conn.query_row("SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = ?1", params![table_oid], |row| row.get(0))?,
             table_oid
         })
     }

@@ -217,7 +217,6 @@ fn record_action(action: Action, is_forward: bool) {
 const UPDATE_SCHEMA_SIGNAL: &'static str = "schema";
 const UPDATE_TABLE_SIGNAL: &'static str = "table";
 const UPDATE_REPORT_SIGNAL: &'static str = "report";
-const UPDATE_CELL_SIGNAL: &'static str = "cell";
 
 impl Action {
     async fn execute(self, app: &AppHandle, is_forward: bool) -> Result<(), Error> {
@@ -385,7 +384,6 @@ impl Action {
 
 
             Self::EditCellContents(cell) => {
-                println!("Here1");
                 let execution_result: Result<(), Error> = {
                     // Update the contents of the cell
                     match cell.get_value_oid() {
@@ -404,17 +402,16 @@ impl Action {
                             }
                         }
                         Err(e) => Err(e)
-                    }                    
+                    }
                 };
 
                 // Send signal to update that cell + any dependent cells
                 // Do this regardless of whether previous execution succeeded or failed
-                println!("Here2");
-                app.emit(UPDATE_CELL_SIGNAL, cell.get_value_oid()?)?;
-                println!("Here3");
+                cell.get_value_oid()?.query_affected_cells(app)?;
                 
                 // Throw error if execution failed
                 if let Err(e) = execution_result {
+                    println!("Here - Error occurred during cell update.");
                     return Err(e);
                 }
             }

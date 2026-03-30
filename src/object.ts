@@ -1,8 +1,8 @@
 import { message } from "@tauri-apps/plugin-dialog";
-import { getReportMetadataAsync, getTableMetadataAsync, queryAsync, ToggledHierarchicalListItemMetadata } from "./util/query";
+import { getReportMetadataAsync, getTableMetadataAsync, queryAsync, SelectedHierarchicalListItemMetadata, ToggledHierarchicalListItemMetadata } from "./util/query";
 import { Channel } from "@tauri-apps/api/core";
 import { FullMetadata as ColumnFullMetadata, createColumnHeaderHTML } from "./util/column";
-import { Cell, CellOid, createCellAsync, runDropdownValueQueries, updateCell } from "./util/cell";
+import { Cell, ValueOid, createCellAsync, runDropdownValueQueries, updateCell } from "./util/cell";
 import { listen } from "@tauri-apps/api/event";
 import { openDialogAsync } from "./util/dialog";
 
@@ -34,20 +34,56 @@ if (urlParamSchemaOid) {
             const pageContentFoot: HTMLElement = document.createElement('tfoot');
             pageContentElem.appendChild(pageContentFoot);
 
-            // Construct header
-            const columnHeaderRow: HTMLElement = document.createElement('tr');
-            columnHeaderRow.appendChild(document.createElement('th'));
-            pageContentHead.appendChild(columnHeaderRow);
+            let objectSchemaOid: number = schemaOid;
+            if (filters.length == 1) {
+                // Construct a selector for the object type
+                const objectTypeRow: HTMLTableRowElement = document.createElement('tr');
+                const objectTypeLabel: HTMLTableCellElement = document.createElement('td');
+                objectTypeLabel.innerText = 'Object Type';
+                objectTypeRow.appendChild(objectTypeLabel);
+                const objectTypeValue: HTMLTableCellElement = document.createElement('td');
+                const objectTypeSelect: HTMLSelectElement = document.createElement('select');
+                objectTypeSelect.classList.add('input');
+                objectTypeValue.appendChild(objectTypeSelect);
+                objectTypeRow.appendChild(objectTypeValue);
+                pageContentBody.appendChild(objectTypeRow);
+
+                // Query for object types
+                await queryAsync({
+                    inheritorTables: {
+                        tableOid: schemaOid,
+                        rowOid: filters[0][1],
+                        channel: new Channel<SelectedHierarchicalListItemMetadata>((dropdownValue) => {
+                            const objectTypeOption: HTMLOptionElement = document.createElement('option');
+                            objectTypeOption.value = `${dropdownValue.oid}:${dropdownValue.masterOid}`;
+                            objectTypeOption.innerText = `${' '.repeat(dropdownValue.level)}${dropdownValue.name}`;
+                            if (dropdownValue.selected) {
+                                objectTypeOption.selected = true;
+                                objectSchemaOid = dropdownValue.oid;
+                            }
+                            objectTypeSelect.appendChild(objectTypeOption);
+                        })
+                    }
+                });
+
+                // Add event listener for when object type is changed
+                
+
+                // Add a horizontal line to separate
+                pageContentBody.insertAdjacentHTML('beforeend', '<tr><td colspan="2"><hr></td></tr>');
+            }
+
+            // Construct row for each column
             const columnChannel: Channel<ColumnFullMetadata> = new Channel<ColumnFullMetadata>((column) => {
                 console.debug(`COLUMN: ${JSON.stringify(column)}`);
+                const columnRow: HTMLElement = document.createElement('tr');
                 const elem: HTMLTableCellElement = createColumnHeaderHTML(schemaOid, column);
-                elem.classList.add('reorderable-column');
-                columnHeaderRow.appendChild(elem);
+                columnRow.appendChild(elem);
+                pageContentBody.appendChild(columnRow);
             });
 
             // Construct body
-            let currentRow: HTMLElement = pageContentBody;
-            const cellChannel: Channel<Cell & { maxIndex: number }> = new Channel<Cell & { maxIndex: number }>((cell) => {
+            const cellChannel: Channel<Cell | { maxIndex: number }> = new Channel<Cell | { maxIndex: number }>((cell) => {
                 console.debug(`CELL: ${JSON.stringify(cell)}`);
                 if ('maxIndex' in cell) {
                     // Ignore
@@ -55,19 +91,40 @@ if (urlParamSchemaOid) {
                     const elem: HTMLTableRowElement | HTMLTableCellElement | null = createCellAsync(cell, false, filters);
                     if (elem) {
                         if (elem.nodeName == 'TR') {
-                            currentRow = elem;
-                            pageContentBody.appendChild(elem);
+                            // Ignore
                         } else {
-                            currentRow.appendChild(elem);
+                            // Extract the column OID
+                            let columnOid: number;
+                            if ('readonly' in cell) {
+                                columnOid = cell.readonly.cellOid.columnOid;
+                            } else if ('subreport' in cell) {
+                                columnOid = cell.subreport.cellOid.columnOid;
+                            } else if ('primitiveEntry' in cell) {
+                                columnOid = cell.primitiveEntry.cellOid.columnOid;
+                            } else if ('fileEntry' in cell) {
+                                columnOid = cell.fileEntry.cellOid.columnOid;
+                            } else if ('object' in cell) {
+                                columnOid = cell.object.cellOid.columnOid;
+                            } else if ('selectEntry' in cell) {
+                                columnOid = cell.selectEntry.cellOid.columnOid;
+                            } else if ('multiselectEntry' in cell) {
+                                columnOid = cell.multiselectEntry.cellOid.columnOid;
+                            } else {
+                                throw new Error(`Cell type ${JSON.stringify(cell)} is not covered.`);
+                            }
+
+                            // Add the cell to the appropriate row
+                            document.querySelector(`#page-content > tbody > tr:has(.column${columnOid})`)?.appendChild(elem);
                         }
                     }
                 }
             });
 
             // Query for columns and cells
+            console.debug(`Schema OID: ${objectSchemaOid}\nFilters: ${filters}`);
             await queryAsync({
                 cells: {
-                    schemaOid: schemaOid,
+                    schemaOid: objectSchemaOid,
                     filters: filters,
                     limit: {
                         singleRow: null
@@ -79,22 +136,6 @@ if (urlParamSchemaOid) {
 
             // Once all cells have been created, query for dropdown values
             await runDropdownValueQueries();
-
-            // Add button to add new column
-            const addNewColumnButton: HTMLTableCellElement = document.createElement('th');
-            addNewColumnButton.classList.add('clickable-text');
-            addNewColumnButton.style.whiteSpace = 'nowrap';
-            addNewColumnButton.style.width = '8em';
-            addNewColumnButton.innerText = 'Add New Column';
-            addNewColumnButton.addEventListener('click', () => {
-                openDialogAsync({
-                    createColumn: {
-                        schemaOid: schemaOid,
-                        columnOrdering: null
-                    }
-                });
-            });
-            columnHeaderRow.appendChild(addNewColumnButton);
         });
     }
 
@@ -118,7 +159,7 @@ if (urlParamSchemaOid) {
             reloadAllCells();
         }
     });
-    listen<CellOid>('cell', (e) => {
+    listen<ValueOid>('cell', (e) => {
         console.debug(`cellOid: ${JSON.stringify(e.payload)}`);
         updateCell(e.payload, false);
     });

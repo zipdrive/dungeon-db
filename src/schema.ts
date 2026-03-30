@@ -2,7 +2,7 @@ import { message } from "@tauri-apps/plugin-dialog";
 import { getReportMetadataAsync, getTableMetadataAsync, queryAsync, ToggledHierarchicalListItemMetadata } from "./util/query";
 import { Channel } from "@tauri-apps/api/core";
 import { FullMetadata as ColumnFullMetadata, createColumnHeaderHTML, runResizeSetupCallbacks } from "./util/column";
-import { Cell, CellOid, createCellAsync as createCell, runDropdownValueQueries, updateCell } from "./util/cell";
+import { Cell, CellOid, ValueOid, createCellAsync as createCell, runDropdownValueQueries, updateCell } from "./util/cell";
 import { listen } from "@tauri-apps/api/event";
 import { openDialogAsync } from "./util/dialog";
 

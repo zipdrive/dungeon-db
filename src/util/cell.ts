@@ -6,6 +6,7 @@ import { open, save, message, ask } from "@tauri-apps/plugin-dialog";
 import { DropdownValue, getCellAsync, getFileBase64Async, queryAsync, SelectedHierarchicalListItemMetadata } from "./query";
 import { fileTypeFromBuffer, FileTypeResult } from "file-type";
 import { Channel } from "@tauri-apps/api/core";
+import { Menu, MenuItem } from "@tauri-apps/api/menu";
 
 type ValidationFailures = {
     message: string
@@ -13,8 +14,14 @@ type ValidationFailures = {
 
 export type CellOid = {
     schemaOid: number,
-    rowOid: number,
-    columnOid: number
+    columnOid: number,
+    filters: [string, number][]
+};
+
+export type ValueOid = {
+    schemaOid: number,
+    columnOid: number,
+    rowOid: number
 };
 
 export type File = {
@@ -46,21 +53,21 @@ type SubreportCell = {
 };
 type PrimitiveEntryCell = {
     cellOid: CellOid,
-    valueOid: CellOid,
+    valueOid: ValueOid,
     label: string | null,
     primitiveType: Primitive,
     validationFailures: ValidationFailures 
 };
 type FileEntryCell = {
     cellOid: CellOid,
-    valueOid: CellOid,
+    valueOid: ValueOid,
     label: string | null,
     fileOid: number | null,
     validationFailures: ValidationFailures
 };
 type ObjectCell = {
     cellOid: CellOid,
-    valueOid: CellOid,
+    valueOid: ValueOid,
     label: string | null,
     objectSchemaOid: number,
     objectQueryString: string | null,
@@ -68,14 +75,14 @@ type ObjectCell = {
 };
 type SelectEntryCell = {
     cellOid: CellOid,
-    valueOid: CellOid,
+    valueOid: ValueOid,
     selectSchemaOid: number,
     selectRowOid: number | null,
     validationFailures: ValidationFailures
 };
 type MultiselectEntryCell = {
     cellOid: CellOid,
-    valueOid: CellOid,
+    valueOid: ValueOid,
     label: string | null,
     multiselectSchemaOid: number,
     multiselectRowOid: number[],
@@ -152,6 +159,50 @@ function addValidationFailureTooltips(elem: HTMLElement, validationFailures: Val
 
 function updateRowIndexCell(cell: RowCell, elem: HTMLTableCellElement) {
     elem.innerText = `${cell.index}`;
+
+    // Attach context menu
+    elem.addEventListener('contextmenu', async (e) => {
+        e.preventDefault();
+
+        let contextMenuItems: Promise<MenuItem>[] = [];
+        if (cell.rowIdentifier) {
+            let [tableOid, rowOid] = cell.rowIdentifier;
+
+            // Item to delete row
+            contextMenuItems.push(MenuItem.new({
+                text: 'Delete Row',
+                action: () => {
+                    executeAsync({
+                        trashRow: {
+                            tableOid: tableOid,
+                            rowOid: rowOid
+                        }
+                    })
+                    .catch(async (e) => {
+                        await message(e, {
+                            title: 'An error occurred while deleting the row.',
+                            kind: 'error'
+                        });
+                    });
+                }
+            }));
+        }
+
+        // Only display context menu if there are context menu items to display
+        if (contextMenuItems.length > 0) {
+            const contextMenu: Menu = await Menu.new({
+                items: await Promise.all(contextMenuItems)
+            });
+
+            await contextMenu.popup()
+            .catch(async (e) => {
+                await message(e, {
+                    title: 'An error occurred while displaying context menu.',
+                    kind: 'error'
+                });
+            });
+        }
+    });
 }
 
 function updateReadonlyCell(cell: ReadonlyCell, elem: HTMLTableCellElement) {
@@ -578,10 +629,12 @@ function updateMultiselectEntryCell(cell: MultiselectEntryCell, elem: HTMLTableC
 
 export function createCellAsync(cell: Cell, isSchema: boolean, filters: [string, number][]): HTMLTableCellElement | HTMLTableRowElement | null {
     function createCellElement(cellOid: CellOid, callbackFn: (e: HTMLTableCellElement) => void) {
-        const id: string = `schema${cellOid.schemaOid}-row${cellOid.rowOid}-column${cellOid.columnOid}`;
         const elem: HTMLTableCellElement = document.createElement('td');
-        elem.id = id;
+        elem.dataset.cellOid = JSON.stringify(cellOid);
         elem.classList.add(`column${cellOid.columnOid}`);
+        cellOid.filters.forEach(([datasourceAlias, datasourceRowOid]) => {
+            elem.classList.add(`${datasourceAlias}__${datasourceRowOid}`);
+        });
         elem.tabIndex = 0;
         callbackFn(elem);
         return elem;
@@ -685,38 +738,39 @@ export function createCellAsync(cell: Cell, isSchema: boolean, filters: [string,
 }
 
 export function updateCell(cellOid: CellOid, isSchema: boolean) {
-    const id: string = `schema${cellOid.schemaOid}-row${cellOid.rowOid}-column${cellOid.columnOid}`;
-    navigator.locks.request(id, async () => {
-        const prevElem: HTMLTableCellElement | null = document.getElementById(id) as HTMLTableCellElement;
-        if (prevElem) {
-            // Construct replacement element
-            const elem: HTMLTableCellElement = document.createElement('td');
-            elem.classList.add(`column${cellOid.columnOid}`);
-            elem.tabIndex = 0;
-            prevElem.replaceWith(elem);
-            elem.id = id;
+    const query: string = `.column${cellOid.columnOid}${cellOid.filters.map(([datasourceAlias, datasourceRowOid]) => `.${datasourceAlias}__${datasourceRowOid}`).join('')}`;
+    console.debug(`  Query string: "${query}"`);
+    document.querySelectorAll(query).forEach(async (prevElem) => {
+        console.debug(prevElem);
 
-            // Query for the cell
-            const cell: Cell = await getCellAsync(cellOid);
-            console.debug(`cell: ${JSON.stringify(cell)}`);
-            if ('readonly' in cell) {
-                updateReadonlyCell(cell.readonly, elem);
-            } else if ('subreport' in cell) {
-                updateSubreportCell(cell.subreport, elem);
-            } else if ('primitiveEntry' in cell) {
-                updatePrimitiveEntryCell(cell.primitiveEntry, elem, isSchema);
-            } else if ('fileEntry' in cell) {
-                updateFileEntryCell(cell.fileEntry, elem);
-            } else if ('object' in cell) {
-                updateObjectCell(cell.object, elem);
-            } else if ('selectEntry' in cell) {
-                updateSelectEntryCell(cell.selectEntry, elem);
-            } else if ('multiselectEntry' in cell) {
-                updateMultiselectEntryCell(cell.multiselectEntry, elem);
-            } // Ignore everything else
+        // Construct replacement element
+        const elem: HTMLTableCellElement = document.createElement('td');
+        prevElem.classList.forEach((prevElemClass) => {
+            elem.classList.add(prevElemClass);
+        });
+        elem.tabIndex = 0;
+        prevElem.replaceWith(elem);
 
-            // Query for dropdowns
-            runDropdownValueQueries();
-        }
+        // Query for the cell
+        const cell: Cell = await getCellAsync(cellOid);
+        console.debug(`cell: ${JSON.stringify(cell)}`);
+        if ('readonly' in cell) {
+            updateReadonlyCell(cell.readonly, elem);
+        } else if ('subreport' in cell) {
+            updateSubreportCell(cell.subreport, elem);
+        } else if ('primitiveEntry' in cell) {
+            updatePrimitiveEntryCell(cell.primitiveEntry, elem, isSchema);
+        } else if ('fileEntry' in cell) {
+            updateFileEntryCell(cell.fileEntry, elem);
+        } else if ('object' in cell) {
+            updateObjectCell(cell.object, elem);
+        } else if ('selectEntry' in cell) {
+            updateSelectEntryCell(cell.selectEntry, elem);
+        } else if ('multiselectEntry' in cell) {
+            updateMultiselectEntryCell(cell.multiselectEntry, elem);
+        } // Ignore everything else
+
+        // Query for dropdowns
+        runDropdownValueQueries();
     });
 }

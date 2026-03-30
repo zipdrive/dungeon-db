@@ -238,7 +238,6 @@ pub enum QueryBuilderColumn {
     },
     Formula {
         schema_oid: i64,
-        schema_row_ord: String,
         column_oid: i64,
 
         /// The ordinal pointing to a possible '{DATASOURCE}:{COLUMN}' String 
@@ -272,7 +271,6 @@ pub enum QueryBuilderColumn {
     },
     Subreport {
         schema_oid: i64,
-        schema_row_ord: String,
         column_oid: i64,
 
         /// The metadata of the subreport.
@@ -317,7 +315,7 @@ impl<'a> QueryBuilder<'a> {
             postgroup_filters: Vec::new(),
             order_by_indices: Vec::new()
         };
-        for initial_datasource in initial_datasources {
+        for initial_datasource in initial_datasources.iter() {
             query.insert_datasource(initial_datasource);
         }
         return query;
@@ -628,9 +626,9 @@ impl<'a> QueryBuilder<'a> {
 
     /// Inserts the datasource into the query.
     /// Returns the alias of the datasource.
-    fn insert_datasource(&mut self, datasource: Datasource) -> Result<String, Error> {
-        let alias: String = datasource.get_alias();
-        let schema_oid: i64 = datasource.get_schema_oid()?;
+    fn insert_datasource(&mut self, dt: &Datasource) -> Result<String, Error> {
+        let alias: String = dt.get_alias();
+        let schema_oid: i64 = dt.get_schema_oid()?;
 
         // Check to make sure not double-inserting datasource
         if self.has_table_or_subquery_alias(&alias) {
@@ -638,35 +636,39 @@ impl<'a> QueryBuilder<'a> {
             return Ok(alias);
         } else if let Some(parent_query) = &mut self.parent_query {
             // Test if the parent query is already pulling from a datasource that has a 1-to-1 relationship with this datasource
-            let deep_parent: Datasource = datasource.seek_basis()?;
+            let deep_parent: Datasource = dt.seek_basis()?;
             let deep_alias: String = deep_parent.get_alias();
             if parent_query.has_table_or_subquery_alias(&deep_alias) {
                 // If it does, then insert the datasource into the parent instead
-                return parent_query.insert_datasource(datasource);
+                return parent_query.insert_datasource(dt);
             }
         }
 
         // Branch based on datasource type
-        let table_or_subquery = match &datasource {
-            Datasource::Table { .. } => TableOrSubquery::RootDatasource { datasource, alias },
+        let table_or_subquery = match dt {
+            Datasource::Table { .. } => {
+                self.pregroup_filters.push(format!("NOT {alias}.TRASH"));
+
+                TableOrSubquery::RootDatasource { datasource: dt.clone(), alias }
+            },
             Datasource::MasterTable { parent_datasource, .. } => {
-                let parent_alias: String = self.insert_datasource(*parent_datasource.clone())?;
+                let parent_alias: String = self.insert_datasource(&parent_datasource)?;
                 TableOrSubquery::DerivativeDatasource { 
                     on_clause: format!(
                         "{alias}.OID = {parent_alias}.MASTER{schema_oid}_OID"
                     ),
-                    datasource, 
+                    datasource: dt.clone(), 
                     alias
                 }
             },
             Datasource::InheritorTable { parent_datasource, .. } => {
                 let parent_schema_oid: i64 = parent_datasource.get_schema_oid()?;
-                let parent_alias: String = self.insert_datasource(*parent_datasource.clone())?;
+                let parent_alias: String = self.insert_datasource(&parent_datasource)?;
                 TableOrSubquery::DerivativeDatasource { 
                     on_clause: format!(
-                        "{alias}.MASTER{parent_schema_oid}_OID = {parent_alias}.OID"
+                        "{alias}.MASTER{parent_schema_oid}_OID = {parent_alias}.OID AND NOT {alias}.TRASH"
                     ),
-                    datasource, 
+                    datasource: dt.clone(), 
                     alias
                 }
             },
@@ -675,32 +677,32 @@ impl<'a> QueryBuilder<'a> {
                     column_type::ColumnType::Object { .. } 
                     | column_type::ColumnType::Select { .. } => {
                         let parent_schema_oid: i64 = parent_datasource.get_schema_oid()?;
-                        let parent_alias: String = self.insert_datasource(*parent_datasource.clone())?;
+                        let parent_alias: String = self.insert_datasource(&parent_datasource)?;
                         TableOrSubquery::DerivativeDatasource { 
                             on_clause: if parent_schema_oid == column.schema.oid {
                                 format!(
-                                    "{alias}.OID = {parent_alias}.COLUMN{}",
+                                    "{alias}.OID = {parent_alias}.COLUMN{} AND NOT {alias}.TRASH",
                                     column.oid
                                 )
                             } else {
                                 format!(
-                                    "{alias}.COLUMN{} = {parent_alias}.OID",
+                                    "{alias}.COLUMN{} = {parent_alias}.OID AND NOT {alias}.TRASH",
                                     column.oid
                                 )
                             },
-                            datasource, 
+                            datasource: dt.clone(), 
                             alias
                         }
                     }
                     column_type::ColumnType::Multiselect { .. } => {
                         let parent_schema_oid: i64 = parent_datasource.get_schema_oid()?;
-                        let parent_alias: String = self.insert_datasource(*parent_datasource.clone())?;
+                        let parent_alias: String = self.insert_datasource(&parent_datasource)?;
                         TableOrSubquery::DerivativeDatasource { 
                             on_clause: format!(
-                                "{alias}.OID IN (SELECT TABLE{schema_oid}_OID FROM MULTISELECT{} WHERE TABLE{parent_schema_oid}_OID = {parent_alias}.OID)",
+                                "{alias}.OID IN (SELECT TABLE{schema_oid}_OID FROM MULTISELECT{} WHERE TABLE{parent_schema_oid}_OID = {parent_alias}.OID) AND NOT {alias}.TRASH",
                                 column.oid
                             ),
-                            datasource, 
+                            datasource: dt.clone(), 
                             alias
                         }
                     }
@@ -721,18 +723,21 @@ impl<'a> QueryBuilder<'a> {
     }
 
     /// Inserts a column definition.
-    pub fn insert_column(&mut self, column_datasource: Datasource, column_metadata: column::FullMetadata) -> Result<(), Error> {
+    pub fn insert_column(&mut self, column_datasource: Option<&Datasource>, column_metadata: column::FullMetadata) -> Result<(), Error> {
         let column: QueryBuilderColumn = self.compile_column(column_datasource, column_metadata)?;
         self.columns.push(column);
         Ok(())
     }
 
     /// Compiles the SQL expressions for a column.
-    pub fn compile_column(&mut self, column_datasource: Datasource, column_metadata: column::FullMetadata) -> Result<QueryBuilderColumn, Error> {
-        println!("COLUMN{} type = {:?}", column_metadata.oid, column_metadata.column_type);
+    pub fn compile_column(&mut self, column_datasource: Option<&Datasource>, column_metadata: column::FullMetadata) -> Result<QueryBuilderColumn, Error> {
         Ok(match column_metadata.column_type {
             column_type::ColumnType::Primitive(prim) => {
-                let datasource_alias: String = self.insert_datasource(column_datasource)?;
+                let datasource_alias: String = self.insert_datasource(if let Some(d) = column_datasource {
+                    d
+                } else {
+                    return Err(Error::AdhocError("A primitive column type requires a datasource."));
+                })?;
                 let primitive_value_alias: String = format!(
                     "{}.COLUMN{}", 
                     datasource_alias,
@@ -792,7 +797,11 @@ impl<'a> QueryBuilder<'a> {
                 }
             }
             column_type::ColumnType::Object { table_oid, .. } => {
-                let datasource_alias: String = self.insert_datasource(column_datasource)?;
+                let datasource_alias: String = self.insert_datasource(if let Some(d) = column_datasource {
+                    d
+                } else {
+                    return Err(Error::AdhocError("An object column type requires a datasource."));
+                })?;
                 let primitive_value_alias: String = format!(
                     "{}.COLUMN{}", 
                     datasource_alias,
@@ -803,7 +812,7 @@ impl<'a> QueryBuilder<'a> {
                 QueryBuilderColumn::Object { 
                     label_expr: format!("(SELECT LABEL FROM TABLE{table_oid}_SURROGATE WHERE OID = {primitive_value_alias})"),
                     json_expr: format!("(SELECT JSON_LABEL FROM TABLE{table_oid}_SURROGATE WHERE OID = {primitive_value_alias})"),
-                    object_query_string_expr: format!("'{datasource_alias}=' || FORMAT('%d', {primitive_value_alias})"),
+                    object_query_string_expr: format!("CASE WHEN {primitive_value_alias} IS NULL THEN NULL ELSE 'ROOT' || FORMAT('%d', (SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = {table_oid} LIMIT 1)) || '=' || FORMAT('%d', {primitive_value_alias}) END"),
                     label_ord, 
                     object_schema_oid: table_oid,
                     object_query_string_ord,
@@ -813,7 +822,11 @@ impl<'a> QueryBuilder<'a> {
                 }
             }
             column_type::ColumnType::Select { table_oid, .. } => {
-                let datasource_alias: String = self.insert_datasource(column_datasource)?;
+                let datasource_alias: String = self.insert_datasource(if let Some(d) = column_datasource {
+                    d
+                } else {
+                    return Err(Error::AdhocError("A select column type requires a datasource."));
+                })?;
                 let primitive_value_alias: String = format!(
                     "{}.COLUMN{}", 
                     datasource_alias,
@@ -836,6 +849,11 @@ impl<'a> QueryBuilder<'a> {
             column_type::ColumnType::Multiselect { table_oid, .. } => {
                 // Check if the normal direction of the Multiselect column needs to be inverted
                 // This will be true if the datasource is the schema that the Multiselect column normally points to
+                let column_datasource: &Datasource = if let Some(d) = column_datasource {
+                    d
+                } else {
+                    return Err(Error::AdhocError("A multiselect column type requires a datasource."));
+                };
                 let inverted: bool = column_datasource.get_schema_oid()? != column_metadata.schema.oid;
 
                 // Construct the SQL expression
@@ -897,8 +915,6 @@ impl<'a> QueryBuilder<'a> {
                 }
             }
             column_type::ColumnType::Formula { formula, .. } => {
-                let datasource_alias: String = self.insert_datasource(column_datasource)?;
-
                 // Construct the ordinals for this column
                 let value_ord: String = format!("VALUE{}", self.columns.len());
                 let label_ord: String = format!("LABEL{}", self.columns.len());
@@ -911,7 +927,6 @@ impl<'a> QueryBuilder<'a> {
                 // Construct column
                 QueryBuilderColumn::Formula { 
                     schema_oid: column_metadata.schema.oid, 
-                    schema_row_ord: format!("{datasource_alias}_OID"),
                     column_oid: column_metadata.oid, 
                     param_ord, 
                     param_expr: scalar_sql.param_expr, 
@@ -925,11 +940,9 @@ impl<'a> QueryBuilder<'a> {
                 }
             }
             column_type::ColumnType::Subreport { report_oid, .. } => {
-                let datasource_alias: String = self.insert_datasource(column_datasource)?;
                 let subreport_metadata: report::FullMetadata = report::FullMetadata::get(report_oid)?;
                 QueryBuilderColumn::Subreport { 
                     schema_oid: column_metadata.schema.oid, 
-                    schema_row_ord: format!("{datasource_alias}_OID"),
                     column_oid: column_metadata.oid, 
                     subreport_metadata
                 }
@@ -1069,7 +1082,7 @@ impl<'a> QueryBuilder<'a> {
                 let column_datasource: Datasource = Datasource::from_path(datasource_path.clone())?;
                 let column_metadata = column::FullMetadata::get(column_oid.clone())?;
                 let param_expr: String = format!("'{}:{column_oid}'", column_datasource.get_alias());
-                match self.compile_column(column_datasource, column_metadata)? {
+                match self.compile_column(Some(&column_datasource), column_metadata)? {
                     QueryBuilderColumn::Primitive { primitive_type, label_expr, value_expr, .. } => ScalarExpression { 
                         arg_expr: value_expr.clone(), 
                         arg_return_type: match primitive_type {

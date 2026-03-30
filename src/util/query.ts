@@ -2,7 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { FullMetadata as TableFullMetadata } from "./table";
 import { FullMetadata as ReportFullMetadata } from "./report";
 import { FullMetadata as ColumnFullMetadata } from "./column";
-import { Cell, CellOid, File } from "./cell";
+import { Cell, ValueOid, File, CellOid } from "./cell";
 import { message } from "@tauri-apps/plugin-dialog";
 import { Datasource } from "./datasource";
 

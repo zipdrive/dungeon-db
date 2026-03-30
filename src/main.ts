@@ -57,6 +57,14 @@ function getSelectedTableOid(): number | null {
 }
 
 function loadReports() {
+    // Disable the open/edit/delete buttons
+    const openButton: HTMLButtonElement = document.getElementById('open-report-button') as HTMLButtonElement;
+    openButton.disabled = true;
+    const editButton: HTMLButtonElement = document.getElementById('edit-report-button') as HTMLButtonElement;
+    editButton.disabled = true;
+    const deleteButton: HTMLButtonElement = document.getElementById('delete-report-button') as HTMLButtonElement;
+    deleteButton.disabled = true;
+
     // Clear the list of reports
     let reportsList: HTMLDivElement = document.querySelector('#reports-container .list') as HTMLDivElement;
     reportsList.innerHTML = '<div class="empty-list-item">Click "New" to Define a New Report</div>';
@@ -73,10 +81,27 @@ function loadReports() {
                 reportElem.insertAdjacentHTML('afterbegin', `<input type="radio" name="reports" id="${reportId}" value="${report.oid}:${report.masterOid}">`);
                 reportElem.htmlFor = reportId;
 
+                reportElem.addEventListener('input', () => {
+                    openButton.disabled = false;
+                    editButton.disabled = false;
+                    deleteButton.disabled = false;
+                });
+
                 reportsList.appendChild(reportElem);
             })
         }
     });
+}
+
+function getSelectedReportOid(): number | null {
+    const selectedReportOption: HTMLOptionElement | null = document.querySelector('[name=reports]:checked') as HTMLOptionElement;
+    if (selectedReportOption) {
+        const selectedReportOid: number = parseInt(selectedReportOption.value.split(':')[0]);
+        if (!isNaN(selectedReportOid)) {
+            return selectedReportOid;
+        }
+    }
+    return null;
 }
 
 
@@ -131,6 +156,45 @@ window.addEventListener("DOMContentLoaded", () => {
         await openDialogAsync({
             createReport: null
         });
+    });
+    document.getElementById('open-report-button')?.addEventListener('click', async (_) => {
+        const selectedReportOption: HTMLOptionElement | null = document.querySelector('[name=reports]:checked') as HTMLOptionElement;
+        if (selectedReportOption) {
+            const selectedReportOid: number = parseInt(selectedReportOption.value.split(':')[0]);
+            const selectedReportName: string = selectedReportOption.innerText.trim();
+            if (!isNaN(selectedReportOid)) {
+                await openDialogAsync({
+                    schema: {
+                        title: selectedReportName,
+                        queryString: `schema_oid=${selectedReportOid}`
+                    }
+                });
+            }
+        }
+    });
+    document.getElementById('edit-report-button')?.addEventListener('click', async (_) => {
+        const selectedReportOid: number | null = getSelectedReportOid();
+        if (selectedReportOid) {
+            await openDialogAsync({
+                editReport: {
+                    reportOid: selectedReportOid
+                }
+            });
+        }
+    });
+    document.getElementById('delete-report-button')?.addEventListener('click', async (_) => {
+        const selectedSchemaOid: number | null = getSelectedReportOid();
+        if (selectedSchemaOid) {
+            await executeAsync({
+                trashSchema: selectedSchemaOid
+            })
+            .catch(async (e) => {
+                await message(e, {
+                    title: 'An error occurred while deleting report.',
+                    kind: 'error'
+                });
+            });
+        }
     });
 
     // Load in the tables and reports

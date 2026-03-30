@@ -23,6 +23,10 @@ export type Dialog = {
         columnOid: number
     }
 } | {
+    addParameter: {
+        id: number
+    }
+} | {
     schema: {
         title: string,
         queryString: string 

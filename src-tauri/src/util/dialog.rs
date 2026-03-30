@@ -24,6 +24,9 @@ pub enum Dialog {
     EditColumn {
         column_oid: i64
     },
+    AddParameter {
+        id: i64 
+    },
 
     Schema {
         title: String,
@@ -50,7 +53,7 @@ impl Dialog {
                     WebviewUrl::App("/src/dialog/schema.html?mode=table".into()),
                 )
                 .title("Create New Table")
-                .inner_size(400.0, 250.0)
+                .inner_size(400.0, 400.0)
                 .maximizable(false)
                 .build()?;
             },
@@ -59,7 +62,7 @@ impl Dialog {
                     WebviewUrl::App(format!("/src/dialog/schema.html?schema_oid={table_oid}&mode=table").into()),
                 )
                 .title("Edit Table")
-                .inner_size(400.0, 250.0)
+                .inner_size(400.0, 400.0)
                 .maximizable(false)
                 .build()?;
             },
@@ -68,7 +71,7 @@ impl Dialog {
                     WebviewUrl::App("/src/dialog/schema.html?mode=report".into()),
                 )
                 .title("Create New Report")
-                .inner_size(400.0, 250.0)
+                .inner_size(400.0, 400.0)
                 .maximizable(false)
                 .build()?;
             },
@@ -77,7 +80,7 @@ impl Dialog {
                     WebviewUrl::App(format!("/src/dialog/schema.html?schema_oid={report_oid}&mode=report").into()),
                 )
                 .title("Edit Report")
-                .inner_size(400.0, 250.0)
+                .inner_size(400.0, 400.0)
                 .maximizable(false)
                 .build()?;
             },
@@ -95,7 +98,7 @@ impl Dialog {
                     ),
                 )
                 .title("Add New Column")
-                .inner_size(400.0, 500.0)
+                .inner_size(600.0, 600.0)
                 .maximizable(false)
                 .build()?;
             },
@@ -104,7 +107,16 @@ impl Dialog {
                     WebviewUrl::App(format!("/src/dialog/column.html?column_oid={column_oid}").into()),
                 )
                 .title("Edit Column")
-                .inner_size(400.0, 500.0)
+                .inner_size(600.0, 600.0)
+                .maximizable(false)
+                .build()?;
+            },
+            Self::AddParameter { id } => {
+                WebviewWindowBuilder::new(app, label,
+                    WebviewUrl::App(format!("/src/dialog/parameter.html?id={id}").into()),
+                )
+                .title("Add Parameter")
+                .inner_size(400.0, 400.0)
                 .maximizable(false)
                 .build()?;
             },
@@ -119,7 +131,7 @@ impl Dialog {
             Self::Object { title, query_string } => {
                 WebviewWindowBuilder::new(app, label,
                     WebviewUrl::App(
-                        format!("/src/frontend/table_object.html?{query_string}")
+                        format!("/src/object.html?{query_string}")
                             .into(),
                     ),
                 )

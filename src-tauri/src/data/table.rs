@@ -62,6 +62,9 @@ impl FullMetadata {
         );
         trans.execute(&create_table_cmd, [])?;
 
+        // To update the inheritance, now that there is a constructed table for it
+        self.schema.set(&trans)?;
+
         // Create the table metadata
         trans.execute("INSERT INTO METADATA_TABLE (OID) VALUES (?1)", params![self.schema.oid])?;
         // Create a datasource for the table

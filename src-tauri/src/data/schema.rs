@@ -266,7 +266,7 @@ impl ToggledHierarchicalListItemMetadata {
                         s.NAME,
                         NULL AS MASTER_OID,
                         0 AS LEVEL,
-                        (OID IS ?1) AS DISABLED
+                        (s.OID IS ?1) AS DISABLED
                     FROM METADATA_SCHEMA s 
                     WHERE (NOT s.TRASH)
                         AND s.OID NOT IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE)
@@ -296,7 +296,7 @@ impl ToggledHierarchicalListItemMetadata {
                     s.NAME,
                     NULL AS MASTER_OID,
                     0 AS LEVEL,
-                    (OID IS ?1) AS DISABLED
+                    (s.OID IS ?1) AS DISABLED
                 FROM METADATA_REPORT r
                 INNER JOIN METADATA_SCHEMA s ON s.OID = r.OID AND NOT s.TRASH
                 WHERE r.OID NOT IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE)

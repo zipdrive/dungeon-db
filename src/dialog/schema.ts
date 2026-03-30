@@ -146,7 +146,7 @@ function populateSchemaMetadata() {
                 filterFormulaElem.value = report.filterFormula ?? '';
 
                 // Populate in the GROUP BY columns
-                report.groupByColumnOid.forEach((columnOid) => {
+                report.groupByColumnOids.forEach((columnOid) => {
                     const selectElem: HTMLSelectElement = createNewGroupingColumn();
                     callbackFns.push((dropdownValue) => {
                         const optionElem: HTMLOptionElement = document.createElement('option');
@@ -249,8 +249,8 @@ function compileReport(): ReportFullMetadata {
 
     return {
         schema: compileSchema(),
-        filterFormula: filterFormulaElem.value ? filterFormulaElem.value : '',
-        groupByColumnOid: groupByColumnOid
+        filterFormula: filterFormulaElem.value ? filterFormulaElem.value : null,
+        groupByColumnOids: groupByColumnOid
     };
 }
 
