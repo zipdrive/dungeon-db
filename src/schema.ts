@@ -135,7 +135,8 @@ if (urlParamSchemaOid) {
                 },
                 onUpdate(e: SortableEvent) {
                     const reorderedColumn: ColumnFullMetadata = JSON.parse(e.item.dataset.columnMetadata);
-                    const columnToImmediateRightOfReorderedColumn: ColumnFullMetadata | null = e.newIndex ? JSON.parse(e.to.querySelector(`.reorderable-column:nth-child(${(e.newIndex + 2)})`).dataset.columnMetadata) : null;
+                    const immediateRightColumnHeader = e.newIndex || e.newIndex == 0 ? e.to.querySelector(`.reorderable-column:nth-child(${(e.newIndex + 2)})`) : null;
+                    const columnToImmediateRightOfReorderedColumn: ColumnFullMetadata | null = immediateRightColumnHeader ? JSON.parse(immediateRightColumnHeader.dataset.columnMetadata) : null;
                     executeAsync({
                         editColumnOrdering: {
                             metadata: reorderedColumn,
@@ -145,6 +146,36 @@ if (urlParamSchemaOid) {
                     .catch(async (e) => {
                         await message(e, {
                             title: 'An error occurred while updating column ordering.',
+                            kind: 'error'
+                        });
+                    });
+                }
+            });
+
+            // Set rows to be reorderable
+            new Sortable(pageContentBody, {
+                draggable: '.reorderable-row',
+                handle: '.reorderable-row-dragger',
+                onChange(e: SortableEvent) {
+                    // TODO ? anything?
+                },
+                onUpdate(e: SortableEvent) {
+                    const [reorderedTableOid, reorderedRowOid]: [number, number] = JSON.parse(e.item.dataset.rowIdentifier);
+                    console.debug(`New index: ${e.newIndex}`);
+                    const immediateBelowRow = e.newIndex || e.newIndex == 0 ? e.to.querySelector(`.reorderable-row:nth-child(${(e.newIndex + 2)})`) : null;
+                    console.debug(immediateBelowRow);
+                    const rowImmediatelyBelowReorderedRow: [number, number] | null = immediateBelowRow ? JSON.parse(immediateBelowRow.dataset.rowIdentifier) : null;
+                    console.debug(rowImmediatelyBelowReorderedRow ? rowImmediatelyBelowReorderedRow[1] : null);
+                    executeAsync({
+                        editRowOid: {
+                            tableOid: reorderedTableOid,
+                            rowOid: reorderedRowOid,
+                            newRowOid: rowImmediatelyBelowReorderedRow ? rowImmediatelyBelowReorderedRow[1] : null
+                        }
+                    })
+                    .catch(async (e) => {
+                        await message(e, {
+                            title: 'An error occurred while updating row\'s natural order.',
                             kind: 'error'
                         });
                     });

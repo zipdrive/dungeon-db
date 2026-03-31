@@ -37,6 +37,12 @@ export type Action = {
         fixedParentDatasource: [number, number, ColumnFullMetadata] | null
     }
 } | {
+    editRowOid: {
+        tableOid: number,
+        rowOid: number,
+        newRowOid: number | null
+    }
+} | {
     trashRow: {
         tableOid: number,
         rowOid: number

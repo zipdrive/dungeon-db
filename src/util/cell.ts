@@ -709,6 +709,11 @@ export function createCellAsync(cell: Cell, isSchema: boolean): HTMLTableCellEle
             // Create a new row, if the page is showing a schema
             const row: HTMLTableRowElement = document.createElement('tr');
             const elem: HTMLTableCellElement = document.createElement('td');
+            if (cell.row.rowIdentifier) {
+                row.dataset.rowIdentifier = JSON.stringify(cell.row.rowIdentifier);
+                row.classList.add('reorderable-row');
+                elem.classList.add('reorderable-row-dragger');
+            }
             updateRowIndexCell(cell.row, elem);
             row.appendChild(elem);
             return row;

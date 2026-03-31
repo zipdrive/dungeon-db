@@ -354,3 +354,43 @@ pub fn change_object_type(table_oid: i64, row_oid: i64, inheritor_table_oid: i64
     trans.commit()?;
     Ok(deepest_untrashed_table_oid.unwrap_or(table_oid))
 }
+
+/// Reorders a row in a table.
+pub fn reorder(table_oid: i64, row_oid: i64, new_row_oid: Option<i64>) -> Result<i64, Error> {
+    // Start a transaction
+    let mut conn = db::open()?;
+    let trans: Transaction = conn.transaction()?;
+
+    let new_row_oid: i64 = match new_row_oid {
+        Some(new_row_oid) => {
+            // Make room for the row OID
+            let sql_update1: String = format!("UPDATE TABLE{table_oid} SET OID = -OID WHERE OID >= ?1 AND OID != ?2");
+            trans.execute(&sql_update1, params![new_row_oid, row_oid])?;
+            
+            // Change the row OID
+            let sql_update2: String = format!("UPDATE TABLE{table_oid} SET OID = ?1 WHERE OID = ?2");
+            trans.execute(&sql_update2, params![new_row_oid, row_oid])?;
+
+            // Move back the other row OIDs
+            let sql_update3: String = format!("UPDATE TABLE{table_oid} SET OID = 1 - OID WHERE OID < 0");
+            trans.execute(&sql_update3, [])?;
+
+            new_row_oid
+        }
+        None => {
+            // Query for the next OID
+            let sql_select: String = format!("SELECT MAX(OID) + 1 FROM TABLE{table_oid}");
+            let new_row_oid: i64 = trans.query_one(&sql_select, [], |row| row.get::<_, Option<i64>>(0)).optional()?.unwrap_or(Some(1)).unwrap_or(1);
+            
+            // Change the row OID
+            let sql_update2: String = format!("UPDATE TABLE{table_oid} SET OID = ?1 WHERE OID = ?2");
+            trans.execute(&sql_update2, params![new_row_oid, row_oid])?;
+
+            new_row_oid
+        }
+    };
+
+    // Commit the transaction
+    trans.commit()?;
+    Ok(new_row_oid)
+}

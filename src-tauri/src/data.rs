@@ -193,6 +193,11 @@ pub enum Action {
         row_oid: Option<i64>,
         fixed_parent_datasource: Option<(i64, i64, column::FullMetadata)>
     },
+    EditRowOid {
+        table_oid: i64,
+        row_oid: i64,
+        new_row_oid: Option<i64>
+    },
     TrashRow {
         table_oid: i64,
         row_oid: i64 
@@ -375,6 +380,17 @@ impl Action {
                 record_action(Self::TrashRow {
                     table_oid,
                     row_oid
+                }, is_forward);
+
+                // Send signal to update table
+                app.emit(UPDATE_TABLE_SIGNAL, table_oid)?;
+            }
+            Self::EditRowOid { table_oid, row_oid, new_row_oid } => {
+                let new_row_oid: i64 = row::reorder(table_oid, row_oid, new_row_oid)?;
+                record_action(Self::EditRowOid { 
+                    table_oid, 
+                    row_oid: new_row_oid, 
+                    new_row_oid: Some(row_oid) 
                 }, is_forward);
 
                 // Send signal to update table
