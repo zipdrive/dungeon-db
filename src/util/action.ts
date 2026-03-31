@@ -24,6 +24,11 @@ export type Action = {
         newColumnStyle: string
     }
 } | {
+    editColumnOrdering: {
+        metadata: ColumnFullMetadata,
+        newColumnOrdering: number | null
+    }
+} | {
     trashColumn: number
 } | {
     createRow: {

@@ -7,6 +7,7 @@ import { listen } from "@tauri-apps/api/event";
 import { openDialogAsync } from "./util/dialog";
 
 import Sortable, { SortableEvent, AutoScroll } from 'sortablejs/modular/sortable.core.esm.js';
+import { executeAsync } from "./util/action";
 Sortable.mount(new AutoScroll());
 
 const urlParams = new URLSearchParams(window.location.search);
@@ -125,6 +126,30 @@ if (urlParamSchemaOid) {
                 });
             });
             columnHeaderRow.appendChild(addNewColumnButton);
+
+            // Set columns to be reorderable
+            new Sortable(columnHeaderRow, {
+                draggable: '.reorderable-column',
+                onChange(e: SortableEvent) {
+                    // TODO ? anything?
+                },
+                onUpdate(e: SortableEvent) {
+                    const reorderedColumn: ColumnFullMetadata = JSON.parse(e.item.dataset.columnMetadata);
+                    const columnToImmediateRightOfReorderedColumn: ColumnFullMetadata | null = e.newIndex ? JSON.parse(e.to.querySelector(`.reorderable-column:nth-child(${(e.newIndex + 2)})`).dataset.columnMetadata) : null;
+                    executeAsync({
+                        editColumnOrdering: {
+                            metadata: reorderedColumn,
+                            newColumnOrdering: columnToImmediateRightOfReorderedColumn ? columnToImmediateRightOfReorderedColumn.ordering : null
+                        }
+                    })
+                    .catch(async (e) => {
+                        await message(e, {
+                            title: 'An error occurred while updating column ordering.',
+                            kind: 'error'
+                        });
+                    });
+                }
+            });
 
             // Enable or disable page navigation buttons
             const firstPageButton: HTMLButtonElement = document.getElementById('first-page-button') as HTMLButtonElement;

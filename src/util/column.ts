@@ -80,6 +80,7 @@ export function createColumnHeaderHTML(schemaOid: number, column: FullMetadata):
 
     const elem: HTMLTableCellElement = document.createElement('th');
     elem.classList.add(columnClassName);
+    elem.dataset.columnMetadata = JSON.stringify(column);
     elem.innerText = `${(column.isPrimaryKey ? '🔑 ' : '')}${column.name}`;
 
     // Apply the style to the column

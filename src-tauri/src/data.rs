@@ -177,6 +177,10 @@ pub enum Action {
         metadata: column::FullMetadata,
         new_column_style: String
     },
+    EditColumnOrdering {
+        metadata: column::FullMetadata,
+        new_column_ordering: Option<i64>
+    },
     TrashColumn(i64),
     UntrashColumn(i64),
     RestoreColumn {
@@ -318,6 +322,18 @@ impl Action {
                 record_action(Self::EditColumnStyle { 
                     metadata: metadata.clone(), 
                     new_column_style: old_column_style
+                }, is_forward);
+
+                // Send signal to update schema
+                app.emit(UPDATE_SCHEMA_SIGNAL, metadata.schema.oid)?;
+            }
+            Self::EditColumnOrdering { mut metadata, new_column_ordering } => {
+                // Update the column style
+                let old_column_ordering: i64 = metadata.ordering.clone();
+                metadata.set_ordering(new_column_ordering)?;
+                record_action(Self::EditColumnOrdering { 
+                    metadata: metadata.clone(), 
+                    new_column_ordering: Some(old_column_ordering)
                 }, is_forward);
 
                 // Send signal to update schema

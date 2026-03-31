@@ -1011,4 +1011,25 @@ impl FullMetadata {
         trans.commit()?;
         Ok(())
     }
+
+    /// Sets only the ordering of the column.
+    pub fn set_ordering(&mut self, new_ordering: Option<i64>) -> Result<(), Error> {
+        let mut conn = db::open()?;
+        let trans = conn.transaction()?;
+
+        // Update the ordering in the database
+        if let Some(new_ordering) = new_ordering {
+            self.ordering = new_ordering;
+            trans.execute("UPDATE METADATA_COLUMN SET ORDERING = -ORDERING WHERE ORDERING >= ?1", params![self.ordering])?;
+            trans.execute("UPDATE METADATA_COLUMN SET ORDERING = ?1 WHERE OID = ?2", params![self.ordering, self.oid])?;
+            trans.execute("UPDATE METADATA_COLUMN SET ORDERING = 1 - ORDERING WHERE ORDERING < 0", [])?;
+        } else {
+            self.ordering = trans.query_one("SELECT MAX(ORDERING) + 1 FROM METADATA_COLUMN", [], |row| row.get::<_, Option<i64>>(0)).optional()?.unwrap_or(Some(1)).unwrap_or(1);
+            trans.execute("UPDATE METADATA_COLUMN SET ORDERING = ?1 WHERE OID = ?2", params![self.ordering, self.oid])?;
+        }
+
+        // Commit the transaction
+        trans.commit()?;
+        Ok(())
+    }
 }
