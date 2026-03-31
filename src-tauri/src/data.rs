@@ -131,6 +131,12 @@ pub fn get_report_metadata(report_oid: i64) -> Result<report::FullMetadata, Erro
 }
 
 #[tauri::command]
+/// Gets the metadata for a schema.
+pub fn get_schema_metadata(schema_oid: i64) -> Result<schema::Schema, Error> {
+    schema::Schema::get(schema_oid)
+}
+
+#[tauri::command]
 /// Get the metadata for a particular column in a table.
 pub fn get_column(column_oid: i64) -> Result<column::FullMetadata, Error> {
     column::FullMetadata::get(column_oid)

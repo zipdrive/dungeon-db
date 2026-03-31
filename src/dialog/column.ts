@@ -1,12 +1,12 @@
 import { message } from "@tauri-apps/plugin-dialog";
 import { Channel } from "@tauri-apps/api/core";
-import { DropdownValue, getColumnAsync, HierarchicalListItemMetadata, queryAsync } from "../util/query";
+import { DropdownValue, getColumnAsync, getSchemaMetadataAsync, HierarchicalListItemMetadata, queryAsync } from "../util/query";
 import { FullMetadata as ColumnFullMetadata, ColumnType, Primitive } from "../util/column";
 import { closeDialogAsync } from "../util/dialog";
 import { executeAsync } from "../util/action";
+import { Schema } from "../util/schema";
 
 const urlParams = new URLSearchParams(window.location.search);
-const mode: 'table' | 'report' = urlParams.get('mode') as ('table' | 'report') ?? 'table';
 const urlParamSchemaOid: string | null = urlParams.get('schema_oid');
 let schemaOid: number | null = urlParamSchemaOid ? parseInt(urlParamSchemaOid) : null;
 const urlParamColumnOrdering: string | null = urlParams.get('column_ordering');
@@ -229,13 +229,32 @@ function compileColumn(): ColumnFullMetadata {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
+    function hideTableOnlyFields() {
+        document.querySelectorAll('.exclusive-table').forEach((elem) => elem.remove());
+    }
+
     // Populate in preexisting metadata, if any
     if (columnOid) {
         getColumnAsync(columnOid).then((column) => {
             populatePreexistingColumnMetadata(column);
+
+            getSchemaMetadataAsync(column.schema.oid)
+            .then((schema) => {
+                if ('report' in schema) {
+                    hideTableOnlyFields();
+                }
+            });
         });
     } else {
         populateNewColumnMetadata();
+
+        if (schemaOid) {
+            getSchemaMetadataAsync(schemaOid).then((schema) => {
+                if ('report' in schema) {
+                    hideTableOnlyFields();
+                }
+            });
+        }
     }
 
     // 

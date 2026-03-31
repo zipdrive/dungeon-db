@@ -104,7 +104,9 @@ impl Dialog {
             },
             Self::EditColumn { column_oid } => {
                 WebviewWindowBuilder::new(app, label,
-                    WebviewUrl::App(format!("/src/dialog/column.html?column_oid={column_oid}").into()),
+                    WebviewUrl::App(format!(
+                        "/src/dialog/column.html?column_oid={column_oid}"
+                    ).into()),
                 )
                 .title("Edit Column")
                 .inner_size(600.0, 600.0)

@@ -5,6 +5,7 @@ import { FullMetadata as ColumnFullMetadata } from "./column";
 import { Cell, ValueOid, File, CellOid } from "./cell";
 import { message } from "@tauri-apps/plugin-dialog";
 import { Datasource } from "./datasource";
+import { Schema } from "./schema";
 
 export type FlatListItemMetadata = {
     oid: number,
@@ -100,6 +101,10 @@ export async function getTableMetadataAsync(oid: number): Promise<TableFullMetad
 
 export async function getReportMetadataAsync(oid: number): Promise<ReportFullMetadata> {
     return await invoke('get_report_metadata', { reportOid: oid });
+}
+
+export async function getSchemaMetadataAsync(oid: number): Promise<Schema> {
+    return await invoke('get_schema_metadata', { schemaOid: oid });
 }
 
 export async function getColumnAsync(oid: number): Promise<ColumnFullMetadata> {

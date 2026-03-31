@@ -299,17 +299,20 @@ impl Cell {
         let conn: Connection = db::open()?;
 
         // Filter rows in the query based on the METADATA_REPORT.FILTER_FORMULA formula
+        println!("Now applying filter formula...");
         if let Some(Some(filter_formula)) = conn.query_one("SELECT FILTER_FORMULA FROM METADATA_REPORT WHERE OID = ?1", params![schema_oid], |row| row.get::<_, Option<String>>("FILTER_FORMULA")).optional()? {
             // Insert WHERE clause
             query.insert_filter(filter_formula)?;
         }
 
         // Additionally filter rows in the query based on the provided filters
+        println!("Now applying row filters {:?}", filters);
         for (filter_datasource_alias, filter_datasource_row_oid) in filters {
             query.insert_row_filter(filter_datasource_alias, filter_datasource_row_oid);
         }
 
         // Group rows in the query based on the METADATA_REPORT_GROUPBY table
+        println!("Now applying GROUP BY...");
         let mut stmt_groupby = conn.prepare(
             "
             SELECT 
@@ -325,6 +328,7 @@ impl Cell {
         }
 
         // Order the query based on the METADATA_SCHEMA_ORDERBY table
+        println!("Now applying ORDER BY...");
         let mut stmt_orderby = conn.prepare(
             "
             SELECT 
@@ -346,6 +350,7 @@ impl Cell {
     fn run_query(mut cell_sender: Sender<Self>, query: query::QueryBuilder, filters: Vec<(String, i64)>, limit: RetrievalLimit) -> Result<(), Error> {
         // Compile and run the query
         let conn: Connection = db::open()?;
+        println!("Now compiling query...");
         if let Some((cmd_query, cols, datasource_aliases)) = query.compile()? {
             println!("Query compiled successfully.\n{cmd_query}");
 

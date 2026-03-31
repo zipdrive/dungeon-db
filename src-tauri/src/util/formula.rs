@@ -1109,7 +1109,7 @@ impl Formula {
         }
 
         return Err(error::Error::FormulaParseError { 
-            msg: String::from("Unknown expression."), 
+            msg: String::from("Unknown formula expression."), 
             full_formula: full_str.clone(), 
             substring_with_error: String::from(remaining_str.trim_start()) 
         }); 

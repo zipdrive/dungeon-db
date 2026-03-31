@@ -16,7 +16,7 @@ export type Dialog = {
 } | { 
     createColumn: {
         schemaOid: number,
-        columnOrdering: number | null 
+        columnOrdering: number | null
     }
 } | {
     editColumn: {

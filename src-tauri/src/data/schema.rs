@@ -340,6 +340,7 @@ impl ToggledHierarchicalListItemMetadata {
 
 
 #[derive(PartialEq, Eq, Hash, Serialize, Deserialize, Clone)]
+#[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum Schema {
     Table(table::FullMetadata),
     Report(report::FullMetadata)
