@@ -234,6 +234,20 @@ impl FullMetadata {
         Ok(())
     }
 
+    /// Queries the reports that can be associated with an Object, Select, or Multiselect column.
+    pub fn query_associated_reports(mut sender: Sender<DropdownValue>) -> Result<(), Error> {
+        let conn = db::open()?;
+
+        let mut select_stmt = conn.prepare("SELECT s.OID, s.NAME AS LABEL FROM METADATA_SCHEMA s INNER JOIN METADATA_REPORT r ON s.OID = r.OID WHERE NOT s.TRASH ORDER BY s.NAME")?;
+        let select_rows = select_stmt.query_and_then([], |row| Ok::<(i64, String), rusqlite::Error>((row.get::<_, i64>("OID")?, row.get::<_, String>("LABEL")?)))?;
+        for row_result in select_rows {
+            let (value, label) = row_result?;
+            sender.send(DropdownValue { label, value })?;
+        }
+
+        Ok(())
+    }
+
     /// Queries the values of a Select or Multiselect column for a schema.
     pub fn query_values(mut sender: Sender<DropdownValue>, schema_oid: i64) -> Result<(), Error> {
         let conn = db::open()?;

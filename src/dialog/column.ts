@@ -2,9 +2,10 @@ import { message } from "@tauri-apps/plugin-dialog";
 import { Channel } from "@tauri-apps/api/core";
 import { DropdownValue, getColumnAsync, getSchemaMetadataAsync, HierarchicalListItemMetadata, queryAsync } from "../util/query";
 import { FullMetadata as ColumnFullMetadata, ColumnType, Primitive } from "../util/column";
-import { closeDialogAsync } from "../util/dialog";
+import { closeDialogAsync, openDialogAsync } from "../util/dialog";
 import { executeAsync } from "../util/action";
 import { Schema } from "../util/schema";
+import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
 const urlParams = new URLSearchParams(window.location.search);
 const urlParamSchemaOid: string | null = urlParams.get('schema_oid');
@@ -33,6 +34,22 @@ function populateNewColumnMetadata() {
             })
         }
     });
+
+    // Populate reports that can be referenced by Subreport column type
+    const associatedReportOption: HTMLSelectElement = document.getElementById('column-associated-report') as HTMLSelectElement;
+    queryAsync({
+        columnAssociatedReports: {
+            channel: new Channel<DropdownValue>((report) => {
+                // Create OPTION element for the table
+                const opt: HTMLOptionElement = document.createElement('option');
+                opt.value = report.value.toString();
+                opt.label = report.label;
+
+                // Add option to the dropdown
+                associatedReportOption.appendChild(opt);
+            })
+        }
+    });
 }
 
 /**
@@ -49,26 +66,27 @@ function populatePreexistingColumnMetadata(column: ColumnFullMetadata) {
 
     // Populate column type
     let columnTypeStr: string;
-    let defaultTableOid: number | null;
+    let defaultSchemaOid: number | null;
     if ('primitive' in column.columnType) {
         columnTypeStr = `primitive-${column.columnType.primitive}`;
     } else if ('object' in column.columnType) {
         columnTypeStr = 'object';
-        defaultTableOid = column.columnType.object.tableOid;
+        defaultSchemaOid = column.columnType.object.tableOid;
     } else if ('select' in column.columnType) {
         columnTypeStr = 'select';
-        defaultTableOid = column.columnType.select.tableOid;
+        defaultSchemaOid = column.columnType.select.tableOid;
     } else if ('multiselect' in column.columnType) {
         columnTypeStr = 'multiselect';
-        defaultTableOid = column.columnType.multiselect.tableOid;
+        defaultSchemaOid = column.columnType.multiselect.tableOid;
     } else if ('formula' in column.columnType) {
         columnTypeStr = 'formula';
 
         // Populate the pre-existing formula
-        const formulaElem: HTMLTextAreaElement = document.getElementById('column-formula') as HTMLTextAreaElement;
-        formulaElem.value = column.columnType.formula.formula;
+        const formulaElem: HTMLDivElement = document.getElementById('column-formula') as HTMLDivElement;
+        formulaElem.innerText = column.columnType.formula.formula;
     } else if ('subreport' in column.columnType) {
         columnTypeStr = 'subreport';
+        defaultSchemaOid = column.columnType.subreport.reportOid;
     } else {
         columnTypeStr = 'primitive-text'; // This should never happen
     }
@@ -98,12 +116,33 @@ function populatePreexistingColumnMetadata(column: ColumnFullMetadata) {
                 opt.label = table.label;
 
                 // Auto-select if it is the currently-associated table
-                if (table.value == defaultTableOid) {
+                if (table.value == defaultSchemaOid) {
                     opt.selected = true;
                 }
 
                 // Add option to the dropdown
                 associatedTableOption.appendChild(opt);
+            })
+        }
+    });
+
+    // Populate tables that can be referenced by Object/Select/Multiselect column type
+    const associatedReportOption: HTMLSelectElement = document.getElementById('column-associated-report') as HTMLSelectElement;
+    queryAsync({
+        columnAssociatedReports: {
+            channel: new Channel<DropdownValue>((report) => {
+                // Create OPTION element for the table
+                const opt: HTMLOptionElement = document.createElement('option');
+                opt.value = report.value.toString();
+                opt.label = report.label;
+
+                // Auto-select if it is the currently-associated report
+                if (report.value == defaultSchemaOid) {
+                    opt.selected = true;
+                }
+
+                // Add option to the dropdown
+                associatedReportOption.appendChild(opt);
             })
         }
     });
@@ -166,9 +205,10 @@ function compileColumn(): ColumnFullMetadata {
         };
     } else if (selectedColumnTypeOption.value == 'formula') {
         // Clone the formula TEXTAREA and convert each parameter SPAN into a text value
-        const formulaElem: HTMLTextAreaElement = document.getElementById('column-formula')?.cloneNode() as HTMLTextAreaElement;
+        const formulaElem: HTMLDivElement = document.getElementById('column-formula')?.cloneNode(true) as HTMLDivElement;
         formulaElem.querySelectorAll('span[value]').forEach((span) => {
-            span.replaceWith(document.createTextNode(span.getAttribute('value') ?? ''));
+            const paramPath: string | null = span.getAttribute('value');
+            span.replaceWith(document.createTextNode(paramPath ? `@{${paramPath}}` : ''));
         });
         let formula = formulaElem.innerText;
         formulaElem.remove();
@@ -181,11 +221,15 @@ function compileColumn(): ColumnFullMetadata {
             }
         };
     } else if (selectedColumnTypeOption.value == 'subreport') {
-        // TODO
+        // Get the associated table
+        const selectedAssociatedReportOption: HTMLOptionElement = document.querySelector('#column-associated-report option:checked') as HTMLOptionElement;
+        const associatedReportOid: number = parseInt(selectedAssociatedReportOption.value);
+
+        // Construct the column type
         columnType = {
             subreport: {
                 oid: 0,
-                reportOid: 0
+                reportOid: associatedReportOid
             }
         };
     } else {
@@ -197,8 +241,8 @@ function compileColumn(): ColumnFullMetadata {
     const hidden: boolean = hiddenElem.checked;
 
     // Extract whether column is a primary key
-    const primaryKeyElem: HTMLInputElement = document.getElementById('column-is-primary-key') as HTMLInputElement;
-    const isPrimaryKey: boolean = primaryKeyElem.checked;
+    const primaryKeyElem: HTMLInputElement | null = document.getElementById('column-is-primary-key') as HTMLInputElement;
+    const isPrimaryKey: boolean = primaryKeyElem?.checked ?? false;
 
     // Extract default value
     const defaultValueElem: HTMLInputElement = document.getElementById('column-default-value') as HTMLInputElement;
@@ -257,9 +301,66 @@ window.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // 
-    document.getElementById('add-parameter-button')?.addEventListener('click', async (e) => {
-        
+    // Open dialog to select parameter when the Add Parameter button is clicked
+    document.getElementById('add-parameter-button')?.addEventListener('click', async () => {
+        const parameterId: number = Math.floor(Math.random() * 4294967296);
+
+        const unlistenForAddParameter = await listen<[number, string, string]>('add-parameter', (e) => {
+            const [addParamId, paramPath, paramLabel]: [number, string, string] = e.payload;
+            console.debug(`Signal received: ${JSON.stringify(e.payload)} (looking for ID ${parameterId})`);
+            if (addParamId == parameterId) {
+                const formulaElem: HTMLDivElement = document.getElementById('column-formula') as HTMLDivElement;
+
+                // Insert SPAN representing the parameter
+                if (window.getSelection) {
+                    // IE9 and non-IE
+                    const sel: Selection | null = window.getSelection();
+                    
+                    let range: Range;
+                    if (sel?.getRangeAt && sel.rangeCount && sel.focusNode == formulaElem) {
+                        // Delete the former contents at the cursor selection
+                        range = sel.getRangeAt(0);
+                        range.deleteContents();
+                    } else {
+                        // Set range as the end of formulaElem
+                        range = document.createRange();
+                        
+                        let formulaTextElem = formulaElem.lastChild;
+                        if (!formulaTextElem) {
+                            formulaTextElem = document.createTextNode('');
+                            formulaElem.appendChild(formulaTextElem);
+                        }
+                        range.setStart(formulaTextElem, 0);
+                        range.setEnd(formulaTextElem, 0);
+                    }
+
+                    // Construct the param SPAN
+                    const paramElem: HTMLSpanElement = document.createElement('span');
+                    paramElem.setAttribute('value', paramPath);
+                    paramElem.contentEditable = 'false';
+                    paramElem.innerText = paramLabel;
+
+                    // Insert at the range
+                    range.insertNode(paramElem);
+                    
+                    // Set selection immediately after the inserted SPAN
+                    range = range.cloneRange();
+                    range.setStartAfter(paramElem);
+                    range.collapse(true);
+                    sel?.removeAllRanges();
+                    sel?.addRange(range);
+                }
+
+                unlistenForAddParameter();
+            }
+        })
+
+        await openDialogAsync({
+            addParameter: {
+                id: parameterId,
+                schemaOid: schemaOid ?? -1
+            }
+        });
     });
 
     // Create listeners for the buttons
@@ -267,7 +368,7 @@ window.addEventListener("DOMContentLoaded", () => {
         e.preventDefault();
 
         const column: ColumnFullMetadata = compileColumn();
-
+        
         if (columnOid) {
             // Edit the column's metadata
             await executeAsync({

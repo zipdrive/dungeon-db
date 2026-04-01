@@ -24,7 +24,8 @@ export type Dialog = {
     }
 } | {
     addParameter: {
-        id: number
+        id: number,
+        schemaOid: number
     }
 } | {
     schema: {

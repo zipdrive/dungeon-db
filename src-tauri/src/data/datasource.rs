@@ -22,6 +22,22 @@ pub enum Relationship {
 
 
 
+#[derive(Serialize, Clone)]
+#[serde(rename_all="camelCase")]
+pub struct DatasourceDropdownValue {
+    pub value: Datasource,
+    pub label: String
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all="camelCase")]
+pub struct ParameterDropdownValue {
+    pub value: String,
+    pub label: String
+}
+
+
+
 #[derive(PartialEq, Eq, Clone, Deserialize, Serialize)]
 #[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum Datasource {
@@ -199,19 +215,36 @@ impl Datasource {
     }
 
     /// Queries for all root datasources.
-    pub fn query_roots(mut sender: Sender<(Self, String)>) -> Result<(), Error> {
+    pub fn query_roots(mut sender: Sender<DatasourceDropdownValue>) -> Result<(), Error> {
         let conn: Connection = db::open()?;
-        for root_result in conn.prepare("SELECT OID, TABLE_OID, LABEL FROM METADATA_DATASOURCE")?
-                .query_and_then([], |row| Ok::<(i64, i64, String), rusqlite::Error>((row.get("OID")?,row.get("TABLE_OID")?,row.get("LABEL")?)))? {
+        for root_result in 
+            conn.prepare(
+            "
+            SELECT 
+                d.OID, 
+                d.TABLE_OID, 
+                COALESCE(d.LABEL, s.NAME) AS LABEL 
+            FROM METADATA_DATASOURCE d 
+            INNER JOIN METADATA_SCHEMA s ON s.OID = d.TABLE_OID
+            WHERE NOT s.TRASH
+            ORDER BY 
+                d.LABEL NULLS FIRST, 
+                s.NAME
+            "
+            )?
+            .query_and_then([], |row| Ok::<(i64, i64, String), rusqlite::Error>((row.get("OID")?,row.get("TABLE_OID")?,row.get("LABEL")?)))? {
             
             let (datasource_oid, table_oid, datasource_label) = root_result?;
-            sender.send((Self::Table { oid: datasource_oid, table_oid }, datasource_label))?;
+            sender.send(DatasourceDropdownValue {
+                value: Self::Table { oid: datasource_oid, table_oid }, 
+                label: datasource_label
+            })?;
         }
         Ok(())
     }
 
     /// Queries for links from this datasource to another.
-    pub fn query_links(&self, mut sender: Sender<(Self, String)>) -> Result<(), Error> {
+    pub fn query_links(&self, mut sender: Sender<DatasourceDropdownValue>) -> Result<(), Error> {
         let conn: Connection = db::open()?;
         let table_oid: i64 = self.get_schema_oid()?;
 
@@ -236,17 +269,21 @@ impl Datasource {
             let column_oid = column_oid_result?;
             let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(&conn, column_oid)?;
             let datasource_label: String = format!("REFERENCE: {}", column_metadata.name);
-            sender.send((Self::Column { 
-                parent_datasource: Box::new(self.clone()), 
-                column: column_metadata
-            }, datasource_label))?;
+            sender.send(DatasourceDropdownValue {
+                value: Self::Column { 
+                    parent_datasource: Box::new(self.clone()), 
+                    column: column_metadata
+                }, 
+                label: datasource_label 
+            })?;
         }
 
         // Query for master tables
         for master_table_result in conn.prepare(
             "
             SELECT 
-                s.OID
+                s.OID,
+                s.NAME
             FROM METADATA_SCHEMA_INHERITANCE inh
             INNER JOIN METADATA_SCHEMA s ON s.OID = inh.MASTER_SCHEMA_OID
             WHERE inh.INHERITOR_SCHEMA_OID = ?1
@@ -258,17 +295,21 @@ impl Datasource {
 
             let (master_table_oid, master_table_name) = master_table_result?;
             let datasource_label: String = format!("MASTER: {master_table_name}");
-            sender.send((Self::MasterTable { 
-                parent_datasource: Box::new(self.clone()), 
-                table_oid: master_table_oid
-            }, datasource_label))?;
+            sender.send(DatasourceDropdownValue {
+                value: Self::MasterTable { 
+                    parent_datasource: Box::new(self.clone()), 
+                    table_oid: master_table_oid
+                }, 
+                label: datasource_label
+            })?;
         }
 
         // Query for inheritor tables
         for inheritor_table_result in conn.prepare(
             "
             SELECT 
-                s.OID
+                s.OID,
+                s.NAME
             FROM METADATA_SCHEMA_INHERITANCE inh
             INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID
             WHERE inh.MASTER_SCHEMA_OID = ?1
@@ -280,10 +321,13 @@ impl Datasource {
 
             let (inheritor_table_oid, inheritor_table_name) = inheritor_table_result?;
             let datasource_label: String = format!("INHERITOR: {inheritor_table_name}");
-            sender.send((Self::InheritorTable { 
-                parent_datasource: Box::new(self.clone()), 
-                table_oid: inheritor_table_oid
-            }, datasource_label))?;
+            sender.send(DatasourceDropdownValue {
+                value: Self::InheritorTable { 
+                    parent_datasource: Box::new(self.clone()), 
+                    table_oid: inheritor_table_oid
+                }, 
+                label: datasource_label 
+            })?;
         }
 
         // Query for columns on other tables referencing this one
@@ -328,11 +372,42 @@ impl Datasource {
             let (column_oid, schema_name) = column_oid_result?;
             let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(&conn, column_oid)?;
             let datasource_label: String = format!("BACKREFERENCE: {schema_name} / {}", column_metadata.name);
-            sender.send((Self::Column { 
-                parent_datasource: Box::new(self.clone()), 
-                column: column_metadata
-            }, datasource_label))?;
+            sender.send(DatasourceDropdownValue {
+                value: Self::Column { 
+                    parent_datasource: Box::new(self.clone()), 
+                    column: column_metadata
+                }, 
+                label: datasource_label
+            })?;
         }
+        Ok(())
+    }
+
+    /// Queries for parameters associated with the datasource.
+    pub fn query_parameters(&self, mut sender: Sender<ParameterDropdownValue>) -> Result<(), Error> {
+        let conn: Connection = db::open()?;
+        let table_oid: i64 = self.get_schema_oid()?;
+
+        for column_result in conn.prepare(
+            "
+            SELECT 
+                c.OID,
+                c.NAME
+            FROM METADATA_COLUMN c
+            WHERE c.SCHEMA_OID = ?1
+                AND NOT c.TRASH
+            ORDER BY c.ORDERING
+            ")?
+            .query_map(params![table_oid], |row| Ok::<(i64, String), rusqlite::Error>((row.get("OID")?, row.get("NAME")?)))? {
+
+            let (column_oid, column_name) = column_result?;
+            let parameter_path: String = format!("{}_COLUMN{column_oid}", self.get_alias());
+            sender.send(ParameterDropdownValue {
+                value: parameter_path,
+                label: column_name
+            })?;
+        }
+
         Ok(())
     }
 

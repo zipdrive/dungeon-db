@@ -14,7 +14,7 @@
                 General
             </label>
             <div class="container">
-                <table class="form chain">
+                <table id="param-path" class="form chain">
                     <colgroup>
                         <col span="1" class="field-name-cell">
                         <col span="1" class="field-input-cell">
@@ -28,14 +28,14 @@
                             <td><label for="param-link1">Intermediary Path:<sup tooltip="The links along the path to a column of a table.&#10;REFERENCE types link to the row(s) referenced on another table by an Object, Select, or Multiselect column.&#10;MASTER types link to the associated row on a master list.&#10;INHERITOR types link to the associated row on a table that uses the previous table as a master list.&#10;BACKREFERENCE types link to the row(s) on another table where the row of the previous table is referenced by an Object, Select, or Multiselect column.">?</sup></label></td>
                             <td>
                                 <select id="param-link1" class="input">
-                                    <option value=""></option>
+                                    <option value="">...</option>
                                 </select>
                             </td>
                         </tr>
                     </tbody>
                     <tfoot>
                         <tr>
-                            <td><label for="param-root-datasource">Column:<sup tooltip="The column whose value is referenced by this parameter.">?</sup></label></td>
+                            <td><label for="param-column">Column:<sup tooltip="The column whose value is referenced by this parameter.">?</sup></label></td>
                             <td><select id="param-column" class="input"></select></td>
                         </tr>
                     </tfoot>

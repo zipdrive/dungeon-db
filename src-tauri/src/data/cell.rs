@@ -556,80 +556,87 @@ impl Cell {
                             };
 
                             if let Some(param) = row.get::<&str, Option<String>>(param_ord)? {
-                                let Some((value_datasource_oid_str, value_column_oid_str)) = param.split_once(':') else {
+                                let Some((value_datasource_alias, value_column_oid_str)) = param.split_once(':') else {
                                     return Err(Error::AdhocError("Formula returned nonempty parameter, but in nonstandard format."));
                                 };
-                                let Ok(value_datasource_oid) = value_datasource_oid_str.parse::<i64>() else {
-                                    return Err(Error::AdhocError("Formula returned datasource OID that was not an integer."));
-                                };
-                                let value_datasource = datasource::Datasource::get(value_datasource_oid)?;
                                 let Ok(value_column_oid) = value_column_oid_str.parse::<i64>() else {
                                     return Err(Error::AdhocError("Formula returned column OID that was not an integer."));
                                 };
                                 let value_column = column::FullMetadata::get(value_column_oid)?;
                                 
-                                let value_row_ord: String = format!("{}_OID", value_datasource.get_alias());
-                                let value_oid: ValueOid = ValueOid {
-                                    schema_oid: value_datasource.get_schema_oid()?,
-                                    row_oid: row.get::<&str, i64>(&value_row_ord)?,
-                                    column_oid: value_column.oid.clone()
-                                };
+                                let value_row_ord: String = format!("{value_datasource_alias}_OID");
+                                if let Some(value_row_oid) = row.get::<&str, Option<i64>>(&value_row_ord)? {
+                                    let value_oid: ValueOid = ValueOid {
+                                        schema_oid: value_column.schema.oid,
+                                        row_oid: value_row_oid,
+                                        column_oid: value_column.oid.clone()
+                                    };
 
-                                cell_sender.send(match value_column.column_type {
-                                    column_type::ColumnType::Primitive(primitive_type) => {
-                                        Cell::PrimitiveEntry { 
-                                            cell_oid, 
-                                            value_oid, 
-                                            label, 
-                                            primitive_type,
-                                            validation_failures: Vec::new() 
+                                    cell_sender.send(match value_column.column_type {
+                                        column_type::ColumnType::Primitive(primitive_type) => {
+                                            Cell::PrimitiveEntry { 
+                                                cell_oid, 
+                                                value_oid, 
+                                                label, 
+                                                primitive_type,
+                                                validation_failures: Vec::new() 
+                                            }
                                         }
-                                    }
-                                    column_type::ColumnType::Object { table_oid, .. } => {
-                                        Cell::Object { 
-                                            cell_oid, 
-                                            value_oid, 
-                                            object_schema_oid: table_oid.clone(), 
-                                            object_query_string: row.get::<&str, Option<String>>(value_ord)?,
-                                            label, 
-                                            validation_failures: Vec::new() 
+                                        column_type::ColumnType::Object { table_oid, .. } => {
+                                            Cell::Object { 
+                                                cell_oid, 
+                                                value_oid, 
+                                                object_schema_oid: table_oid.clone(), 
+                                                object_query_string: row.get::<&str, Option<String>>(value_ord)?,
+                                                label, 
+                                                validation_failures: Vec::new() 
+                                            }
                                         }
-                                    }
-                                    column_type::ColumnType::Select { table_oid, .. } => {
-                                        Cell::SelectEntry { 
-                                            cell_oid, 
-                                            value_oid, 
-                                            select_schema_oid: table_oid.clone(), 
-                                            select_row_oid: row.get::<&str, Option<i64>>(value_ord)?, 
-                                            validation_failures: Vec::new() 
+                                        column_type::ColumnType::Select { table_oid, .. } => {
+                                            Cell::SelectEntry { 
+                                                cell_oid, 
+                                                value_oid, 
+                                                select_schema_oid: table_oid.clone(), 
+                                                select_row_oid: row.get::<&str, Option<i64>>(value_ord)?, 
+                                                validation_failures: Vec::new() 
+                                            }
                                         }
-                                    }
-                                    column_type::ColumnType::Multiselect { table_oid, .. } => {
-                                        let multiselect_row_oid: Vec<i64> = match row.get::<&str, Option<String>>(value_ord)? {
-                                            Some(s) => s.split(',').filter_map(|n| match n.parse::<i64>() { Ok(num) => Some(num), Err(_) => None }).collect(),
-                                            None => Vec::new()
-                                        };
+                                        column_type::ColumnType::Multiselect { table_oid, .. } => {
+                                            let multiselect_row_oid: Vec<i64> = match row.get::<&str, Option<String>>(value_ord)? {
+                                                Some(s) => s.split(',').filter_map(|n| match n.parse::<i64>() { Ok(num) => Some(num), Err(_) => None }).collect(),
+                                                None => Vec::new()
+                                            };
 
-                                        Cell::MultiselectEntry { 
-                                            cell_oid, 
-                                            value_oid, 
-                                            multiselect_schema_oid: if value_datasource.get_schema_oid()? == value_column.schema.oid {
-                                                // If the multiselect column belongs to the schema of the datasource, do not invert
-                                                table_oid.clone() 
-                                            } else {
-                                                // If the multiselect column does not belong to the schema of the datasource, 
-                                                // then this multiselect is inverted and pointing back at the schema holding the multiselect column
-                                                value_column.schema.oid
-                                            }, 
-                                            multiselect_row_oid, 
-                                            label, 
-                                            validation_failures: Vec::new() 
+                                            Cell::MultiselectEntry { 
+                                                cell_oid, 
+                                                value_oid, 
+                                                multiselect_schema_oid: if {
+                                                    let value_datasource: Datasource = Datasource::from_path(value_datasource_alias.split('_').map(|s| String::from(s)).collect())?;
+                                                    value_datasource.get_schema_oid()?
+                                                } == value_column.schema.oid {
+                                                    // If the multiselect column belongs to the schema of the datasource, do not invert
+                                                    table_oid.clone() 
+                                                } else {
+                                                    // If the multiselect column does not belong to the schema of the datasource, 
+                                                    // then this multiselect is inverted and pointing back at the schema holding the multiselect column
+                                                    value_column.schema.oid
+                                                }, 
+                                                multiselect_row_oid, 
+                                                label, 
+                                                validation_failures: Vec::new() 
+                                            }
                                         }
-                                    }
-                                    _ => {
-                                        return Err(Error::AdhocError("Formula returned an invalid column."));
-                                    }
-                                })?;
+                                        _ => {
+                                            return Err(Error::AdhocError("Formula returned an invalid column."));
+                                        }
+                                    })?;
+                                } else {
+                                    cell_sender.send(Cell::Readonly { 
+                                        cell_oid, 
+                                        label: None, 
+                                        validation_failures: Vec::new()
+                                    })?;
+                                }
                             } else {
                                 // If the value of the cell is not directly linked to the value of another cell, send as a readonly value
                                 cell_sender.send(Cell::Readonly { 

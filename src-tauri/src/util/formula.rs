@@ -653,7 +653,7 @@ impl Formula {
         }
 
         // Check for a parameter
-        let param_regex: Regex = Regex::new(r#"(?is)^\s*@\{(\d+(?:_MASTER\d+|_INHERITOR\d+|_COLUMN\d+)*)_COLUMN(\d+)\}(.*)"#).unwrap();
+        let param_regex: Regex = Regex::new(r#"(?is)^\s*@\{(ROOT\d+(?:_MASTER\d+|_INHERITOR\d+|_COLUMN\d+)*)_COLUMN(\d+)\}(.*)"#).unwrap();
         if let Some(param_cap) = param_regex.captures(remaining_str) {
             let (_, [datasource_path_content, column_oid_content, following]) = param_cap.extract();
             let datasource_path: Vec<String> = datasource_path_content.split('_').map(|s| String::from(s)).collect();

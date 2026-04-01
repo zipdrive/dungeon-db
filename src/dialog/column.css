@@ -114,3 +114,12 @@ tr.parameter-subreport {
         display: table-row;
     }
 }
+
+
+
+#column-formula span {
+    padding: 0.5em;
+    background-color: var(--main-color-semidark);
+    border-radius: 3px;
+    border: 1px solid var(--main-color-dark);
+}

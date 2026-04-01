@@ -23,6 +23,15 @@ export type DropdownValue = {
     label: string
 };
 
+export type DatasourceDropdownValue = {
+    value: Datasource,
+    label: string 
+};
+export type ParameterDropdownValue = {
+    value: string,
+    label: string
+};
+
 export type Limit = {
     page: {
         num: number,
@@ -59,15 +68,24 @@ export type Query = {
     }
 } | {
     rootDatasources: {
-        channel: Channel<[Datasource, string]>
+        channel: Channel<DatasourceDropdownValue>
     }
 } | {
     linkedDatasources: {
         parentDatasource: Datasource,
-        channel: Channel<[Datasource, string]>
+        channel: Channel<DatasourceDropdownValue>
+    }
+} | {
+    parameters: {
+        parentDatasource: Datasource,
+        channel: Channel<ParameterDropdownValue>
     }
 } | {
     columnAssociatedTables: {
+        channel: Channel<DropdownValue>
+    }
+} | {
+    columnAssociatedReports: {
         channel: Channel<DropdownValue>
     }
 } | {

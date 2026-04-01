@@ -25,7 +25,8 @@ pub enum Dialog {
         column_oid: i64
     },
     AddParameter {
-        id: i64 
+        id: i64,
+        schema_oid: i64
     },
 
     Schema {
@@ -113,9 +114,9 @@ impl Dialog {
                 .maximizable(false)
                 .build()?;
             },
-            Self::AddParameter { id } => {
+            Self::AddParameter { id, schema_oid } => {
                 WebviewWindowBuilder::new(app, label,
-                    WebviewUrl::App(format!("/src/dialog/parameter.html?id={id}").into()),
+                    WebviewUrl::App(format!("/src/dialog/parameter.html?id={id}&schema_oid={schema_oid}").into()),
                 )
                 .title("Add Parameter")
                 .inner_size(400.0, 400.0)
