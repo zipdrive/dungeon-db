@@ -166,16 +166,6 @@ if (urlParamSchemaOid) {
             reloadAllCells();
         }
     });
-    listen<number>('table', (e) => {
-        if (e.payload == schemaOid) {
-            reloadAllCells();
-        }
-    });
-    listen<number>('report', (e) => {
-        if (e.payload == schemaOid) {
-            reloadAllCells();
-        }
-    });
     listen<ValueOid>('cell', (e) => {
         console.debug(`cellOid: ${JSON.stringify(e.payload)}`);
         updateCell(e.payload, false);

@@ -246,10 +246,6 @@ fn record_action(action: Action, is_forward: bool) {
     (*reverse_stack).push(action);
 }
 
-const UPDATE_SCHEMA_SIGNAL: &'static str = "schema";
-const UPDATE_TABLE_SIGNAL: &'static str = "table";
-const UPDATE_REPORT_SIGNAL: &'static str = "report";
-
 impl Action {
     async fn execute(self, app: &AppHandle, is_forward: bool) -> Result<(), Error> {
         match self {
@@ -259,7 +255,7 @@ impl Action {
                 record_action(Self::TrashSchema(metadata.schema.oid), is_forward);
 
                 // Send signal to update table
-                app.emit(UPDATE_TABLE_SIGNAL, metadata.schema.oid)?;
+                schema::FullMetadata::query_affected_schema(app, vec![metadata.schema.oid])?;
 
                 // Open new window to view the table
                 dialog::dialog_open(app.clone(), dialog::Dialog::Schema { 
@@ -274,7 +270,7 @@ impl Action {
                 record_action(Self::EditTable(old_metadata), is_forward);
 
                 // Send signal to update table
-                app.emit(UPDATE_TABLE_SIGNAL, metadata.schema.oid)?;
+                schema::FullMetadata::query_affected_schema(app, vec![metadata.schema.oid])?;
             }
             Self::CreateReport(mut metadata) => {
                 // Create the report
@@ -282,7 +278,7 @@ impl Action {
                 record_action(Self::TrashSchema(metadata.schema.oid), is_forward);
 
                 // Send signal to update report
-                app.emit(UPDATE_REPORT_SIGNAL, metadata.schema.oid)?;
+                schema::FullMetadata::query_affected_schema(app, vec![metadata.schema.oid])?;
 
                 // Open new window to view the report
                 dialog::dialog_open(app.clone(), dialog::Dialog::Schema { 
@@ -297,7 +293,7 @@ impl Action {
                 record_action(Self::EditReport(old_metadata), is_forward);
 
                 // Send signal to update report
-                app.emit(UPDATE_REPORT_SIGNAL, metadata.schema.oid)?;
+                schema::FullMetadata::query_affected_schema(app, vec![metadata.schema.oid])?;
             }
             Self::TrashSchema(schema_oid) => {
                 // Flag the schema for garbage collection
@@ -305,7 +301,7 @@ impl Action {
                 record_action(Self::UntrashSchema(schema_oid), is_forward);
 
                 // Send signal to update schema
-                app.emit(UPDATE_SCHEMA_SIGNAL, schema_oid)?;
+                schema::FullMetadata::query_affected_schema(app, vec![schema_oid])?;
             }
             Self::UntrashSchema(schema_oid) => {
                 // Unflag the schema for garbage collection
@@ -313,7 +309,7 @@ impl Action {
                 record_action(Self::TrashSchema(schema_oid), is_forward);
 
                 // Send signal to update schema
-                app.emit(UPDATE_SCHEMA_SIGNAL, schema_oid)?;
+                schema::FullMetadata::query_affected_schema(app, vec![schema_oid])?;
             }
 
 
@@ -324,7 +320,7 @@ impl Action {
                 record_action(Self::TrashColumn(metadata.oid), is_forward);
 
                 // Send signal to update schema
-                app.emit(UPDATE_SCHEMA_SIGNAL, metadata.schema.oid)?;
+                schema::FullMetadata::query_affected_schema(app, vec![metadata.schema.oid])?;
             }
             Self::EditColumn(mut metadata) => {
                 // Update the column
@@ -336,7 +332,7 @@ impl Action {
                 }, is_forward);
 
                 // Send signal to update schema
-                app.emit(UPDATE_SCHEMA_SIGNAL, metadata.schema.oid)?;
+                schema::FullMetadata::query_affected_schema(app, vec![metadata.schema.oid])?;
             }
             Self::EditColumnStyle { mut metadata, new_column_style } => {
                 // Update the column style
@@ -348,7 +344,7 @@ impl Action {
                 }, is_forward);
 
                 // Send signal to update schema
-                app.emit(UPDATE_SCHEMA_SIGNAL, metadata.schema.oid)?;
+                schema::FullMetadata::query_affected_schema(app, vec![metadata.schema.oid])?;
             }
             Self::EditColumnOrdering { mut metadata, new_column_ordering } => {
                 // Update the column style
@@ -360,7 +356,7 @@ impl Action {
                 }, is_forward);
 
                 // Send signal to update schema
-                app.emit(UPDATE_SCHEMA_SIGNAL, metadata.schema.oid)?;
+                schema::FullMetadata::query_affected_schema(app, vec![metadata.schema.oid])?;
             }
             Self::TrashColumn(column_oid) => {
                 // Flag the column for garbage collection
@@ -401,7 +397,7 @@ impl Action {
                 }, is_forward);
 
                 // Send signal to update table
-                app.emit(UPDATE_TABLE_SIGNAL, table_oid)?;
+                schema::FullMetadata::query_affected_schema(app, vec![table_oid])?;
             }
             Self::EditRowOid { table_oid, row_oid, new_row_oid } => {
                 let new_row_oid: i64 = row::reorder(table_oid, row_oid, new_row_oid)?;
@@ -412,7 +408,7 @@ impl Action {
                 }, is_forward);
 
                 // Send signal to update table
-                app.emit(UPDATE_TABLE_SIGNAL, table_oid)?;
+                schema::FullMetadata::query_affected_schema(app, vec![table_oid])?;
             }
             Self::TrashRow { table_oid, row_oid } => {
                 if let Some((table_oid, row_oid)) = row::trash(table_oid, row_oid)? {
@@ -422,7 +418,7 @@ impl Action {
                     }, is_forward);
 
                     // Send signal to update table
-                    app.emit(UPDATE_TABLE_SIGNAL, table_oid)?;
+                    schema::FullMetadata::query_affected_schema(app, vec![table_oid])?;
                 }
             }
             Self::UntrashRow { table_oid, row_oid } => {
@@ -433,7 +429,7 @@ impl Action {
                 }, is_forward);
 
                 // Send signal to update table
-                app.emit(UPDATE_TABLE_SIGNAL, table_oid)?;
+                schema::FullMetadata::query_affected_schema(app, vec![table_oid])?;
             }
             Self::EditRowSubtype { table_oid, row_oid, inheritor_table_oid } => {
                 let old_inheritor_table_oid: i64 = row::change_object_type(table_oid, row_oid, inheritor_table_oid)?;
@@ -444,7 +440,7 @@ impl Action {
                 }, is_forward);
 
                 // Send signal to update table
-                app.emit(UPDATE_TABLE_SIGNAL, table_oid)?;
+                schema::FullMetadata::query_affected_schema(app, vec![table_oid])?;
             }
 
 

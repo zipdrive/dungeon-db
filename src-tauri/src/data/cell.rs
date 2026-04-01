@@ -76,7 +76,46 @@ impl ValueOid {
 
         // Query for cells with a formula that depends on it, send signal to update those cells
         let conn = db::open()?;
-        // TODO
+        let mut affected_schema_oid: HashSet<i64> = HashSet::new();
+        for affected_column_results in conn
+            .prepare(
+                "
+                WITH RECURSIVE AFFECTED_FORMULAE (FORMULA_OID, FORMULA) AS (
+                    SELECT
+                        OID AS FORMULA_OID,
+                        FORMULA
+                    FROM METADATA_COLUMN_TYPE__FORMULA
+                    WHERE FORMULA LIKE '%_COLUMN' || FORMAT('%d', ?1) || '%'
+
+                    UNION
+
+                    SELECT
+                        fdep.OID AS FORMULA_OID,
+                        fdep.FORMULA
+                    FROM AFFECTED_FORMULAE f
+                    INNER JOIN METADATA_COLUMN c ON c.TYPE_OID = f.FORMULA_OID
+                    INNER JOIN METADATA_COLUMN_TYPE__FORMULA fdep ON fdep.FORMULA LIKE '%_COLUMN' || FORMAT('%d', c.OID) || '%'
+                )
+                SELECT 
+                    c.OID AS COLUMN_OID,
+                    c.SCHEMA_OID,
+                    f.FORMULA
+                FROM AFFECTED_FORMULAE f
+                INNER JOIN METADATA_COLUMN c ON c.TYPE_OID = f.FORMULA_OID
+                "
+            )?
+            .query_map(params![self.column_oid], |row| Ok((
+                row.get::<_, i64>("COLUMN_OID")?,
+                row.get::<_, i64>("SCHEMA_OID")?,
+                row.get::<_, String>("FORMULA")?
+            )))? {
+            
+            let (affected_column_oid, affected_column_schema_oid, affected_column_formula) = affected_column_results?;
+            
+            // Update the entire schema containing the affected column, just in case
+            affected_schema_oid.insert(affected_column_schema_oid);
+        }
+        schema::FullMetadata::query_affected_schema(app, affected_schema_oid.into_iter().collect())?;
 
         Ok(())
     }

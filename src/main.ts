@@ -207,5 +207,3 @@ listen<number>('schema', () => {
     loadTables();
     loadReports();
 });
-listen<number>('table', loadTables);
-listen<number>('report', loadReports);

@@ -1,11 +1,120 @@
 use std::collections::{HashMap, HashSet};
 use rusqlite::OptionalExtension;
-use rusqlite::{Transaction, params, types::Value, vtab::array::Array};
+use rusqlite::{Connection, Transaction, params, types::Value, vtab::array::Array};
+use crate::util::channel::Sender;
 use crate::util::error::Error;
-use crate::data::query;
-use crate::data::datasource;
+use crate::data::{query, schema, table};
+use crate::data::datasource::{self, Datasource};
 use crate::data::column;
 use crate::data::column_type;
+
+
+
+pub struct Surrogate {
+    oid_expr: String,
+    label_expr: String,
+    json_expr: String 
+}
+
+impl Surrogate {
+    /// Recursively build mapping from schema to default datasource by traversing up the inheritance hierarchy.
+    fn build_schema_to_datasource_mapping(conn: &Connection, schema_oid: i64, schema_to_datasource: &mut HashMap<i64, datasource::Datasource>) -> Result<(), Error> {
+        for master_schema_oid_result in conn.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE WHERE INHERITOR_SCHEMA_OID = ?1")?.query_map(params![schema_oid], |row| row.get::<_, i64>(0))? {
+            let master_schema_oid: i64 = master_schema_oid_result?;
+            if !schema_to_datasource.contains_key(&master_schema_oid) {
+                let datasource: datasource::Datasource = datasource::Datasource::MasterTable { 
+                    parent_datasource: Box::new(schema_to_datasource[&schema_oid].clone()), 
+                    table_oid: master_schema_oid
+                };
+                schema_to_datasource.insert(master_schema_oid, datasource);
+
+                Self::build_schema_to_datasource_mapping(conn, master_schema_oid, schema_to_datasource)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Determines the surrogate expression.
+    pub fn get_flat(conn: &Connection, query: &mut query::QueryBuilder, datasource: Datasource, surrogate_table_oid_chain: Vec<i64>) -> Result<Self, Error> {
+        let schema_oid: i64 = datasource.get_schema_oid()?;
+        if surrogate_table_oid_chain.contains(&schema_oid) {
+            return Err(Error::AdhocError(if surrogate_table_oid_chain.len() == 1 {
+                "A table has a self-referential key!"
+            } else {
+                "There is a loop of recursively self-referential keys."
+            }))
+        }
+        let oid_expr: String = format!("{}_OID", datasource.get_alias());
+        
+        // Build mapping to all master tables
+        let mut schema_to_datasource: HashMap<i64, datasource::Datasource> = HashMap::new();
+        schema_to_datasource.insert(schema_oid, datasource);
+        Self::build_schema_to_datasource_mapping(conn, schema_oid, &mut schema_to_datasource)?;
+
+        // Determine the primary key columns of the base schema
+        let mut base_columns: Vec<column::FullMetadata> = Vec::new();
+        for result in conn
+            .prepare(
+                "
+                SELECT
+                    c.OID
+                FROM (
+                    SELECT ?1 AS OID
+                    UNION
+                    SELECT MASTER_SCHEMA_OID AS OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE INHERITOR_SCHEMA_OID = ?1
+                ) s
+                INNER JOIN METADATA_COLUMN c ON c.SCHEMA_OID = s.OID
+                WHERE c.IS_PRIMARY_KEY
+                    AND NOT c.TRASH
+                ORDER BY c.ORDERING
+                "
+            )?
+            .query_map(params![schema_oid], |row| row.get::<_, i64>("OID"))? {
+
+            let column_oid: i64 = result?;
+            let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(conn, column_oid)?;
+            base_columns.push(column_metadata);
+        }
+
+        if base_columns.len() > 1 {
+            let mut json_exprs: Vec<String> = Vec::new();
+            for base_column in base_columns {
+                let column_name: String = base_column.name.clone();
+                let col = query.compile_column(Some(&schema_to_datasource[&base_column.schema.oid]), base_column)?;
+                json_exprs.push(format!(
+                    r#"'"{}": ' || {}"#,
+                    column_name.replace("\\", "\\\\").replace("\"", "\\\""),
+                    col.get_json_expr(String::from("NULL"))
+                ));
+            }
+            let json_expr: String = format!(
+                "'{{' || (SELECT GROUP_CONCAT(COLUMN1) FROM (VALUES ({}))) || '}}'",
+                json_exprs.into_iter().reduce(|acc, e| format!("{acc}, {e}")).unwrap_or(String::from(""))
+            );
+
+            Ok(Self {
+                oid_expr,
+                label_expr: json_expr.clone(),
+                json_expr
+            })
+        } else if base_columns.len() == 1 {
+            let col = query.compile_column(Some(&schema_to_datasource[&base_columns[0].schema.oid]), base_columns[0])?;
+            Ok(Self {
+                oid_expr,
+                label_expr: col.get_label_expr(),
+                json_expr: col.get_json_expr(String::from("'null'"))
+            })
+        } else {
+            Ok(Self {
+                oid_expr,
+                label_expr: String::from("'— NO PRIMARY KEY —'"),
+                json_expr: String::from("'null'")
+            })
+        }
+    }
+}
+
+
 
 /// Regenerates the surrogate view for the given table and all other tables that may reference one of its columns in their surrogate view.
 pub fn regenerate_surrogate(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
@@ -43,8 +152,6 @@ fn drop_surrogate(trans: &Transaction, table_oid: i64, dependencies: &mut HashMa
             SELECT ?1 AS OID
             UNION 
             SELECT MASTER_SCHEMA_OID AS OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE INHERITOR_SCHEMA_OID = ?1
-            UNION
-            SELECT INHERITOR_SCHEMA_OID AS OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE MASTER_SCHEMA_OID = ?1
             "
         )?
         .query_map(params![table_oid], |row| row.get::<_, i64>("OID"))?
@@ -57,7 +164,7 @@ fn drop_surrogate(trans: &Transaction, table_oid: i64, dependencies: &mut HashMa
     // Ensure there is not a recursive loop of primary keys referencing each other
     if dependent_on.iter().any(|dependent_on_table_oid| related_table_oids.intersection(dependent_on_table_oid).any(|_| true)) {
         if dependent_on.len() == 1 {
-            return Err(Error::AdhocError("The primary key may be recursively self-referential!"));
+            return Err(Error::AdhocError("The primary key is recursively self-referential!"));
         } else {
             return Err(Error::AdhocError("There is a recursive loop of primary keys on different tables that cause this primary key to be self-referential!"));
         }
@@ -116,11 +223,111 @@ fn drop_surrogate(trans: &Transaction, table_oid: i64, dependencies: &mut HashMa
     Ok(())
 }
 
+    /// Builds a basic query to get all columns associated with the given schema.
+    /// Also sends the column information through the provided Sender object.
+    fn build_query(mut column_sender: Sender<column::FullMetadata>, schema_oid: i64, initial_datasources: Vec<datasource::Datasource>, filters: Vec<(String, i64)>) -> Result<query::QueryBuilder, Error> {
+        // Construct mapping from schema to default datasource
+        let mut schema_to_datasource: HashMap<i64, datasource::Datasource> = HashMap::new();
+        {
+            let mut conn = db::open()?;
+            let trans = conn.transaction()?;
+
+            for datasource in initial_datasources.iter() {
+                schema_to_datasource.insert(datasource.get_schema_oid()?, datasource.clone());
+
+                // Make sure all master tables of a root table are also included as a datasource
+                if let datasource::Datasource::Table { table_oid, .. } = datasource {
+                    let table: table::FullMetadata = table::FullMetadata::get(table_oid.clone())?;
+                    Self::build_schema_to_datasource_mapping(&trans, &mut schema_to_datasource, table)?;
+                }
+            }
+
+            trans.commit()?;
+        }
+        
+        // Build query to get data for each column in the schema
+        let mut query: query::QueryBuilder = query::QueryBuilder::new(initial_datasources);
+        column::FullMetadata::query_by_schema(
+            Sender::Callback(Box::new(|col: column::FullMetadata| -> Result<(), Error> {
+                // Add column to query
+                query.insert_column(schema_to_datasource.get(&col.schema.oid), col.clone())?;
+
+                // Send column metadata over the provided Sender object
+                column_sender.send(col)?;
+                Ok(())
+            })), 
+            schema_oid
+        )?;
+
+        let conn: Connection = db::open()?;
+
+        // Filter rows in the query based on the METADATA_REPORT.FILTER_FORMULA formula
+        println!("Now applying filter formula...");
+        if let Some(Some(filter_formula)) = conn.query_one("SELECT FILTER_FORMULA FROM METADATA_REPORT WHERE OID = ?1", params![schema_oid], |row| row.get::<_, Option<String>>("FILTER_FORMULA")).optional()? {
+            // Insert WHERE clause
+            query.insert_filter(filter_formula)?;
+        }
+
+        // Additionally filter rows in the query based on the provided filters
+        println!("Now applying row filters {:?}", filters);
+        for (filter_datasource_alias, filter_datasource_row_oid) in filters {
+            query.insert_row_filter(filter_datasource_alias, filter_datasource_row_oid);
+        }
+
+        // Group rows in the query based on the METADATA_REPORT_GROUPBY table
+        println!("Now applying GROUP BY...");
+        let mut stmt_groupby = conn.prepare(
+            "
+            SELECT 
+                COLUMN_OID 
+            FROM METADATA_REPORT_GROUPBY_VIEW
+            WHERE REPORT_OID = ?1 
+            "
+        )?;
+        for row_result in stmt_groupby.query_and_then(params![schema_oid], |row| row.get::<_, i64>("COLUMN_OID"))? {
+            let column_oid = row_result?;
+            // Insert GROUP BY clause
+            query.insert_grouping(column_oid)?;
+        }
+
+        // Order the query based on the METADATA_SCHEMA_ORDERBY table
+        println!("Now applying ORDER BY...");
+        let mut stmt_orderby = conn.prepare(
+            "
+            SELECT 
+                COLUMN_OID, 
+                SORT_ASCENDING 
+            FROM METADATA_SCHEMA_ORDERBY_VIEW
+            WHERE SCHEMA_OID = ?1 
+            "
+        )?;
+        for row_result in stmt_orderby.query_and_then(params![schema_oid], |row| { Ok::<(i64, bool), rusqlite::Error>((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, bool>("SORT_ASCENDING")?)) })? {
+            let (column_oid, sort_ascending) = row_result?;
+            // Insert ORDER BY clause
+            query.insert_ordering(column_oid, sort_ascending)?;
+        }
+
+        Ok(query)
+    }
+
 /// Creates the surrogate view for the given table.
 fn create_surrogate(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
     println!("Now constructing TABLE{table_oid}_SURROGATE.");
 
-    let mut query: query::QueryBuilder = query::QueryBuilder::new(Vec::new());
+    // Construct mapping from schema to default datasource
+    let mut schema_to_datasource: HashMap<i64, datasource::Datasource> = HashMap::new();
+    {
+        let root_datasource: Datasource = Datasource::get_default_datasource_transact(trans, table_oid)?;
+        schema_to_datasource.insert(root_datasource.get_schema_oid()?, root_datasource.clone());
+
+        // Make sure all master tables of a root table are also included as a datasource
+        if let datasource::Datasource::Table { table_oid, .. } = root_datasource {
+            let table: table::FullMetadata = table::FullMetadata::get(table_oid.clone())?;
+            build_schema_to_datasource_mapping(&trans, &mut schema_to_datasource, table)?;
+        }
+    }
+
+    let mut query: query::QueryBuilder = query::QueryBuilder::new(schema_to_datasource.iter().map(|(_, schema_datasource)| schema_datasource.clone()).collect());
 
     // Apply ordering to the query
     let mut stmt_orderby = trans.prepare(
@@ -168,7 +375,8 @@ fn create_surrogate(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
         SELECT
             d.DATASOURCE_ALIAS,
             c.COLUMN_OID, 
-            c.SORT_ASCENDING 
+            c.SORT_ASCENDING,
+            d.IS_OPTIONAL
         FROM METADATA_SCHEMA_ORDERBY_VIEW c
         INNER JOIN (
             SELECT
@@ -187,8 +395,8 @@ fn create_surrogate(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
         ) d ON c.SCHEMA_OID = d.DATASOURCE_TABLE_OID
         "
     )?;
-    for row_result in stmt_orderby.query_map(params![table_oid], |row| { Ok::<(String, i64, bool), rusqlite::Error>((row.get("DATASOURCE_ALIAS")?, row.get::<_, i64>("COLUMN_OID")?, row.get::<_, bool>("SORT_ASCENDING")?)) })? {
-        let (datasource_alias, column_oid, sort_ascending) = row_result?;
+    for row_result in stmt_orderby.query_map(params![table_oid], |row| { Ok::<(String, i64, bool, bool), rusqlite::Error>((row.get("DATASOURCE_ALIAS")?, row.get::<_, i64>("COLUMN_OID")?, row.get::<_, bool>("SORT_ASCENDING")?, row.get::<_, bool>("IS_OPTIONAL")?)) })? {
+        let (datasource_alias, column_oid, sort_ascending, is_optional) = row_result?;
 
         // Construct the datasource
         let datasource_path: Vec<String> = datasource_alias.split('_').map(|s| String::from(s)).collect();

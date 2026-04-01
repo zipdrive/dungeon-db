@@ -2,8 +2,11 @@ use crate::util::channel::Sender;
 use crate::util::db;
 use crate::util::error::Error;
 use crate::data::{datasource, table, report};
+use rusqlite::types::Value;
+use rusqlite::vtab::array::Array;
 use rusqlite::{Connection, Transaction, OptionalExtension, params};
 use serde::{Serialize, Deserialize};
+use tauri::{AppHandle, Emitter};
 use std::collections::{HashSet, HashMap};
 use std::hash::{Hash, Hasher};
 use std::borrow::Borrow;
@@ -385,6 +388,9 @@ impl Schema {
 
 
 
+const UPDATE_SCHEMA_SIGNAL: &'static str = "schema";
+
+
 /// Data structure representing the schema metadata.
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[serde(rename_all="camelCase")]
@@ -590,6 +596,68 @@ impl FullMetadata {
             )?;
         }
 
+        Ok(())
+    }
+
+    /// Emit signal to update schema related to the indicated schemas.
+    pub fn query_affected_schema(app: &AppHandle, schema_oids: Vec<i64>) -> Result<(), Error> {
+        let conn = db::open()?;
+        for affected_schema_results in conn
+            .prepare(
+                "
+                WITH RECURSIVE BASE_AFFECTED_SCHEMA (OID) AS (
+                    SELECT
+                        OID
+                    FROM METADATA_SCHEMA
+                    WHERE OID IN rarray(?1)
+
+                    UNION
+
+                    SELECT
+                        INHERITOR_SCHEMA_OID
+                    FROM METADATA_SCHEMA_INHERITANCE_VIEW
+                    WHERE MASTER_SCHEMA_OID IN rarray(?1)
+                ), 
+                AFFECTED_FORMULAE (SCHEMA_OID, FORMULA_OID) AS (
+                    SELECT
+                        s.OID AS SCHEMA_OID,
+                        f.OID AS FORMULA_OID
+                    FROM BASE_AFFECTED_SCHEMA s
+                    INNER JOIN METADATA_DATASOURCE d ON d.TABLE_OID = s.OID
+                    INNER JOIN METADATA_COLUMN_TYPE__FORMULA f 
+                        ON f.FORMULA LIKE '%ROOT' || FORMAT('%d', d.OID) || '_%'
+                            OR f.FORMULA LIKE '%_MASTER' || FORMAT('%d', s.OID) || '_%'
+                            OR f.FORMULA LIKE '%_INHERITOR' || FORMAT('%d', s.OID) || '_%'
+
+                    UNION
+
+                    SELECT
+                        s.OID AS SCHEMA_OID,
+                        f.OID AS FORMULA_OID
+                    FROM BASE_AFFECTED_SCHEMA s
+                    INNER JOIN METADATA_COLUMN c ON c.SCHEMA_OID = s.OID
+                    INNER JOIN METADATA_COLUMN_TYPE__FORMULA f 
+                        ON f.FORMULA LIKE '%_COLUMN' || FORMAT('%d', c.OID) || '_%'
+
+                    UNION
+
+                    SELECT
+                        c.SCHEMA_OID AS SCHEMA_OID,
+                        fdep.OID AS FORMULA_OID
+                    FROM AFFECTED_FORMULAE f
+                    INNER JOIN METADATA_COLUMN c ON c.TYPE_OID = f.FORMULA_OID
+                    INNER JOIN METADATA_COLUMN_TYPE__FORMULA fdep ON fdep.FORMULA LIKE '%_COLUMN' || FORMAT('%d', c.OID) || '%'
+                )
+
+                SELECT OID FROM BASE_AFFECTED_SCHEMA
+                UNION
+                SELECT SCHEMA_OID AS OID FROM AFFECTED_FORMULAE
+                "
+            )?
+            .query_map(params![Array::new(schema_oids.into_iter().map(|i| Value::Integer(i)).collect())], |row| row.get::<_, i64>(0))? {
+            
+            app.emit(UPDATE_SCHEMA_SIGNAL, affected_schema_results?)?;
+        }
         Ok(())
     }
 }

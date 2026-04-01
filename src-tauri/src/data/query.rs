@@ -280,6 +280,55 @@ pub enum QueryBuilderColumn {
     }
 }
 
+impl QueryBuilderColumn {
+    pub fn get_label_expr(&self) -> String {
+        match self {
+            Self::Primitive { label_expr, .. }
+            | Self::File { label_expr, .. }
+            | Self::Object { label_expr, .. }
+            | Self::Select { label_expr, .. }
+            | Self::Multiselect { label_expr, .. }
+            | Self::Formula { label_expr, .. } => label_expr.clone(),
+            Self::Subreport { .. } => format!("'— NO PRIMARY KEY —'")
+        }
+    }
+
+    pub fn get_json_expr(&self, expr_when_null: String) -> String {
+        match self {
+            Self::Primitive { primitive_type, value_expr, label_expr, .. } => {
+                match primitive_type {
+                    column_type::Primitive::Text
+                    | column_type::Primitive::File
+                    | column_type::Primitive::Image => format!(r#"CASE WHEN {value_expr} IS NULL THEN {expr_when_null} ELSE '"' || REPLACE(REPLACE({label_expr}, '\', '\\'), '"', '\"') || '"' END"#),
+                    column_type::Primitive::Integer
+                    | column_type::Primitive::Number
+                    | column_type::Primitive::JSON => format!("CASE WHEN {value_expr} IS NULL THEN {expr_when_null} ELSE {value_expr} END"),
+                    column_type::Primitive::Date
+                    | column_type::Primitive::Datetime => format!(r#"CASE WHEN {value_expr} IS NULL THEN {expr_when_null} ELSE '"' || {label_expr} || '"' END"#),
+                    column_type::Primitive::Checkbox => format!("CASE WHEN {value_expr} IS NULL THEN {expr_when_null} WHEN {value_expr} THEN 'true' ELSE 'false' END")
+                }
+            }
+            Self::File { label_expr, file_expr, .. } => 
+                format!(r#"CASE WHEN {file_expr} IS NULL THEN {expr_when_null} ELSE '"' || REPLACE(REPLACE({label_expr}, '\', '\\'), '"', '\"') || '"' END"#),
+            Self::Object { json_expr, .. }
+            | Self::Select { json_expr, .. } => json_expr.clone(),
+            Self::Multiselect { label_expr, .. } => label_expr.clone(),
+            Self::Formula { label_expr, arg_expr, arg_return_type, .. } => {
+                match *arg_return_type {
+                    ScalarType::Integer
+                    | ScalarType::Number
+                    | ScalarType::JSON => format!("CASE WHEN {arg_expr} IS NULL THEN {expr_when_null} ELSE {arg_expr} END"),
+                    ScalarType::Date
+                    | ScalarType::Datetime => format!(r#"CASE WHEN {arg_expr} IS NULL THEN {expr_when_null} ELSE '"' || {label_expr} || '"' END"#),
+                    ScalarType::Boolean => format!("CASE WHEN {arg_expr} IS NULL THEN {expr_when_null} WHEN {arg_expr} THEN 'true' ELSE 'false' END"),
+                    _ => format!(r#"CASE WHEN {arg_expr} IS NULL THEN {expr_when_null} ELSE '"' || REPLACE(REPLACE({label_expr}, '\', '\\'), '"', '\"') || '"' END"#)
+                }
+            }
+            Self::Subreport { .. } => expr_when_null
+        }
+    }
+}
+
 
 
 pub struct QueryBuilder<'a> {

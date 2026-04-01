@@ -252,16 +252,7 @@ if (urlParamSchemaOid) {
     });
 
     listen<number>('schema', (e) => {
-        if (e.payload == schemaOid) {
-            reloadAllCells();
-        }
-    });
-    listen<number>('table', (e) => {
-        if (e.payload == schemaOid) {
-            reloadAllCells();
-        }
-    });
-    listen<number>('report', (e) => {
+        console.debug(`schemaOid: ${e.payload}`);
         if (e.payload == schemaOid) {
             reloadAllCells();
         }
