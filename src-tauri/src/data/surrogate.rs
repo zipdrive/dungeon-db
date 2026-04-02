@@ -11,9 +11,9 @@ use crate::data::column_type;
 
 
 pub struct Surrogate {
-    oid_expr: String,
-    label_expr: String,
-    json_expr: String 
+    pub oid_expr: String,
+    pub label_expr: String,
+    pub json_expr: String 
 }
 
 impl Surrogate {
@@ -76,11 +76,14 @@ impl Surrogate {
             base_columns.push(column_metadata);
         }
 
+        let mut expanded_surrogate_table_oid_chain: Vec<i64> = surrogate_table_oid_chain.clone();
+        expanded_surrogate_table_oid_chain.push(schema_oid);
+
         if base_columns.len() > 1 {
             let mut json_exprs: Vec<String> = Vec::new();
             for base_column in base_columns {
                 let column_name: String = base_column.name.clone();
-                let col = query.compile_column(Some(&schema_to_datasource[&base_column.schema.oid]), base_column)?;
+                let col = query.compile_column(Some(&schema_to_datasource[&base_column.schema.oid]), base_column, expanded_surrogate_table_oid_chain)?;
                 json_exprs.push(format!(
                     r#"'"{}": ' || {}"#,
                     column_name.replace("\\", "\\\\").replace("\"", "\\\""),
@@ -98,7 +101,7 @@ impl Surrogate {
                 json_expr
             })
         } else if base_columns.len() == 1 {
-            let col = query.compile_column(Some(&schema_to_datasource[&base_columns[0].schema.oid]), base_columns[0])?;
+            let col = query.compile_column(Some(&schema_to_datasource[&base_columns[0].schema.oid]), base_columns[0].clone(), expanded_surrogate_table_oid_chain)?;
             Ok(Self {
                 oid_expr,
                 label_expr: col.get_label_expr(),

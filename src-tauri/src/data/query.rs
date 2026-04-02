@@ -1,6 +1,6 @@
 use rusqlite::{Connection, Transaction, params};
 use crate::data::datasource::Datasource;
-use crate::data::{self, column, column_type, datasource, report, schema, table};
+use crate::data::{self, column, column_type, datasource, report, schema, surrogate, table};
 use crate::util::formula::Formula;
 use crate::util::db;
 use crate::util::error::Error;
@@ -370,19 +370,6 @@ impl<'a> QueryBuilder<'a> {
             query.insert_datasource(initial_datasource);
         }
         return query;
-    }
-
-    /// Creates a new subquery.
-    fn new_subquery(query: &'a mut Self) -> Self {
-        Self {
-            parent_query: Some(query),
-            tables_and_subqueries: VecDeque::new(),
-            columns: Vec::new(),
-            pregroup_filters: Vec::new(),
-            group_by_indices: Vec::new(),
-            postgroup_filters: Vec::new(),
-            order_by_indices: Vec::new()
-        }
     }
 
     /// Compiles the query into SQL.
@@ -775,13 +762,13 @@ impl<'a> QueryBuilder<'a> {
 
     /// Inserts a column definition.
     pub fn insert_column(&mut self, column_datasource: Option<&Datasource>, column_metadata: column::FullMetadata) -> Result<(), Error> {
-        let column: QueryBuilderColumn = self.compile_column(column_datasource, column_metadata)?;
+        let column: QueryBuilderColumn = self.compile_column(column_datasource, column_metadata, vec![])?;
         self.columns.push(column);
         Ok(())
     }
 
     /// Compiles the SQL expressions for a column.
-    pub fn compile_column(&mut self, column_datasource: Option<&Datasource>, column_metadata: column::FullMetadata) -> Result<QueryBuilderColumn, Error> {
+    pub fn compile_column(&mut self, column_datasource: Option<&Datasource>, column_metadata: column::FullMetadata, surrogate_table_oid_chain: Vec<i64>) -> Result<QueryBuilderColumn, Error> {
         Ok(match column_metadata.column_type {
             column_type::ColumnType::Primitive(prim) => {
                 let datasource_alias: String = self.insert_datasource(if let Some(d) = column_datasource {
@@ -860,9 +847,14 @@ impl<'a> QueryBuilder<'a> {
                 );
                 let object_query_string_ord: String = format!("VALUE{}", self.columns.len());
                 let label_ord: String = format!("LABEL{}", self.columns.len());
+                let surrogate: surrogate::Surrogate = {
+                    let conn = db::open()?;
+                    let datasource: Datasource = Datasource::Column { parent_datasource: Box::new(column_datasource.unwrap().clone()), column: column_metadata.clone() };
+                    surrogate::Surrogate::get_flat(&conn, self, datasource, surrogate_table_oid_chain)?
+                };
                 QueryBuilderColumn::Object { 
-                    label_expr: format!("(SELECT LABEL FROM TABLE{table_oid}_SURROGATE WHERE OID = {primitive_value_alias})"),
-                    json_expr: format!("(SELECT JSON_LABEL FROM TABLE{table_oid}_SURROGATE WHERE OID = {primitive_value_alias})"),
+                    label_expr: surrogate.label_expr,
+                    json_expr: surrogate.json_expr,
                     object_query_string_expr: format!("CASE WHEN {primitive_value_alias} IS NULL THEN NULL ELSE 'ROOT' || FORMAT('%d', (SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = {table_oid} LIMIT 1)) || '=' || FORMAT('%d', {primitive_value_alias}) END"),
                     label_ord, 
                     object_schema_oid: table_oid,
@@ -885,9 +877,14 @@ impl<'a> QueryBuilder<'a> {
                 );
                 let select_row_ord: String = format!("VALUE{}", self.columns.len());
                 let label_ord: String = format!("LABEL{}", self.columns.len());
+                let surrogate: surrogate::Surrogate = {
+                    let conn = db::open()?;
+                    let datasource: Datasource = Datasource::Column { parent_datasource: Box::new(column_datasource.unwrap().clone()), column: column_metadata.clone() };
+                    surrogate::Surrogate::get_flat(&conn, self, datasource, surrogate_table_oid_chain)?
+                };
                 QueryBuilderColumn::Select { 
-                    label_expr: format!("(SELECT LABEL FROM TABLE{table_oid}_SURROGATE WHERE OID = {primitive_value_alias})"),
-                    json_expr: format!("(SELECT JSON_LABEL FROM TABLE{table_oid}_SURROGATE WHERE OID = {primitive_value_alias})"),
+                    label_expr: surrogate.label_expr,
+                    json_expr: surrogate.json_expr,
                     select_row_expr: primitive_value_alias,
                     label_ord, 
                     select_schema_oid: table_oid,
@@ -915,29 +912,28 @@ impl<'a> QueryBuilder<'a> {
                 );
                 let select_row_ord: String = format!("VALUE{}", self.columns.len());
                 let label_ord: String = format!("LABEL{}", self.columns.len());
+
+                // Construct subquery for the surrogate label
+                let mut surrogate_subquery: QueryBuilder<'_> = QueryBuilder::<'_> {
+                    parent_query: Some(self),
+                    tables_and_subqueries: VecDeque::new(),
+                    columns: Vec::new(),
+                    pregroup_filters: Vec::new(),
+                    group_by_indices: Vec::new(),
+                    postgroup_filters: Vec::new(),
+                    order_by_indices: Vec::new()
+                };
+                let surrogate: surrogate::Surrogate = {
+                    let conn = db::open()?;
+                    let datasource: Datasource = Datasource::Column { parent_datasource: Box::new(column_datasource.clone()), column: column_metadata.clone() };
+                    surrogate::Surrogate::get_flat(&conn, &mut surrogate_subquery, datasource, surrogate_table_oid_chain)?
+                };
+                let Some((surrogate_subquery_from, _)) = surrogate_subquery.compile_datasources()? else {
+                    return Err(Error::AdhocError("Subquery for the Multiselect column failed to compile."));
+                };
+
                 QueryBuilderColumn::Multiselect { 
-                    label_expr: if inverted {
-                        format!("(
-                                SELECT '[' || GROUP_CONCAT(a.JSON_LABEL) || ']' 
-                                FROM MULTISELECT{} m
-                                INNER JOIN TABLE{}_SURROGATE a ON m.TABLE{}_OID = a.OID
-                                WHERE m.TABLE{table_oid}_OID = {primitive_value_alias}
-                            )",
-                            column_metadata.oid,
-                            column_metadata.schema.oid,
-                            column_metadata.schema.oid
-                        )
-                    } else {
-                        format!("(
-                                SELECT '[' || GROUP_CONCAT(a.JSON_LABEL) || ']' 
-                                FROM MULTISELECT{} m 
-                                INNER JOIN TABLE{table_oid}_SURROGATE a ON m.TABLE{table_oid}_OID = a.OID
-                                WHERE m.TABLE{}_OID = {primitive_value_alias}
-                            )",
-                            column_metadata.oid,
-                            column_metadata.schema.oid
-                        )
-                    },
+                    label_expr: format!("(SELECT '[' || GROUP_CONCAT({}) || ']' {surrogate_subquery_from})", surrogate.json_expr),
                     select_row_expr: if inverted {
                         format!("(
                                 SELECT GROUP_CONCAT(CAST(TABLE{}_OID AS TEXT)) 
