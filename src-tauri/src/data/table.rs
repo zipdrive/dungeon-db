@@ -70,9 +70,6 @@ impl FullMetadata {
         // Create a datasource for the table
         trans.execute("INSERT INTO METADATA_DATASOURCE (TABLE_OID) VALUES (?1)", params![self.schema.oid])?;
 
-        // Generate the surrogate view
-        surrogate::regenerate_surrogate(&trans, self.schema.oid)?;
-
         // Commit the transaction
         trans.commit()?;
         Ok(())
@@ -85,9 +82,6 @@ impl FullMetadata {
 
         // Overwrite the schema metadata
         self.schema.set(&trans)?;
-
-        // Regenerate the surrogate view
-        surrogate::regenerate_surrogate(&trans, self.schema.oid)?;
 
         // Commit the transaction
         trans.commit()?;

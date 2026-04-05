@@ -8,7 +8,8 @@ use std::{cell, collections::HashSet};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
-use crate::data::{datasource::Datasource, query::QueryBuilder, row};
+use crate::data::{datasource::Datasource, row};
+use crate::data::query::{QueryBuilder};
 use crate::util::channel::Sender;
 use crate::util::error::Error;
 use crate::util::db;
@@ -203,7 +204,7 @@ impl Cell {
                 let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(&conn, column_oid)?;
                 
                 // Build query to get data for each column in the schema
-                let mut query: query::QueryBuilder = query::QueryBuilder::new(vec![table_datasource.clone()]);
+                let mut query: query::QueryBuilder = query::QueryBuilder::new(vec![table_datasource.clone()])?;
                 query.insert_column(Some(&table_datasource), column_metadata)?;
 
                 // Filter based on the particular row in the table
@@ -217,7 +218,7 @@ impl Cell {
                 let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(&conn, column_oid)?;
                 
                 // Build query to get data for each column in the schema
-                let mut query: query::QueryBuilder = query::QueryBuilder::new(Vec::new());
+                let mut query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
                 query.insert_column(None, column_metadata)?;
 
                 // Filter based on the particular row in the table
@@ -322,7 +323,7 @@ impl Cell {
         }
         
         // Build query to get data for each column in the schema
-        let mut query: query::QueryBuilder = query::QueryBuilder::new(initial_datasources);
+        let mut query: query::QueryBuilder = query::QueryBuilder::new(initial_datasources)?;
         column::FullMetadata::query_by_schema(
             Sender::Callback(Box::new(|col: column::FullMetadata| -> Result<(), Error> {
                 // Add column to query
@@ -393,6 +394,20 @@ impl Cell {
         if let Some((cmd_query, cols, datasource_aliases)) = query.compile()? {
             println!("Query compiled successfully.\n{cmd_query}");
 
+            // First, check for which datasources in the query are unfixed
+            let mut unfixed_datasources: HashSet<Datasource> = HashSet::new();
+            for datasource_alias in datasource_aliases.iter() {
+                let datasource_path: Vec<String> = datasource_alias.split('_').map(|s| String::from(s)).collect();
+                let datasource: Datasource = Datasource::from_path(datasource_path)?;
+                let base_datasource: Datasource = datasource.seek_basis()?;
+                let base_datasource_alias: String = base_datasource.get_alias();
+
+                // A datasource is fixed if it or a datasource that branches from it is filtered
+                if !filters.iter().any(|(fixed_datasource_alias, _)| fixed_datasource_alias.starts_with(&base_datasource_alias)) {
+                    unfixed_datasources.insert(base_datasource);
+                }
+            }
+
             // First, get the maximum index
             let cmd_max_index_query = format!("SELECT ROW_INDEX FROM ({cmd_query}) ORDER BY ROW_INDEX DESC LIMIT 1");
             cell_sender.send(
@@ -426,35 +441,17 @@ impl Cell {
                 }
 
                 // Determine if there is a specific schema that can be used to identify the row
-                let row_identifier: Option<(i64, i64)> = {
-                    // Iterate over all filters that identify the row
-                    let mut filter_iter = filters.iter();
-                    if let Some((lowest_level_datasource_alias, lowest_level_datasource_row_oid)) = match filter_iter.next() {
-                        None => None,
-                        Some(mut current_lowest_level_filter) => {
-                            loop {
-                                match filter_iter.next() {
-                                    Some(filter) => {
-                                        if current_lowest_level_filter.0.starts_with(&filter.0) {
-                                            // Continue
-                                        } else if filter.0.starts_with(&current_lowest_level_filter.0) {
-                                            current_lowest_level_filter = filter;
-                                        } else {
-                                            break None;
-                                        }
-                                    }
-                                    None => {
-                                        break Some(current_lowest_level_filter.clone());
-                                    }
-                                }
-                            }
-                        }
-                    } {
-                        let lowest_level_datasource: Datasource = Datasource::from_path(lowest_level_datasource_alias.split('_').map(|s| String::from(s)).collect())?;
-                        Some((lowest_level_datasource.get_schema_oid()?, lowest_level_datasource_row_oid))
+                let row_identifier: Option<(i64, i64)> = if unfixed_datasources.len() == 1 {
+                    let datasource = unfixed_datasources.iter().next().unwrap();
+                    let datasource_schema_oid: i64 = datasource.get_schema_oid()?;
+                    let datasource_row_alias: String = format!("{}_OID", datasource.get_alias());
+                    if let Some(datasource_row_oid) = row.get::<&str, Option<i64>>(&datasource_row_alias)? {
+                        Some((datasource_schema_oid, datasource_row_oid))
                     } else {
                         None
                     }
+                } else {
+                    None
                 };
 
                 // First, send a header for the row
@@ -731,18 +728,6 @@ impl Cell {
             if row_count < limit.get_size() {
                 // Assuming there is space for an Add New Row button, it is allowed to create a new row 
                 // if there is only a single unfixed root or 1-to-* datasource.
-                let mut unfixed_datasources: HashSet<Datasource> = HashSet::new();
-                for datasource_alias in datasource_aliases {
-                    let datasource_path: Vec<String> = datasource_alias.split('_').map(|s| String::from(s)).collect();
-                    let datasource: Datasource = Datasource::from_path(datasource_path)?;
-                    let base_datasource: Datasource = datasource.seek_basis()?;
-                    let base_datasource_alias: String = base_datasource.get_alias();
-
-                    // A datasource is fixed if it or a datasource that branches from it is filtered
-                    if !filters.iter().any(|(fixed_datasource_alias, _)| fixed_datasource_alias.starts_with(&base_datasource_alias)) {
-                        unfixed_datasources.insert(base_datasource);
-                    }
-                }
 
                 // According to the above rule, check that there is only one unfixed root and/or 1-to-* datasource.
                 if unfixed_datasources.len() == 1 {

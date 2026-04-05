@@ -4,9 +4,11 @@ use crate::data::{self, column, column_type, datasource, report, schema, surroga
 use crate::util::formula::Formula;
 use crate::util::db;
 use crate::util::error::Error;
+use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
-use std::borrow::Borrow;
+use std::borrow::{Borrow, BorrowMut};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::rc::{Rc, Weak};
 use bitflags::bitflags;
 
 
@@ -331,10 +333,7 @@ impl QueryBuilderColumn {
 
 
 
-pub struct QueryBuilder<'a> {
-    /// The query wrapping this one, if this query is not the top-level query.
-    parent_query: Option<&'a mut QueryBuilder<'a>>,
-
+struct InternalQueryBuilder {
     /// The tables and subqueries that the SELECT statement pulls data from.
     tables_and_subqueries: VecDeque<TableOrSubquery>,
 
@@ -354,23 +353,19 @@ pub struct QueryBuilder<'a> {
     order_by_indices: Vec<(usize, bool)>
 }
 
-impl<'a> QueryBuilder<'a> {
-    /// Creates a new top-level query.
-    pub fn new(initial_datasources: Vec<Datasource>) -> Self {
-        let mut query: Self = Self {
-            parent_query: None,
+impl InternalQueryBuilder {
+    /// Creates a new query with the provided datasources.
+    pub fn new() -> Self {
+        Self {
             tables_and_subqueries: VecDeque::new(),
             columns: Vec::new(),
             pregroup_filters: Vec::new(),
             group_by_indices: Vec::new(),
             postgroup_filters: Vec::new(),
             order_by_indices: Vec::new()
-        };
-        for initial_datasource in initial_datasources.iter() {
-            query.insert_datasource(initial_datasource);
         }
-        return query;
     }
+
 
     /// Compiles the query into SQL.
     /// The first element of the returned tuple is the SQL for the query.
@@ -530,7 +525,7 @@ impl<'a> QueryBuilder<'a> {
 
     /// Compiles the datasources of the query into SQL.
     /// This compilation excludes the columns, but includes FROM, JOIN, WHERE, GROUP BY, and ORDER BY clauses.
-    pub fn compile_datasources(mut self) -> Result<Option<(String, Vec<String>)>, Error> {
+    pub fn compile_datasources(mut self, include_index: bool) -> Result<Option<(String, Vec<String>)>, Error> {
         // Compile list of datasource aliases
         let datasource_aliases: Vec<String> = self.tables_and_subqueries.iter()
             .filter_map(|table_or_subquery| match table_or_subquery {
@@ -568,7 +563,14 @@ impl<'a> QueryBuilder<'a> {
 
         Ok(Some((
             format!(
-                ", ROW_NUMBER() OVER ({orderby_expression}) AS ROW_INDEX FROM {} {} {} {}",
+                "{} FROM {} {} {} {}",
+
+                // Index column
+                if include_index {
+                    format!(", ROW_NUMBER() OVER ({orderby_expression}) AS ROW_INDEX")
+                } else {
+                    String::from("")
+                },
 
                 // Table and subquery expressions
                 {
@@ -651,20 +653,100 @@ impl<'a> QueryBuilder<'a> {
         )))
     }
 
+
     /// Checks if the query already has a table or subquery with the given alias.
     pub fn has_table_or_subquery_alias(&self, alias: &String) -> bool {
-        if self.tables_and_subqueries.iter().any(|table_or_subquery| <TableOrSubquery as Borrow<String>>::borrow(table_or_subquery) == alias) {
-            true
-        } else if let Some(parent_query) = &self.parent_query {
-            parent_query.has_table_or_subquery_alias(alias)
-        } else {
-            false
+        self.tables_and_subqueries.iter().any(|table_or_subquery| 
+            <TableOrSubquery as Borrow<String>>::borrow(table_or_subquery) == alias
+        )
+    }
+}
+
+
+pub struct QueryBuilder {
+    working_tree: Vec<Rc<RefCell<InternalQueryBuilder>>>,
+    leaf: Rc<RefCell<InternalQueryBuilder>>
+}
+
+impl QueryBuilder {
+    /// Creates a new, top-level QueryBuilder.
+    pub fn new(initial_datasources: Vec<Datasource>) -> Result<Self, Error> {
+        let mut query: Self = Self {
+            working_tree: Vec::new(),
+            leaf: Rc::new(RefCell::new(InternalQueryBuilder::new()))
+        };
+        for initial_datasource in initial_datasources {
+            query.insert_datasource(&initial_datasource)?;
+        }
+        return Ok(query);
+    }
+
+    /// Spawns a nested QueryBuilder.
+    pub fn spawn(&mut self) -> QueryBuilder {
+        let mut new_working_tree: Vec<Rc<RefCell<InternalQueryBuilder>>> = self.working_tree.clone();
+        new_working_tree.push(self.leaf.clone());
+        QueryBuilder { 
+            working_tree: new_working_tree, 
+            leaf: Rc::new(RefCell::new(InternalQueryBuilder::new()))
         }
     }
 
+
+
+    /// Compiles the query into SQL.
+    /// The first element of the returned tuple is the SQL for the query.
+    /// The second element of the returned tuple is the columns returned by the query.
+    /// The third element of the returned tuple is a list of aliases for each datasource used by the query.
+    pub fn compile(mut self) -> Result<Option<(String, Vec<QueryBuilderColumn>, Vec<String>)>, Error> {
+        if let Some(consumed_leaf_cell) = Rc::into_inner(self.leaf) {
+            consumed_leaf_cell.into_inner().compile()
+        } else {
+            Err(Error::AdhocError("Unable to consume leaf query due to outstanding references."))
+        }
+    }
+
+    /// Compiles the datasources of the query into SQL.
+    /// This compilation excludes the columns, but includes FROM, JOIN, WHERE, GROUP BY, and ORDER BY clauses.
+    pub fn compile_datasources(mut self, include_index: bool) -> Result<Option<(String, Vec<String>)>, Error> {
+        if let Some(consumed_leaf_cell) = Rc::into_inner(self.leaf) {
+            consumed_leaf_cell.into_inner().compile_datasources(include_index)
+        } else {
+            Err(Error::AdhocError("Unable to consume leaf query due to outstanding references."))
+        }
+    }
+
+
+
+    /// Borrows an immutable reference to the leaf InternalQueryBuilder.
+    fn borrow_leaf(&self) -> std::cell::Ref<InternalQueryBuilder> {
+        (*self.leaf).borrow()
+    }
+
+    /// Borrows a mutable reference to the leaf InternalQueryBuilder.
+    fn borrow_leaf_mut(&mut self) -> std::cell::RefMut<InternalQueryBuilder> {
+        (*self.leaf).borrow_mut()
+    }
+
+
+    /// Checks if the query already has a table or subquery with the given alias.
+    fn has_table_or_subquery_alias(&self, alias: &String) -> bool {
+        if self.borrow_leaf().has_table_or_subquery_alias(alias) {
+            true 
+        } else {
+            self.working_tree.iter().any(|q| (**q).borrow().has_table_or_subquery_alias(alias))
+        }
+    }
+
+    /// Retrieves the column # of the next column.
+    fn get_column_num(&self) -> usize {
+        self.borrow_leaf().columns.len()
+    }
+
+
+
     /// Inserts the datasource into the query.
     /// Returns the alias of the datasource.
-    fn insert_datasource(&mut self, dt: &Datasource) -> Result<String, Error> {
+    pub fn insert_datasource(&mut self, dt: &Datasource) -> Result<String, Error> {
         let alias: String = dt.get_alias();
         let schema_oid: i64 = dt.get_schema_oid()?;
 
@@ -672,20 +754,12 @@ impl<'a> QueryBuilder<'a> {
         if self.has_table_or_subquery_alias(&alias) {
             // Return the alias of the datasource
             return Ok(alias);
-        } else if let Some(parent_query) = &mut self.parent_query {
-            // Test if the parent query is already pulling from a datasource that has a 1-to-1 relationship with this datasource
-            let deep_parent: Datasource = dt.seek_basis()?;
-            let deep_alias: String = deep_parent.get_alias();
-            if parent_query.has_table_or_subquery_alias(&deep_alias) {
-                // If it does, then insert the datasource into the parent instead
-                return parent_query.insert_datasource(dt);
-            }
         }
-
+        
         // Branch based on datasource type
         let table_or_subquery = match dt {
             Datasource::Table { .. } => {
-                self.pregroup_filters.push(format!("NOT {alias}.TRASH"));
+                self.borrow_leaf_mut().pregroup_filters.push(format!("NOT {alias}.TRASH"));
 
                 TableOrSubquery::RootDatasource { datasource: dt.clone(), alias }
             },
@@ -756,16 +830,87 @@ impl<'a> QueryBuilder<'a> {
             let alias_ref: &String = table_or_subquery.borrow();
             alias_ref.clone()    
         };
-        self.tables_and_subqueries.push_back(table_or_subquery);
+        self.borrow_leaf_mut().tables_and_subqueries.push_back(table_or_subquery);
         return Ok(alias);
     }
 
     /// Inserts a column definition.
     pub fn insert_column(&mut self, column_datasource: Option<&Datasource>, column_metadata: column::FullMetadata) -> Result<(), Error> {
         let column: QueryBuilderColumn = self.compile_column(column_datasource, column_metadata, vec![])?;
-        self.columns.push(column);
+        self.borrow_leaf_mut().columns.push(column);
         Ok(())
     }
+
+    /// Applies a filter to the rows returned by the query.
+    pub fn insert_filter(&mut self, formula: String) -> Result<(), Error> {
+        // Parse the formula for the filter
+        let parsed_formula: Formula = Formula::parse(formula)?;
+        let parsed_formula_name: String = parsed_formula.to_string();
+        // Compile the formula into SQL
+        let compiled_formula: ScalarExpression = self.compile_scalar_formula(Box::new(parsed_formula), vec![])?;
+        
+        // Confirm that the compiled formula is a boolean
+        if !ScalarType::Boolean.contains(compiled_formula.arg_return_type.clone()) {
+            return Err(Error::FormulaTypeValidationError { 
+                outer_name: "REPORT FILTER", 
+                inner_name: parsed_formula_name, 
+                expected_type: ScalarType::Boolean.to_string(), 
+                received_type: compiled_formula.arg_return_type.to_string()
+            });
+        }
+
+        // Apply the filter after GROUP BY
+        self.borrow_leaf_mut().postgroup_filters.push(compiled_formula.arg_expr);
+        Ok(())
+    }
+
+    /// Applies a filter to return a specific row from a datasource.
+    pub fn insert_row_filter(&mut self, table_or_subquery_alias: String, table_or_subquery_row_oid: i64) {
+        if self.has_table_or_subquery_alias(&table_or_subquery_alias) {
+            self.borrow_leaf_mut().pregroup_filters.push(format!("{table_or_subquery_alias}.OID = {table_or_subquery_row_oid}"));
+        }
+    }
+
+    /// Groups the rows returned by the query based on a column of the query.
+    pub fn insert_grouping(&mut self, column_oid: i64) -> Result<(), Error> {
+        let mut leaf_mut = self.borrow_leaf_mut();
+        if let Some(idx) = leaf_mut.columns.iter().position(|col| match col {
+            QueryBuilderColumn::Primitive { column_oid: c, .. }
+            | QueryBuilderColumn::File { column_oid: c, .. }
+            | QueryBuilderColumn::Object { column_oid: c, .. }
+            | QueryBuilderColumn::Select { column_oid: c, .. }
+            | QueryBuilderColumn::Multiselect { column_oid: c, .. }
+            | QueryBuilderColumn::Formula { column_oid: c, .. }
+            | QueryBuilderColumn::Subreport { column_oid: c, .. } => column_oid == *c
+        }) {
+            leaf_mut.group_by_indices.push(idx);
+            return Ok(());
+        } else {
+            return Err(Error::AdhocError("The report is grouped by a column that does not exist in the report!"));
+        }
+    }
+
+    /// Orders the rows returned by the query based on a column of the query.
+    pub fn insert_ordering(&mut self, column_oid: i64, sort_ascending: bool) -> Result<(), Error> {
+        let mut leaf_mut = self.borrow_leaf_mut();
+        if let Some(idx) = leaf_mut.columns.iter().position(|col| match col {
+            QueryBuilderColumn::Primitive { column_oid: c, .. }
+            | QueryBuilderColumn::File { column_oid: c, .. }
+            | QueryBuilderColumn::Object { column_oid: c, .. }
+            | QueryBuilderColumn::Select { column_oid: c, .. }
+            | QueryBuilderColumn::Multiselect { column_oid: c, .. }
+            | QueryBuilderColumn::Formula { column_oid: c, .. }
+            | QueryBuilderColumn::Subreport { column_oid: c, .. } => column_oid == *c
+        }) {
+            leaf_mut.order_by_indices.push((idx, sort_ascending));
+            return Ok(());
+        } else {
+            return Err(Error::AdhocError("The report is sorted by a column that does not exist in the report!"));
+        }
+    }
+
+
+
 
     /// Compiles the SQL expressions for a column.
     pub fn compile_column(&mut self, column_datasource: Option<&Datasource>, column_metadata: column::FullMetadata, surrogate_table_oid_chain: Vec<i64>) -> Result<QueryBuilderColumn, Error> {
@@ -781,14 +926,14 @@ impl<'a> QueryBuilder<'a> {
                     datasource_alias,
                     column_metadata.oid
                 );
-                let label_ord: String = format!("LABEL{}", self.columns.len());
+                let label_ord: String = format!("LABEL{}", self.get_column_num());
                 match &prim {
                     column_type::Primitive::File 
                     | column_type::Primitive::Image => QueryBuilderColumn::File {
                         label_expr: format!("(SELECT LABEL FROM METADATA_FILE_VIEW WHERE OID = {primitive_value_alias})"),
                         file_expr: primitive_value_alias,
                         label_ord,
-                        file_ord: format!("VALUE{}", self.columns.len()),
+                        file_ord: format!("VALUE{}", self.get_column_num()),
                         schema_oid: column_metadata.schema.oid,
                         schema_row_ord: format!("{datasource_alias}_OID"),
                         column_oid: column_metadata.oid
@@ -845,8 +990,8 @@ impl<'a> QueryBuilder<'a> {
                     datasource_alias,
                     column_metadata.oid
                 );
-                let object_query_string_ord: String = format!("VALUE{}", self.columns.len());
-                let label_ord: String = format!("LABEL{}", self.columns.len());
+                let object_query_string_ord: String = format!("VALUE{}", self.get_column_num());
+                let label_ord: String = format!("LABEL{}", self.get_column_num());
                 let surrogate: surrogate::Surrogate = {
                     let conn = db::open()?;
                     let datasource: Datasource = Datasource::Column { parent_datasource: Box::new(column_datasource.unwrap().clone()), column: column_metadata.clone() };
@@ -875,8 +1020,8 @@ impl<'a> QueryBuilder<'a> {
                     datasource_alias,
                     column_metadata.oid
                 );
-                let select_row_ord: String = format!("VALUE{}", self.columns.len());
-                let label_ord: String = format!("LABEL{}", self.columns.len());
+                let select_row_ord: String = format!("VALUE{}", self.get_column_num());
+                let label_ord: String = format!("LABEL{}", self.get_column_num());
                 let surrogate: surrogate::Surrogate = {
                     let conn = db::open()?;
                     let datasource: Datasource = Datasource::Column { parent_datasource: Box::new(column_datasource.unwrap().clone()), column: column_metadata.clone() };
@@ -910,30 +1055,28 @@ impl<'a> QueryBuilder<'a> {
                     "{}.OID", 
                     datasource_alias
                 );
-                let select_row_ord: String = format!("VALUE{}", self.columns.len());
-                let label_ord: String = format!("LABEL{}", self.columns.len());
+                let select_row_ord: String = format!("VALUE{}", self.get_column_num());
+                let label_ord: String = format!("LABEL{}", self.get_column_num());
 
                 // Construct subquery for the surrogate label
-                let mut surrogate_subquery: QueryBuilder<'_> = QueryBuilder::<'_> {
-                    parent_query: Some(self),
-                    tables_and_subqueries: VecDeque::new(),
-                    columns: Vec::new(),
-                    pregroup_filters: Vec::new(),
-                    group_by_indices: Vec::new(),
-                    postgroup_filters: Vec::new(),
-                    order_by_indices: Vec::new()
-                };
+                let mut surrogate_subquery: QueryBuilder = self.spawn();
                 let surrogate: surrogate::Surrogate = {
                     let conn = db::open()?;
                     let datasource: Datasource = Datasource::Column { parent_datasource: Box::new(column_datasource.clone()), column: column_metadata.clone() };
                     surrogate::Surrogate::get_flat(&conn, &mut surrogate_subquery, datasource, surrogate_table_oid_chain)?
                 };
-                let Some((surrogate_subquery_from, _)) = surrogate_subquery.compile_datasources()? else {
-                    return Err(Error::AdhocError("Subquery for the Multiselect column failed to compile."));
-                };
 
                 QueryBuilderColumn::Multiselect { 
-                    label_expr: format!("(SELECT '[' || GROUP_CONCAT({}) || ']' {surrogate_subquery_from})", surrogate.json_expr),
+                    label_expr: format!(
+                        "(SELECT '[' || GROUP_CONCAT({}) || ']' {})", 
+                        surrogate.json_expr,
+                        match surrogate_subquery.compile_datasources(false)? {
+                            Some((f, _)) => f,
+                            None => {
+                                return Err(Error::AdhocError("Subquery for the Multiselect column failed to compile."));
+                            }
+                        }
+                    ),
                     select_row_expr: if inverted {
                         format!("(
                                 SELECT GROUP_CONCAT(CAST(TABLE{}_OID AS TEXT)) 
@@ -963,14 +1106,14 @@ impl<'a> QueryBuilder<'a> {
             }
             column_type::ColumnType::Formula { formula, .. } => {
                 // Construct the ordinals for this column
-                let value_ord: String = format!("VALUE{}", self.columns.len());
-                let label_ord: String = format!("LABEL{}", self.columns.len());
-                let param_ord: String = format!("PARAM{}", self.columns.len());
+                let value_ord: String = format!("VALUE{}", self.get_column_num());
+                let label_ord: String = format!("LABEL{}", self.get_column_num());
+                let param_ord: String = format!("PARAM{}", self.get_column_num());
 
                 // Parse the formula
                 let parsed_formula: Box<Formula> = Box::new(Formula::parse(formula)?);
                 // Compile the formula into a scalar SQL value
-                let scalar_sql: ScalarExpression = self.compile_scalar_formula(parsed_formula)?;
+                let scalar_sql: ScalarExpression = self.compile_scalar_formula(parsed_formula, surrogate_table_oid_chain)?;
                 // Construct column
                 QueryBuilderColumn::Formula { 
                     schema_oid: column_metadata.schema.oid, 
@@ -1005,75 +1148,8 @@ impl<'a> QueryBuilder<'a> {
         })
     }
 
-    /// Applies a filter to the rows returned by the query.
-    pub fn insert_filter(&mut self, formula: String) -> Result<(), Error> {
-        // Parse the formula for the filter
-        let parsed_formula: Formula = Formula::parse(formula)?;
-        let parsed_formula_name: String = parsed_formula.to_string();
-        // Compile the formula into SQL
-        let compiled_formula: ScalarExpression = self.compile_scalar_formula(Box::new(parsed_formula))?;
-        
-        // Confirm that the compiled formula is a boolean
-        if !ScalarType::Boolean.contains(compiled_formula.arg_return_type.clone()) {
-            return Err(Error::FormulaTypeValidationError { 
-                outer_name: "REPORT FILTER", 
-                inner_name: parsed_formula_name, 
-                expected_type: ScalarType::Boolean.to_string(), 
-                received_type: compiled_formula.arg_return_type.to_string()
-            });
-        }
-
-        // Apply the filter after GROUP BY
-        self.postgroup_filters.push(compiled_formula.arg_expr);
-        Ok(())
-    }
-
-    /// Applies a filter to return a specific row from a datasource.
-    pub fn insert_row_filter(&mut self, table_or_subquery_alias: String, table_or_subquery_row_oid: i64) {
-        if self.has_table_or_subquery_alias(&table_or_subquery_alias) {
-            self.pregroup_filters.push(format!("{table_or_subquery_alias}.OID = {table_or_subquery_row_oid}"));
-        }
-    }
-
-    /// Groups the rows returned by the query based on a column of the query.
-    pub fn insert_grouping(&mut self, column_oid: i64) -> Result<(), Error> {
-        if let Some(idx) = self.columns.iter().position(|col| match col {
-            QueryBuilderColumn::Primitive { column_oid: c, .. }
-            | QueryBuilderColumn::File { column_oid: c, .. }
-            | QueryBuilderColumn::Object { column_oid: c, .. }
-            | QueryBuilderColumn::Select { column_oid: c, .. }
-            | QueryBuilderColumn::Multiselect { column_oid: c, .. }
-            | QueryBuilderColumn::Formula { column_oid: c, .. }
-            | QueryBuilderColumn::Subreport { column_oid: c, .. } => column_oid == *c
-        }) {
-            self.group_by_indices.push(idx);
-            return Ok(());
-        } else {
-            return Err(Error::AdhocError("The report is grouped by a column that does not exist in the report!"));
-        }
-    }
-
-    /// Groups the rows returned by the query based on a column of the query.
-    pub fn insert_ordering(&mut self, column_oid: i64, sort_ascending: bool) -> Result<(), Error> {
-        if let Some(idx) = self.columns.iter().position(|col| match col {
-            QueryBuilderColumn::Primitive { column_oid: c, .. }
-            | QueryBuilderColumn::File { column_oid: c, .. }
-            | QueryBuilderColumn::Object { column_oid: c, .. }
-            | QueryBuilderColumn::Select { column_oid: c, .. }
-            | QueryBuilderColumn::Multiselect { column_oid: c, .. }
-            | QueryBuilderColumn::Formula { column_oid: c, .. }
-            | QueryBuilderColumn::Subreport { column_oid: c, .. } => column_oid == *c
-        }) {
-            self.order_by_indices.push((idx, sort_ascending));
-            return Ok(());
-        } else {
-            return Err(Error::AdhocError("The report is sorted by a column that does not exist in the report!"));
-        }
-    }
-
-
-
-    fn compile_scalar_formula(&mut self, formula: Box<Formula>) -> Result<ScalarExpression, Error> {
+    /// Compiles a scalar formula.
+    fn compile_scalar_formula(&mut self, formula: Box<Formula>, surrogate_table_oid_chain: Vec<i64>) -> Result<ScalarExpression, Error> {
         Ok(match *formula {
             Formula::Null => ScalarExpression {
                 arg_expr: String::from("NULL"),
@@ -1137,7 +1213,7 @@ impl<'a> QueryBuilder<'a> {
                 let column_datasource: Datasource = Datasource::from_path(datasource_path.clone())?;
                 let column_metadata = column::FullMetadata::get(column_oid.clone())?;
                 let param_expr: String = format!("'{}:{column_oid}'", column_datasource.get_alias());
-                match self.compile_column(Some(&column_datasource), column_metadata)? {
+                match self.compile_column(Some(&column_datasource), column_metadata, surrogate_table_oid_chain)? {
                     QueryBuilderColumn::Primitive { primitive_type, label_expr, value_expr, .. } => ScalarExpression { 
                         arg_expr: value_expr.clone(), 
                         arg_return_type: match primitive_type {
@@ -1204,7 +1280,7 @@ impl<'a> QueryBuilder<'a> {
             Formula::Coalesce(items) => {
                 let mut items_compiled: Vec<ScalarExpression> = Vec::new();
                 for item in items {
-                    let item_compiled: ScalarExpression = self.compile_scalar_formula(Box::new(item))?;
+                    let item_compiled: ScalarExpression = self.compile_scalar_formula(Box::new(item), surrogate_table_oid_chain.clone())?;
                     items_compiled.push(item_compiled);
                 }
 
@@ -1249,7 +1325,7 @@ impl<'a> QueryBuilder<'a> {
             }
             Formula::Abs(inner) => {
                 let inner_name: String = inner.to_string();
-                let inner_compiled: ScalarExpression = self.compile_scalar_formula(inner)?;
+                let inner_compiled: ScalarExpression = self.compile_scalar_formula(inner, surrogate_table_oid_chain)?;
                 if !ScalarType::Number.contains(inner_compiled.arg_return_type.clone()) {
                     return Err(Error::FormulaTypeValidationError { 
                         outer_name: "abs", 
@@ -1273,7 +1349,7 @@ impl<'a> QueryBuilder<'a> {
             }
             Formula::Sign(inner) => {
                 let inner_name: String = inner.to_string();
-                let inner_compiled: ScalarExpression = self.compile_scalar_formula(inner)?;
+                let inner_compiled: ScalarExpression = self.compile_scalar_formula(inner, surrogate_table_oid_chain)?;
                 if !ScalarType::Number.contains(inner_compiled.arg_return_type.clone()) {
                     return Err(Error::FormulaTypeValidationError { 
                         outer_name: "sign", 
@@ -1297,7 +1373,7 @@ impl<'a> QueryBuilder<'a> {
             }
             Formula::Floor(inner) => {
                 let inner_name: String = inner.to_string();
-                let inner_compiled: ScalarExpression = self.compile_scalar_formula(inner)?;
+                let inner_compiled: ScalarExpression = self.compile_scalar_formula(inner, surrogate_table_oid_chain)?;
                 if !ScalarType::Number.contains(inner_compiled.arg_return_type.clone()) {
                     return Err(Error::FormulaTypeValidationError { 
                         outer_name: "floor", 
@@ -1321,7 +1397,7 @@ impl<'a> QueryBuilder<'a> {
             }
             Formula::Ceiling(inner) => {
                 let inner_name: String = inner.to_string();
-                let inner_compiled: ScalarExpression = self.compile_scalar_formula(inner)?;
+                let inner_compiled: ScalarExpression = self.compile_scalar_formula(inner, surrogate_table_oid_chain)?;
                 if !ScalarType::Number.contains(inner_compiled.arg_return_type.clone()) {
                     return Err(Error::FormulaTypeValidationError { 
                         outer_name: "ceil", 
@@ -1345,7 +1421,7 @@ impl<'a> QueryBuilder<'a> {
             }
             Formula::Round(inner) => {
                 let inner_name: String = inner.to_string();
-                let inner_compiled: ScalarExpression = self.compile_scalar_formula(inner)?;
+                let inner_compiled: ScalarExpression = self.compile_scalar_formula(inner, surrogate_table_oid_chain)?;
                 if !ScalarType::Number.contains(inner_compiled.arg_return_type.clone()) {
                     return Err(Error::FormulaTypeValidationError { 
                         outer_name: "round", 
@@ -1372,4 +1448,5 @@ impl<'a> QueryBuilder<'a> {
             }
         })
     }
+
 }

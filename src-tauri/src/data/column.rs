@@ -1,3 +1,5 @@
+use crate::data::datasource;
+use crate::data::query;
 use crate::util::error::Error;
 use crate::util::db;
 use crate::util::channel::Sender;
@@ -103,12 +105,6 @@ impl FullMetadata {
         let trans = conn.transaction()?;
         trans.execute("UPDATE METADATA_COLUMN SET TRASH = TRUE WHERE OID = ?1", params![oid])?;
 
-        // Regenerate the schema's surrogate view
-        surrogate::regenerate_surrogate(
-            &trans,
-            trans.query_one("SELECT SCHEMA_OID FROM METADATA_COLUMN WHERE OID = ?1", params![oid], |row| row.get(0))?
-        )?;
-
         // Commit the transaction
         trans.commit()?;
         Ok(())
@@ -119,12 +115,6 @@ impl FullMetadata {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
         trans.execute("UPDATE METADATA_COLUMN SET TRASH = FALSE WHERE OID = ?1", params![oid])?;
-
-        // Regenerate the schema's surrogate view
-        surrogate::regenerate_surrogate(
-            &trans,
-            trans.query_one("SELECT SCHEMA_OID FROM METADATA_COLUMN WHERE OID = ?1", params![oid], |row| row.get(0))?
-        )?;
 
         // Commit the transaction
         trans.commit()?;
@@ -137,12 +127,6 @@ impl FullMetadata {
         let trans = conn.transaction()?;
         trans.execute("UPDATE METADATA_COLUMN SET TRASH = TRUE WHERE OID = ?1", params![trash_oid])?;
         trans.execute("UPDATE METADATA_COLUMN SET TRASH = FALSE WHERE OID = ?1", params![untrash_oid])?;
-
-        // Regenerate the schema's surrogate view
-        surrogate::regenerate_surrogate(
-            &trans,
-            trans.query_one("SELECT SCHEMA_OID FROM METADATA_COLUMN WHERE OID = ?1", params![untrash_oid], |row| row.get(0))?
-        )?;
 
         // Commit the transaction
         trans.commit()?;
@@ -251,8 +235,25 @@ impl FullMetadata {
     /// Queries the values of a Select or Multiselect column for a schema.
     pub fn query_values(mut sender: Sender<DropdownValue>, schema_oid: i64) -> Result<(), Error> {
         let conn = db::open()?;
+        
+        // Construct surrogate query
+        let datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&conn, schema_oid)?;
+        let mut query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
+        let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&conn, &mut query, datasource, vec![])?;
 
-        let sql_select = format!("SELECT OID, LABEL FROM TABLE{schema_oid}_SURROGATE");
+        // Run the surrogate query
+        let sql_select = format!(
+            "SELECT {} AS OID, COALESCE({}, '— NULL PRIMARY KEY —') AS LABEL {}",
+            surrogate.oid_expr,
+            surrogate.label_expr,
+            {
+                let Some((sql_from, _)) = query.compile_datasources(false)? else {
+                    return Err(Error::AdhocError("No datasources for surrogate query!"));
+                };
+                sql_from
+            }
+        );
+
         let mut select_stmt = conn.prepare(&sql_select)?;
         let select_rows = select_stmt.query_and_then([], |row| Ok::<(i64, String), rusqlite::Error>((row.get::<_, i64>("OID")?, row.get::<_, String>("LABEL")?)))?;
         for row_result in select_rows {
@@ -382,9 +383,6 @@ impl FullMetadata {
             }
         }
 
-        // Regenerate the schema's surrogate view
-        surrogate::regenerate_surrogate(trans, self.schema.oid)?;
-
         Ok(())
     }
 
@@ -463,14 +461,41 @@ impl FullMetadata {
                                 }
                                 column_type::ColumnType::Object { table_oid: old_table_oid, .. } 
                                 | column_type::ColumnType::Select { table_oid: old_table_oid, .. } => {
-                                    let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
-                                    Some(format!("(SELECT LABEL FROM TABLE{old_table_oid}_SURROGATE WHERE OID = {old_column_label})"))
+                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
+                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+
+                                    let old_column_expr: String = format!("t.COLUMN{}", old_column.oid);
+                                    Some(format!(
+                                        "(SELECT {} {} WHERE {} = {old_column_expr})",
+                                        surrogate.label_expr,
+                                        {
+                                            let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                                return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
+                                            };
+                                            sql_from
+                                        },
+                                        surrogate.oid_expr
+                                    ))
                                 }
                                 column_type::ColumnType::Multiselect { table_oid: old_table_oid, .. } => {
                                     // Use the array of selected rows as the label
+                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
+                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+
                                     Some(format!(
-                                        "(SELECT GROUP_CONCAT('[' || s.JSON_LABEL || ']') FROM MULTISELECT{} m INNER JOIN TABLE{old_table_oid}_SURROGATE s ON s.OID = m.TABLE{old_table_oid}_OID WHERE m.TABLE{}_OID = t.OID)", 
+                                        "(SELECT GROUP_CONCAT('[' || {} || ']') {} INNER JOIN MULTISELECT{} m ON m.TABLE{}_OID = {} WHERE m.TABLE{}_OID = t.OID)",
+                                        surrogate.json_expr,
+                                        {
+                                            let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                                return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
+                                            };
+                                            sql_from
+                                        },
                                         old_column.oid,
+                                        old_table_oid,
+                                        surrogate.oid_expr,
                                         old_column.schema.oid
                                     ))
                                 }
@@ -506,31 +531,56 @@ impl FullMetadata {
                                 }
                                 column_type::ColumnType::Object { table_oid: old_table_oid, .. } 
                                 | column_type::ColumnType::Select { table_oid: old_table_oid, .. } => {
-                                    let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
-                                    Some(format!("(
-                                        SELECT 
+                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
+                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+
+                                    let old_column_expr: String = format!("t.COLUMN{}", old_column.oid);
+                                    Some(format!(
+                                        "(SELECT 
                                             CASE 
-                                                WHEN REGEXP_LIKE(LABEL, '^\\s*(0*\\.|0+(\\.|\\s*$))') THEN 0
-                                                ELSE NULLIF(CAST(LABEL AS INTEGER), 0)
+                                                WHEN REGEXP_LIKE({}, '^\\s*(0*\\.|0+(\\.|\\s*$))') THEN 0
+                                                ELSE NULLIF(CAST({} AS INTEGER), 0)
                                             END
-                                        FROM TABLE{old_table_oid}_SURROGATE 
-                                        WHERE OID = {old_column_label}
-                                    )"))
+                                        {} 
+                                        WHERE {} = {old_column_expr})",
+                                        surrogate.label_expr,
+                                        surrogate.label_expr,
+                                        {
+                                            let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                                return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
+                                            };
+                                            sql_from
+                                        },
+                                        surrogate.oid_expr
+                                    ))
                                 }
                                 column_type::ColumnType::Multiselect { table_oid: old_table_oid, .. } => {
                                     // Use the array of selected rows as the label
+                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
+                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+
                                     Some(format!(
                                         "(SELECT INT_EXPR 
                                             FROM (
                                                 SELECT 
-                                                    CAST(s.LABEL AS INTEGER) AS INT_EXPR, 
-                                                    MAX(ABS(CAST(s.LABEL AS INTEGER))) AS MAX_NONZERO_INT_EXPR 
-                                                FROM MULTISELECT{} m 
-                                                INNER JOIN TABLE{old_table_oid}_SURROGATE s ON s.OID = m.TABLE{old_table_oid}_OID 
-                                                WHERE m.TABLE{}_OID = t.OID
+                                                    CAST({} AS INTEGER) AS INT_EXPR, 
+                                                    MAX(ABS(CAST({} AS INTEGER))) AS MAX_NONZERO_INT_EXPR 
+                                                {} INNER JOIN MULTISELECT{} m ON m.TABLE{}_OID = {} WHERE m.TABLE{}_OID = t.OID
                                             )
                                         )", 
+                                        surrogate.label_expr,
+                                        surrogate.label_expr,
+                                        {
+                                            let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                                return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
+                                            };
+                                            sql_from
+                                        },
                                         old_column.oid,
+                                        old_table_oid,
+                                        surrogate.oid_expr,
                                         old_column.schema.oid
                                     ))
                                 }
@@ -564,29 +614,53 @@ impl FullMetadata {
                                 }
                                 column_type::ColumnType::Object { table_oid: old_table_oid, .. } 
                                 | column_type::ColumnType::Select { table_oid: old_table_oid, .. } => {
-                                    let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
-                                    Some(format!("(
-                                        SELECT 
-                                            LABEL
-                                        FROM TABLE{old_table_oid}_SURROGATE 
-                                        WHERE OID = {old_column_label}
-                                    )"))
+                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
+                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+
+                                    let old_column_expr: String = format!("t.COLUMN{}", old_column.oid);
+                                    Some(format!(
+                                        "(SELECT 
+                                            {}
+                                        {} 
+                                        WHERE {} = {old_column_expr})",
+                                        surrogate.label_expr,
+                                        {
+                                            let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                                return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
+                                            };
+                                            sql_from
+                                        },
+                                        surrogate.oid_expr
+                                    ))
                                 }
                                 column_type::ColumnType::Multiselect { table_oid: old_table_oid, .. } => {
                                     // Use the array of selected rows as the label
+                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
+                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+
                                     Some(format!(
                                         "(
                                             SELECT REAL_EXPR 
                                             FROM (
                                                 SELECT 
-                                                    s.LABEL AS REAL_EXPR, 
-                                                    MAX(ABS(CAST(s.LABEL AS REAL))) AS MAX_NONZERO_REAL_EXPR 
-                                                FROM MULTISELECT{} m 
-                                                INNER JOIN TABLE{old_table_oid}_SURROGATE s ON s.OID = m.TABLE{old_table_oid}_OID 
-                                                WHERE m.TABLE{}_OID = t.OID
+                                                    {} AS REAL_EXPR, 
+                                                    MAX(ABS(CAST({} AS REAL))) AS MAX_NONZERO_REAL_EXPR 
+                                                {} INNER JOIN MULTISELECT{} m ON m.TABLE{}_OID = {} WHERE m.TABLE{}_OID = t.OID
                                             )
                                         )", 
+                                        surrogate.label_expr,
+                                        surrogate.label_expr,
+                                        {
+                                            let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                                return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
+                                            };
+                                            sql_from
+                                        },
                                         old_column.oid,
+                                        old_table_oid,
+                                        surrogate.oid_expr,
                                         old_column.schema.oid
                                     ))
                                 }
@@ -620,27 +694,51 @@ impl FullMetadata {
                                 }
                                 column_type::ColumnType::Object { table_oid: old_table_oid, .. } 
                                 | column_type::ColumnType::Select { table_oid: old_table_oid, .. } => {
-                                    let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
-                                    Some(format!("(
-                                        SELECT 
-                                            JULIANDAY(LABEL)
-                                        FROM TABLE{old_table_oid}_SURROGATE 
-                                        WHERE OID = {old_column_label}
-                                    )"))
+                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
+                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+
+                                    let old_column_expr: String = format!("t.COLUMN{}", old_column.oid);
+                                    Some(format!(
+                                        "(SELECT 
+                                            JULIANDAY({})
+                                        {} 
+                                        WHERE {} = {old_column_expr})",
+                                        surrogate.label_expr,
+                                        {
+                                            let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                                return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
+                                            };
+                                            sql_from
+                                        },
+                                        surrogate.oid_expr
+                                    ))
                                 }
                                 column_type::ColumnType::Multiselect { table_oid: old_table_oid, .. } => {
                                     // Use the array of selected rows as the label
+                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
+                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+                                    
+                                    let old_column_expr: String = format!("t.COLUMN{}", old_column.oid);
                                     Some(format!(
-                                        "(
-                                            SELECT 
-                                                MIN(JULIANDAY(s.LABEL))
-                                            FROM MULTISELECT{} m 
-                                            INNER JOIN TABLE{old_table_oid}_SURROGATE s ON s.OID = m.TABLE{old_table_oid}_OID 
-                                            WHERE m.TABLE{}_OID = t.OID 
-                                                AND JULIANDAY(s.LABEL) IS NOT NULL
-                                        )", 
+                                        "(SELECT 
+                                            MIN(JULIANDAY({}))
+                                        {} 
+                                        INNER JOIN MULTISELECT{} m ON m.TABLE{}_OID = {} 
+                                        WHERE m.TABLE{}_OID = {old_column_expr} AND JULIANDAY({}) IS NOT NULL)",
+                                        surrogate.label_expr,
+                                        {
+                                            let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                                return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
+                                            };
+                                            sql_from
+                                        },
                                         old_column.oid,
-                                        old_column.schema.oid
+                                        old_table_oid,
+                                        surrogate.oid_expr,
+                                        old_column.schema.oid,
+                                        surrogate.label_expr
                                     ))
                                 }
                                 _ => None // Virtual column, so no data to transfer
@@ -675,27 +773,51 @@ impl FullMetadata {
                                 }
                                 column_type::ColumnType::Object { table_oid: old_table_oid, .. } 
                                 | column_type::ColumnType::Select { table_oid: old_table_oid, .. } => {
-                                    let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
-                                    Some(format!("(
-                                        SELECT 
-                                            JULIANDAY(LABEL)
-                                        FROM TABLE{old_table_oid}_SURROGATE 
-                                        WHERE OID = {old_column_label}
-                                    )"))
+                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
+                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+
+                                    let old_column_expr: String = format!("t.COLUMN{}", old_column.oid);
+                                    Some(format!(
+                                        "(SELECT 
+                                            JULIANDAY({})
+                                        {} 
+                                        WHERE {} = {old_column_expr})",
+                                        surrogate.label_expr,
+                                        {
+                                            let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                                return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
+                                            };
+                                            sql_from
+                                        },
+                                        surrogate.oid_expr
+                                    ))
                                 }
                                 column_type::ColumnType::Multiselect { table_oid: old_table_oid, .. } => {
                                     // Use the array of selected rows as the label
+                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
+                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+                                    
+                                    let old_column_expr: String = format!("t.COLUMN{}", old_column.oid);
                                     Some(format!(
-                                        "(
-                                            SELECT 
-                                                MIN(JULIANDAY(s.LABEL))
-                                            FROM MULTISELECT{} m 
-                                            INNER JOIN TABLE{old_table_oid}_SURROGATE s ON s.OID = m.TABLE{old_table_oid}_OID 
-                                            WHERE m.TABLE{}_OID = t.OID 
-                                                AND JULIANDAY(s.LABEL) IS NOT NULL
-                                        )", 
+                                        "(SELECT 
+                                            MIN(JULIANDAY({}))
+                                        {} 
+                                        INNER JOIN MULTISELECT{} m ON m.TABLE{}_OID = {} 
+                                        WHERE m.TABLE{}_OID = {old_column_expr} AND JULIANDAY({}) IS NOT NULL)",
+                                        surrogate.label_expr,
+                                        {
+                                            let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                                return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
+                                            };
+                                            sql_from
+                                        },
                                         old_column.oid,
-                                        old_column.schema.oid
+                                        old_table_oid,
+                                        surrogate.oid_expr,
+                                        old_column.schema.oid,
+                                        surrogate.label_expr
                                     ))
                                 }
                                 _ => None // Virtual column, so no data to transfer
@@ -742,20 +864,39 @@ impl FullMetadata {
                                 }
                                 column_type::ColumnType::Object { table_oid: old_table_oid, .. } 
                                 | column_type::ColumnType::Select { table_oid: old_table_oid, .. } => {
-                                    let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
-                                    Some(format!("(
-                                        SELECT 
+                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
+                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+
+                                    let old_column_expr: String = format!("t.COLUMN{}", old_column.oid);
+                                    Some(format!(
+                                        "(SELECT 
                                             CASE 
-                                                WHEN LABEL LIKE 'TRUE' OR CAST(LABEL AS INTEGER) IS NOT 0 THEN 1
-                                                WHEN LABEL LIKE 'FALSE' OR LABEL = '0' THEN 0
+                                                WHEN {} LIKE 'TRUE' OR CAST({} AS INTEGER) IS NOT 0 THEN 1
+                                                WHEN {} LIKE 'FALSE' OR {} = '0' THEN 0
                                                 ELSE NULL
                                             END
-                                        FROM TABLE{old_table_oid}_SURROGATE 
-                                        WHERE OID = {old_column_label}
-                                    )"))
+                                        {} 
+                                        WHERE {} = {old_column_expr})",
+                                        surrogate.label_expr,
+                                        surrogate.label_expr,
+                                        surrogate.label_expr,
+                                        surrogate.label_expr,
+                                        {
+                                            let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                                return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
+                                            };
+                                            sql_from
+                                        },
+                                        surrogate.oid_expr
+                                    ))
                                 }
                                 column_type::ColumnType::Multiselect { table_oid: old_table_oid, .. } => {
                                     // Use the array of selected rows as the label
+                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
+                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+
                                     Some(format!(
                                         "(
                                             SELECT
@@ -763,17 +904,26 @@ impl FullMetadata {
                                             FROM (
                                                 SELECT 
                                                     CASE 
-                                                        WHEN s.LABEL LIKE 'TRUE' OR CAST(s.LABEL AS INTEGER) IS NOT 0 THEN 1
-                                                        WHEN s.LABEL LIKE 'FALSE' OR s.LABEL = '0' THEN 0
+                                                        WHEN {} LIKE 'TRUE' OR CAST({} AS INTEGER) IS NOT 0 THEN 1
+                                                        WHEN {} LIKE 'FALSE' OR {} = '0' THEN 0
                                                         ELSE NULL
                                                     END AS BOOL_EXPR
-                                                FROM MULTISELECT{} m 
-                                                INNER JOIN TABLE{old_table_oid}_SURROGATE s ON s.OID = m.TABLE{old_table_oid}_OID 
-                                                WHERE m.TABLE{}_OID = t.OID 
+                                                {} INNER JOIN MULTISELECT{} m ON m.TABLE{}_OID = {} WHERE m.TABLE{}_OID = t.OID
                                             )
-                                            WHERE BOOL_EXPR IS NOT NULL
                                         )", 
+                                        surrogate.label_expr,
+                                        surrogate.label_expr,
+                                        surrogate.label_expr,
+                                        surrogate.label_expr,
+                                        {
+                                            let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                                return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
+                                            };
+                                            sql_from
+                                        },
                                         old_column.oid,
+                                        old_table_oid,
+                                        surrogate.oid_expr,
                                         old_column.schema.oid
                                     ))
                                 }
@@ -854,8 +1004,22 @@ impl FullMetadata {
                                 // Don't update rows individually
                                 None 
                             } else {
-                                let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
-                                Some(format!("(SELECT JSON_LABEL FROM TABLE{old_table_oid}_SURROGATE WHERE OID = {old_column_label})"))
+                                let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
+                                let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
+                                let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+
+                                let old_column_expr: String = format!("t.COLUMN{}", old_column.oid);
+                                Some(format!(
+                                    "(SELECT {} {} WHERE {} = {old_column_expr})",
+                                    surrogate.json_expr,
+                                    {
+                                        let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                            return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
+                                        };
+                                        sql_from
+                                    },
+                                    surrogate.oid_expr
+                                ))
                             }
                         }
                         column_type::ColumnType::Multiselect { table_oid: old_table_oid, .. } => {
@@ -875,19 +1039,49 @@ impl FullMetadata {
                                 None 
                             } else {
                                 // Use the array of selected rows as the label
+                                let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
+                                let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
+                                let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+
                                 Some(format!(
-                                    "(SELECT GROUP_CONCAT('[' || s.JSON_LABEL || ']') FROM MULTISELECT{} m INNER JOIN TABLE{old_table_oid}_SURROGATE s ON s.OID = m.TABLE{old_table_oid}_OID WHERE m.TABLE{}_OID = t.OID)", 
+                                    "(SELECT GROUP_CONCAT('[' || {} || ']') {} INNER JOIN MULTISELECT{} m ON m.TABLE{}_OID = {} WHERE m.TABLE{}_OID = t.OID)",
+                                    surrogate.json_expr,
+                                    {
+                                        let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                            return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
+                                        };
+                                        sql_from
+                                    },
                                     old_column.oid,
+                                    old_table_oid,
+                                    surrogate.oid_expr,
                                     old_column.schema.oid
                                 ))
                             }
                         }
                         _ => None
                     } {
+                        // Locate the new row by matching primary key
+                        let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
+                        let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *table_oid)?;
+                        let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+
+                        let column_value_expr: String = format!(
+                            "(SELECT {} {} WHERE {} = {json_label_expr} LIMIT 1)",
+                            surrogate.oid_expr,
+                            {
+                                let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                    return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
+                                };
+                                sql_from
+                            },
+                            surrogate.json_expr
+                        );
+
                         Some(format!(
                             "
                             UPDATE TABLE{} AS t SET
-                                COLUMN{} = {json_label_expr}
+                                COLUMN{} = {column_value_expr}
                             WHERE t.OID = ?1
                             ",
                             self.schema.oid,
@@ -910,9 +1104,25 @@ impl FullMetadata {
                                 column_type::Primitive::Checkbox => Some(format!(r#"CASE WHEN {old_column_label} IS NULL THEN 'null' WHEN {old_column_label} THEN 'true' ELSE 'false' END"#)),
                                 _ => Some(format!(r#"COALESCE('"' || CAST({old_column_label} AS TEXT) || '"', 'null')"#))
                             } {
+                                let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
+                                let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *table_oid)?;
+                                let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+
+                                let column_value_expr: String = format!(
+                                    "(SELECT {} {} WHERE {} = {json_label_expr} LIMIT 1)",
+                                    surrogate.oid_expr,
+                                    {
+                                        let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                            return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
+                                        };
+                                        sql_from
+                                    },
+                                    surrogate.json_expr
+                                );
+
                                 Some(format!(
                                     "
-                                    INSERT INTO MULTISELECT{} (TABLE{}_OID, TABLE{}_OID) VALUES (?1, (SELECT t.OID FROM TABLE{table_oid}_SURROGATE t WHERE t.JSON_LABEL = {json_label_expr}))
+                                    INSERT INTO MULTISELECT{} (TABLE{}_OID, TABLE{}_OID) VALUES (?1, {column_value_expr})
                                     ",
                                     self.oid,
                                     self.schema.oid,
