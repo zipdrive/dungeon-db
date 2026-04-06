@@ -617,11 +617,15 @@ function updateMultiselectEntryCell(cell: MultiselectEntryCell, elem: HTMLTableC
         labelNode.innerText = dropdownValue.label;
         labelNode.insertAdjacentHTML('afterbegin', `<input type="checkbox" value="${dropdownValue.value}" ${(cell.multiselectRowOid.includes(dropdownValue.value) ? 'checked' : '')}>`);
         multiselectElem.appendChild(labelNode);
+
+        
     });
 
     // Add event listener to update from the multiselect DIV when unfocused
     multiselectElem.addEventListener('focusout', async (e) => {
+        console.debug('focusout event triggered.');
         if (!e.relatedTarget || !elem.contains(e.relatedTarget as HTMLElement)) {
+            console.debug(`Multiselect focused out.\n  e.relatedTarget: ${e.relatedTarget}\n  elem.contains(e.relatedTarget): ${elem.contains(e.relatedTarget as HTMLElement)}`);
             let newSelectedOidList: number[] = [];
             multiselectElem.querySelectorAll('input:checked').forEach((checkboxNode) => {
                 newSelectedOidList.push(parseInt((checkboxNode as HTMLInputElement).value));
