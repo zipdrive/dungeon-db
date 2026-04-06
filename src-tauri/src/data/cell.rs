@@ -131,6 +131,7 @@ pub enum Cell {
     Row {
         row_identifier: Option<(i64, i64)>,
         index: i64,
+        fixed_parent_datasource: Option<(i64, i64, column::FullMetadata)>,
         validation_failures: Vec<FailedValidation>
     },
     Readonly {
@@ -408,6 +409,29 @@ impl Cell {
                 }
             }
 
+            // Also, determine which datasources should be fixed for the purposes of creating new roes
+            let fixed_parent_datasource: Option<(i64, i64, column::FullMetadata)> = if unfixed_datasources.len() == 1 {
+                match unfixed_datasources.iter().next().unwrap() {
+                    Datasource::Table { .. } => None,
+                    Datasource::Column { parent_datasource, column } => {
+                        let parent_datasource_alias: String = parent_datasource.get_alias();
+                        let parent_datasource_table_oid: i64 = parent_datasource.get_schema_oid()?;
+                        filters.iter().find_map(|(fixed_datasource_alias, fixed_datasource_row_oid)| if *fixed_datasource_alias == parent_datasource_alias {
+                            Some((parent_datasource_table_oid, fixed_datasource_row_oid.clone(), column.clone()))
+                        } else {
+                            None 
+                        })
+                    }
+                    Datasource::MasterTable { .. } 
+                    | Datasource::InheritorTable { .. } => {
+                        // Neither of these cases should ever occur, so throw an error if it does
+                        return Err(Error::AdhocError("The only found unfixed base datasource has a strict 1-to-1 relationship with its parent datasource, which is not allowed."));
+                    }
+                }
+            } else {
+                None
+            };
+
             // First, get the maximum index
             let cmd_max_index_query = format!("SELECT ROW_INDEX FROM ({cmd_query}) ORDER BY ROW_INDEX DESC LIMIT 1");
             cell_sender.send(
@@ -458,6 +482,7 @@ impl Cell {
                 cell_sender.send(Cell::Row { 
                     row_identifier,
                     index: row.get("ROW_INDEX")?, 
+                    fixed_parent_datasource: fixed_parent_datasource.clone(),
                     validation_failures: Vec::new() 
                 })?;
                 
@@ -735,23 +760,7 @@ impl Cell {
                     let table_oid: i64 = unfixed_datasource.get_schema_oid()?;
                     cell_sender.send(Cell::AddNewRowButton { 
                         table_oid, 
-                        fixed_parent_datasource: match unfixed_datasource {
-                            Datasource::Table { .. } => None,
-                            Datasource::Column { parent_datasource, column } => {
-                                let parent_datasource_alias: String = parent_datasource.get_alias();
-                                let parent_datasource_table_oid: i64 = parent_datasource.get_schema_oid()?;
-                                filters.iter().find_map(|(fixed_datasource_alias, fixed_datasource_row_oid)| if *fixed_datasource_alias == parent_datasource_alias {
-                                    Some((parent_datasource_table_oid, fixed_datasource_row_oid.clone(), column.clone()))
-                                } else {
-                                    None 
-                                })
-                            }
-                            Datasource::MasterTable { .. } 
-                            | Datasource::InheritorTable { .. } => {
-                                // Neither of these cases should ever occur, so throw an error if it does
-                                return Err(Error::AdhocError("The only found unfixed base datasource has a strict 1-to-1 relationship with its parent datasource, which is not allowed."));
-                            }
-                        },
+                        fixed_parent_datasource,
                         column_span: cols.len()
                     })?;
                 }

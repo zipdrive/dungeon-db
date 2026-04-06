@@ -131,7 +131,7 @@ pub fn insert_transact(trans: &Transaction, table_oid: i64, row_oid: Option<i64>
     // Handle insertion at a specific location in the table
     if let Some(o) = row_oid {
         // Make space for the new row at the designated OID
-        let sql_invert_oids: String = format!("UPDATE TABLE{table_oid} SET OID = -OID WHERE OID > ?1");
+        let sql_invert_oids: String = format!("UPDATE TABLE{table_oid} SET OID = -OID WHERE OID >= ?1");
         trans.execute(&sql_invert_oids, params![o])?;
         let sql_revert_oids: String = format!("UPDATE TABLE{table_oid} SET OID = 1 - OID WHERE OID < 0");
         trans.execute(&sql_revert_oids, [])?;

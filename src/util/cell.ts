@@ -41,6 +41,7 @@ export type File = {
 type RowCell = {
     rowIdentifier: [number, number] | null,
     index: number,
+    fixedParentDatasource: [number, number, ColumnFullMetadata] | null,
     validationFailures: ValidationFailures
 };
 type ReadonlyCell = {
@@ -170,6 +171,26 @@ function updateRowIndexCell(cell: RowCell, elem: HTMLTableCellElement) {
         let contextMenuItems: Promise<MenuItem>[] = [];
         if (cell.rowIdentifier) {
             let [tableOid, rowOid] = cell.rowIdentifier;
+
+            // Item to insert row
+            contextMenuItems.push(MenuItem.new({
+                text: 'Insert Row',
+                action: () => {
+                    executeAsync({
+                        createRow: {
+                            tableOid: tableOid,
+                            rowOid: rowOid,
+                            fixedParentDatasource: cell.fixedParentDatasource
+                        }
+                    })
+                    .catch(async (e) => {
+                        await message(e, {
+                            title: 'An error occurred while inserting the row.',
+                            kind: 'error'
+                        });
+                    });
+                }
+            }));
 
             // Item to delete row
             contextMenuItems.push(MenuItem.new({
