@@ -37,9 +37,3 @@ td:not(:focus, :has(:focus)) .cell-multiselect {
     background-color: var(--main-color-semidark);
   }
 }
-
-
-:focus {
-  background-color: red;
-  border: 3px solid darkred;
-}
