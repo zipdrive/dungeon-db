@@ -557,6 +557,9 @@ function updateObjectCell(cell: ObjectCell, elem: HTMLTableCellElement) {
 }
 
 function updateSelectEntryCell(cell: SelectEntryCell, elem: HTMLTableCellElement) {
+    if (!cell.selectRowOid)
+        elem.classList.add('cell-null');
+
     const selectElem: HTMLSelectElement = document.createElement('select');
     selectElem.classList.add('cell-dropdown');
     selectElem.innerHTML = '<option value="">— NULL —</option>'

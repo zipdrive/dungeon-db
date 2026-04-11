@@ -89,14 +89,14 @@ impl Surrogate {
                 let column_name: String = base_column.name.clone();
                 let col = query.compile_column(Some(&schema_to_datasource[&base_column.schema.oid]), base_column, expanded_surrogate_table_oid_chain.clone())?;
                 json_exprs.push(format!(
-                    r#"'"{}": ' || {}"#,
+                    r#"SELECT '"{}": ' || {} AS COLUMN1"#,
                     column_name.replace("\\", "\\\\").replace("\"", "\\\""),
                     col.get_json_expr(String::from("NULL"))
                 ));
             }
             let json_expr: String = format!(
-                "'{{' || (SELECT GROUP_CONCAT(COLUMN1) FROM (VALUES ({}))) || '}}'",
-                json_exprs.into_iter().reduce(|acc, e| format!("{acc}, {e}")).unwrap_or(String::from(""))
+                "'{{' || (SELECT GROUP_CONCAT(COLUMN1) FROM ({})) || '}}'",
+                json_exprs.into_iter().reduce(|acc, e| format!("{acc} UNION {e}")).unwrap_or(String::from(""))
             );
 
             Ok(Self {

@@ -350,7 +350,7 @@ struct InternalQueryBuilder {
     postgroup_filters: Vec<String>,
 
     /// The column indices to order the query by.
-    order_by_indices: Vec<(usize, bool)>
+    order_by_columns: Vec<(QueryBuilderColumn, bool)>
 }
 
 impl InternalQueryBuilder {
@@ -362,7 +362,7 @@ impl InternalQueryBuilder {
             pregroup_filters: Vec::new(),
             group_by_indices: Vec::new(),
             postgroup_filters: Vec::new(),
-            order_by_indices: Vec::new()
+            order_by_columns: Vec::new()
         }
     }
 
@@ -382,9 +382,9 @@ impl InternalQueryBuilder {
             .collect();
 
         // Compile ORDER BY expression
-        let orderby_expression: String = if self.order_by_indices.len() > 0 {
-            self.order_by_indices.into_iter()
-                .filter_map(|(e, sort_ascending)| match &self.columns[e] {
+        let orderby_expression: String = if self.order_by_columns.len() > 0 {
+            self.order_by_columns.into_iter()
+                .filter_map(|(e, sort_ascending)| match e {
                     QueryBuilderColumn::Primitive { value_expr, .. }
                     | QueryBuilderColumn::Formula { value_expr, .. } => Some((value_expr.clone(), sort_ascending)),
                     QueryBuilderColumn::File { file_expr, .. } => Some((format!("LENGTH({file_expr})"), sort_ascending)),
@@ -536,9 +536,9 @@ impl InternalQueryBuilder {
             .collect();
 
         // Compile ORDER BY expression
-        let orderby_expression: String = if self.order_by_indices.len() > 0 {
-            self.order_by_indices.into_iter()
-                .filter_map(|(e, sort_ascending)| match &self.columns[e] {
+        let orderby_expression: String = if self.order_by_columns.len() > 0 {
+            self.order_by_columns.into_iter()
+                .filter_map(|(e, sort_ascending)| match e {
                     QueryBuilderColumn::Primitive { value_expr, .. }
                     | QueryBuilderColumn::Formula { value_expr, .. } => Some((value_expr.clone(), sort_ascending)),
                     QueryBuilderColumn::File { file_expr, .. } => Some((format!("LENGTH({file_expr})"), sort_ascending)),
@@ -891,22 +891,12 @@ impl QueryBuilder {
     }
 
     /// Orders the rows returned by the query based on a column of the query.
-    pub fn insert_ordering(&mut self, column_oid: i64, sort_ascending: bool) -> Result<(), Error> {
+    pub fn insert_ordering(&mut self, column_datasource: &Datasource, column_metadata: column::FullMetadata, sort_ascending: bool) -> Result<(), Error> {
+        let col = self.compile_column(Some(column_datasource), column_metadata, Vec::new())?;
+
         let mut leaf_mut = self.borrow_leaf_mut();
-        if let Some(idx) = leaf_mut.columns.iter().position(|col| match col {
-            QueryBuilderColumn::Primitive { column_oid: c, .. }
-            | QueryBuilderColumn::File { column_oid: c, .. }
-            | QueryBuilderColumn::Object { column_oid: c, .. }
-            | QueryBuilderColumn::Select { column_oid: c, .. }
-            | QueryBuilderColumn::Multiselect { column_oid: c, .. }
-            | QueryBuilderColumn::Formula { column_oid: c, .. }
-            | QueryBuilderColumn::Subreport { column_oid: c, .. } => column_oid == *c
-        }) {
-            leaf_mut.order_by_indices.push((idx, sort_ascending));
-            return Ok(());
-        } else {
-            return Err(Error::AdhocError("The report is sorted by a column that does not exist in the report!"));
-        }
+        leaf_mut.order_by_columns.push((col, sort_ascending));
+        return Ok(());
     }
 
 

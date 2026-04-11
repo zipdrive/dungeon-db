@@ -124,7 +124,7 @@ impl Datasource {
     }
 
     /// Construct a datasource from a path.
-    pub fn from_path_transact(trans: &Transaction, path: Vec<String>) -> Result<Self, Error> {
+    pub fn from_path_transact(conn: &Connection, path: Vec<String>) -> Result<Self, Error> {
         if path.len() == 0 {
             return Err(Error::AdhocError("Datasource cannot be empty!"));
         }
@@ -134,7 +134,7 @@ impl Datasource {
         if let Some(root_caps) = root_regex.captures(&path[0]) {
             let (_, [root_datasource_oid_str]) = root_caps.extract();
             let root_datasource_oid: i64 = root_datasource_oid_str.parse().unwrap();
-            let root: Self = Self::get_transact(trans, root_datasource_oid)?;
+            let root: Self = Self::get_transact(conn, root_datasource_oid)?;
             return Self::from_parent_and_path(root, &path[1..]);
         } else {
             return Err(Error::AdhocError("Root datasource is expected to be an OID of a row in METADATA_DATASOURCE."));

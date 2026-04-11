@@ -1,3 +1,4 @@
+use crate::data::column;
 use crate::data::datasource;
 use crate::data::query;
 use crate::util::error::Error;
@@ -241,18 +242,39 @@ impl FullMetadata {
         let mut query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
         let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&conn, &mut query, datasource, vec![])?;
 
+        // Add ordering columns, if any
+        let mut stmt_orderby = conn.prepare(
+            "
+            SELECT 
+                DATASOURCE_ALIAS,
+                COLUMN_OID, 
+                SORT_ASCENDING 
+            FROM METADATA_SCHEMA_ORDERBY_VIEW
+            WHERE SCHEMA_OID = ?1 
+            "
+        )?;
+        for row_result in stmt_orderby.query_and_then(params![schema_oid], |row| { Ok::<(String, i64, bool), rusqlite::Error>((row.get::<_, String>("DATASOURCE_ALIAS")?, row.get::<_, i64>("COLUMN_OID")?, row.get::<_, bool>("SORT_ASCENDING")?)) })? {
+            let (datasource_alias, column_oid, sort_ascending) = row_result?;
+            let column_datasource: datasource::Datasource = datasource::Datasource::from_path_transact(&conn, datasource_alias.split('_').map(|s| String::from(s)).collect())?;
+            let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(&conn, column_oid)?;
+
+            // Insert ORDER BY clause
+            query.insert_ordering(&column_datasource, column_metadata, sort_ascending)?;
+        }
+
         // Run the surrogate query
         let sql_select = format!(
-            "SELECT {} AS OID, COALESCE({}, '— NULL PRIMARY KEY —') AS LABEL {}",
+            "SELECT {} AS OID, COALESCE({}, '— NULL PRIMARY KEY —') AS LABEL {} ORDER BY ROW_INDEX",
             surrogate.oid_expr,
             surrogate.label_expr,
             {
-                let Some((sql_from, _)) = query.compile_datasources(false)? else {
+                let Some((sql_from, _)) = query.compile_datasources(true)? else {
                     return Err(Error::AdhocError("No datasources for surrogate query!"));
                 };
                 sql_from
             }
         );
+        println!("{sql_select}");
 
         let mut select_stmt = conn.prepare(&sql_select)?;
         let select_rows = select_stmt.query_and_then([], |row| Ok::<(i64, String), rusqlite::Error>((row.get::<_, i64>("OID")?, row.get::<_, String>("LABEL")?)))?;

@@ -373,16 +373,20 @@ impl Cell {
         let mut stmt_orderby = conn.prepare(
             "
             SELECT 
+                DATASOURCE_ALIAS,
                 COLUMN_OID, 
                 SORT_ASCENDING 
             FROM METADATA_SCHEMA_ORDERBY_VIEW
             WHERE SCHEMA_OID = ?1 
             "
         )?;
-        for row_result in stmt_orderby.query_and_then(params![schema_oid], |row| { Ok::<(i64, bool), rusqlite::Error>((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, bool>("SORT_ASCENDING")?)) })? {
-            let (column_oid, sort_ascending) = row_result?;
+        for row_result in stmt_orderby.query_and_then(params![schema_oid], |row| { Ok::<(String, i64, bool), rusqlite::Error>((row.get::<_, String>("DATASOURCE_ALIAS")?, row.get::<_, i64>("COLUMN_OID")?, row.get::<_, bool>("SORT_ASCENDING")?)) })? {
+            let (datasource_alias, column_oid, sort_ascending) = row_result?;
+            let column_datasource: datasource::Datasource = datasource::Datasource::from_path_transact(&conn, datasource_alias.split('_').map(|s| String::from(s)).collect())?;
+            let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(&conn, column_oid)?;
+
             // Insert ORDER BY clause
-            query.insert_ordering(column_oid, sort_ascending)?;
+            query.insert_ordering(&column_datasource, column_metadata, sort_ascending)?;
         }
 
         Ok(query)

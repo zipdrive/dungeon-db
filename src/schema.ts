@@ -131,9 +131,10 @@ if (urlParamSchemaOid) {
             new Sortable(columnHeaderRow, {
                 draggable: '.reorderable-column',
                 onChange(e: SortableEvent) {
-                    // TODO ? anything?
+                    console.debug('Row ordering onChange');
                 },
                 onUpdate(e: SortableEvent) {
+                    console.debug('Row ordering onUpdate');
                     const reorderedColumn: ColumnFullMetadata = JSON.parse(e.item.dataset.columnMetadata);
                     const immediateRightColumnHeader = e.newIndex || e.newIndex == 0 ? e.to.querySelector(`.reorderable-column:nth-child(${(e.newIndex + 2)})`) : null;
                     const columnToImmediateRightOfReorderedColumn: ColumnFullMetadata | null = immediateRightColumnHeader ? JSON.parse(immediateRightColumnHeader.dataset.columnMetadata) : null;
