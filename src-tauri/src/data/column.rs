@@ -292,14 +292,13 @@ impl FullMetadata {
         let column_type: column_type::ColumnType = self.column_type.clone();
         self.column_type = column_type.find_transact(trans)?;
 
-        let max_ordering: i64 = trans.query_one("SELECT MAX(ORDERING) + 1 AS ORDERING FROM METADATA_COLUMN", [], |row| row.get::<_, Option<i64>>("ORDERING")).optional()?.unwrap_or(Some(1)).unwrap_or(1);
         if self.ordering < 0 {
             // Set the ordering to the maximum
-            self.ordering = max_ordering;
+            self.ordering = trans.query_one("SELECT MAX(ORDERING) + 1 AS ORDERING FROM METADATA_COLUMN", [], |row| row.get::<_, Option<i64>>("ORDERING")).optional()?.unwrap_or(Some(1)).unwrap_or(1);
         } else {
             // Make space for the column by adjusting the ordering of any columns to the left of it
-            trans.execute("UPDATE METADATA_COLUMN SET ORDERING = ORDERING + ?2 WHERE ORDERING >= ?1", params![self.ordering, max_ordering - self.ordering])?;
-            trans.execute("UPDATE METADATA_COLUMN SET ORDERING = ORDERING - ?2 WHERE ORDERING >= ?1", params![max_ordering, max_ordering - self.ordering + 1])?;
+            trans.execute("UPDATE METADATA_COLUMN SET ORDERING = -ORDERING WHERE ORDERING >= ?1", params![self.ordering])?;
+            trans.execute("UPDATE METADATA_COLUMN SET ORDERING = 1 - ORDERING WHERE ORDERING < 0", [])?;
         }
         
         // Insert the column metadata
