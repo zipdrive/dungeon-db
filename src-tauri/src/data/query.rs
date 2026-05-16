@@ -985,7 +985,7 @@ impl QueryBuilder {
                 let surrogate: surrogate::Surrogate = {
                     let conn = db::open()?;
                     let datasource: Datasource = Datasource::Column { parent_datasource: Box::new(column_datasource.unwrap().clone()), column: column_metadata.clone() };
-                    surrogate::Surrogate::get_flat(&conn, self, datasource, surrogate_table_oid_chain)?
+                    surrogate::Surrogate::get_object(&conn, self, datasource, surrogate_table_oid_chain)?
                 };
                 QueryBuilderColumn::Object { 
                     label_expr: surrogate.label_expr,
