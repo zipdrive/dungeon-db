@@ -255,7 +255,7 @@ impl FullMetadata {
         )?;
         for row_result in stmt_orderby.query_and_then(params![schema_oid], |row| { Ok::<(String, i64, bool), rusqlite::Error>((row.get::<_, String>("DATASOURCE_ALIAS")?, row.get::<_, i64>("COLUMN_OID")?, row.get::<_, bool>("SORT_ASCENDING")?)) })? {
             let (datasource_alias, column_oid, sort_ascending) = row_result?;
-            let column_datasource: datasource::Datasource = datasource::Datasource::from_path_transact(&conn, datasource_alias.split('_').map(|s| String::from(s)).collect())?;
+            let column_datasource: datasource::Datasource = datasource::Datasource::from_alias_transact(&conn, datasource_alias)?;
             let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(&conn, column_oid)?;
 
             // Insert ORDER BY clause

@@ -1199,8 +1199,8 @@ impl QueryBuilder {
                 param_expr: String::from("NULL"),
                 deterministic: false
             },
-            Formula::Param { datasource_path, column_oid } => {
-                let column_datasource: Datasource = Datasource::from_path(datasource_path.clone())?;
+            Formula::Param { datasource_alias, column_oid } => {
+                let column_datasource: Datasource = Datasource::from_alias(datasource_alias.clone())?;
                 let column_metadata = column::FullMetadata::get(column_oid.clone())?;
                 let param_expr: String = format!("'{}:{column_oid}'", column_datasource.get_alias());
                 match self.compile_column(Some(&column_datasource), column_metadata, surrogate_table_oid_chain)? {

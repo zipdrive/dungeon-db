@@ -4,7 +4,7 @@ use crate::util::error;
 #[derive(Clone)]
 pub enum Formula {
     Param {
-        datasource_path: Vec<String>,
+        datasource_alias: String,
         column_oid: i64
     },
     Null,
@@ -655,8 +655,7 @@ impl Formula {
         // Check for a parameter
         let param_regex: Regex = Regex::new(r#"(?is)^\s*@\{(ROOT\d+(?:_MASTER\d+|_INHERITOR\d+|_COLUMN\d+)*)_COLUMN(\d+)\}(.*)"#).unwrap();
         if let Some(param_cap) = param_regex.captures(remaining_str) {
-            let (_, [datasource_path_content, column_oid_content, following]) = param_cap.extract();
-            let datasource_path: Vec<String> = datasource_path_content.split('_').map(|s| String::from(s)).collect();
+            let (_, [datasource_alias, column_oid_content, following]) = param_cap.extract();
             let Ok(column_oid) = column_oid_content.parse::<i64>() else { 
                 return Err(error::Error::FormulaParseError { 
                     msg: String::from("Unable to parse formula parameter."), 
@@ -664,7 +663,7 @@ impl Formula {
                     substring_with_error: String::from(remaining_str.trim_start()) 
                 }); 
             };
-            return Self::parse_dependent_expr(full_str, following, Formula::Param { datasource_path, column_oid });
+            return Self::parse_dependent_expr(full_str, following, Formula::Param { datasource_alias, column_oid });
         }
 
         // Check for a function call

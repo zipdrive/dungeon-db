@@ -106,7 +106,8 @@ impl Datasource {
     }
 
     /// Construct a datasource from a path.
-    pub fn from_path(path: Vec<String>) -> Result<Self, Error> {
+    pub fn from_alias(alias: String) -> Result<Self, Error> {
+        let path: Vec<String> = alias.split('_').map(|s| String::from(s)).collect();
         if path.len() == 0 {
             return Err(Error::AdhocError("Datasource cannot be empty!"));
         }
@@ -123,8 +124,9 @@ impl Datasource {
         };
     }
 
-    /// Construct a datasource from a path.
-    pub fn from_path_transact(conn: &Connection, path: Vec<String>) -> Result<Self, Error> {
+    /// Construct a datasource from an alias.
+    pub fn from_alias_transact(conn: &Connection, alias: String) -> Result<Self, Error> {
+        let path: Vec<String> = alias.split('_').map(|s| String::from(s)).collect();
         if path.len() == 0 {
             return Err(Error::AdhocError("Datasource cannot be empty!"));
         }
