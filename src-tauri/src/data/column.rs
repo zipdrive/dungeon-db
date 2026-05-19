@@ -7,6 +7,7 @@ use crate::util::channel::Sender;
 use crate::data::schema;
 use crate::data::surrogate;
 use crate::data::column_type;
+use crate::data::table::{regenerate_label_view};
 use rusqlite::OptionalExtension;
 use rusqlite::{Connection, Transaction, params};
 use serde::{Serialize, Deserialize};
@@ -403,6 +404,9 @@ impl FullMetadata {
                 // Otherwise, a virtual column that requires nothing to be done
             }
         }
+
+        // Regenerate the label view for the table hosting this column
+        regenerate_label_view(&trans, self.schema.oid)?;
 
         Ok(())
     }

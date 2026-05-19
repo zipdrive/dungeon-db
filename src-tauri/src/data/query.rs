@@ -982,14 +982,12 @@ impl QueryBuilder {
                 );
                 let object_query_string_ord: String = format!("VALUE{}", self.get_column_num());
                 let label_ord: String = format!("LABEL{}", self.get_column_num());
-                let surrogate: surrogate::Surrogate = {
-                    let conn = db::open()?;
-                    let datasource: Datasource = Datasource::Column { parent_datasource: Box::new(column_datasource.unwrap().clone()), column: column_metadata.clone() };
-                    surrogate::Surrogate::get_object(&conn, self, datasource, surrogate_table_oid_chain)?
-                };
+
+                let json_expr: String = format!("(SELECT OBJECT_LABEL FROM TABLE{table_oid}_LABEL_VIEW WHERE OID = {primitive_value_alias})");
+
                 QueryBuilderColumn::Object { 
-                    label_expr: surrogate.label_expr,
-                    json_expr: surrogate.json_expr,
+                    label_expr: json_expr.clone(),
+                    json_expr,
                     object_query_string_expr: format!("CASE WHEN {primitive_value_alias} IS NULL THEN NULL ELSE 'ROOT' || FORMAT('%d', (SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = {table_oid} LIMIT 1)) || '=' || FORMAT('%d', {primitive_value_alias}) END"),
                     label_ord, 
                     object_schema_oid: table_oid,
@@ -1012,14 +1010,10 @@ impl QueryBuilder {
                 );
                 let select_row_ord: String = format!("VALUE{}", self.get_column_num());
                 let label_ord: String = format!("LABEL{}", self.get_column_num());
-                let surrogate: surrogate::Surrogate = {
-                    let conn = db::open()?;
-                    let datasource: Datasource = Datasource::Column { parent_datasource: Box::new(column_datasource.unwrap().clone()), column: column_metadata.clone() };
-                    surrogate::Surrogate::get_flat(&conn, self, datasource, surrogate_table_oid_chain)?
-                };
+
                 QueryBuilderColumn::Select { 
-                    label_expr: surrogate.label_expr,
-                    json_expr: surrogate.json_expr,
+                    label_expr: format!("(SELECT SELECT_LABEL FROM TABLE{table_oid}_LABEL_VIEW WHERE OID = {primitive_value_alias})"),
+                    json_expr: format!("(SELECT JSON_LABEL FROM TABLE{table_oid}_LABEL_VIEW WHERE OID = {primitive_value_alias})"),
                     select_row_expr: primitive_value_alias,
                     label_ord, 
                     select_schema_oid: table_oid,
@@ -1048,25 +1042,29 @@ impl QueryBuilder {
                 let select_row_ord: String = format!("VALUE{}", self.get_column_num());
                 let label_ord: String = format!("LABEL{}", self.get_column_num());
 
-                // Construct subquery for the surrogate label
-                let mut surrogate_subquery: QueryBuilder = self.spawn();
-                let surrogate: surrogate::Surrogate = {
-                    let conn = db::open()?;
-                    let datasource: Datasource = Datasource::Column { parent_datasource: Box::new(column_datasource.clone()), column: column_metadata.clone() };
-                    surrogate::Surrogate::get_flat(&conn, &mut surrogate_subquery, datasource, surrogate_table_oid_chain)?
-                };
-
                 QueryBuilderColumn::Multiselect { 
-                    label_expr: format!(
-                        "(SELECT '[' || GROUP_CONCAT({}) || ']' {})", 
-                        surrogate.json_expr,
-                        match surrogate_subquery.compile_datasources(false)? {
-                            Some((f, _)) => f,
-                            None => {
-                                return Err(Error::AdhocError("Subquery for the Multiselect column failed to compile."));
-                            }
-                        }
-                    ),
+                    label_expr: if inverted {
+                        format!("(
+                                SELECT '[' || COALESCE(GROUP_CONCAT(CASE WHEN lbl.SELECT_LABEL = lbl.JSON_LABEL THEN lbl.SELECT_LABEL ELSE COALESCE('\"' || lbl.SELECT_LABEL || '\"', lbl.JSON_LABEL) END, ', '), '') || ']' 
+                                FROM MULTISELECT{} m
+                                INNER JOIN TABLE{}_LABEL_VIEW lbl ON lbl.OID = m.TABLE{}_OID
+                                WHERE m.TABLE{table_oid}_OID = {primitive_value_alias}
+                            )",
+                            column_metadata.oid,
+                            column_metadata.schema.oid,
+                            column_metadata.schema.oid
+                        )
+                    } else {
+                        format!("(
+                                SELECT '[' || COALESCE(GROUP_CONCAT(CASE WHEN lbl.SELECT_LABEL = lbl.JSON_LABEL THEN lbl.SELECT_LABEL ELSE COALESCE('\"' || lbl.SELECT_LABEL || '\"', lbl.JSON_LABEL) END, ', '), '') || ']' 
+                                FROM MULTISELECT{} m
+                                INNER JOIN TABLE{table_oid}_LABEL_VIEW lbl ON lbl.OID = m.TABLE{table_oid}_OID
+                                WHERE m.TABLE{}_OID = {primitive_value_alias}
+                            )",
+                            column_metadata.oid,
+                            column_metadata.schema.oid
+                        )
+                    },
                     select_row_expr: if inverted {
                         format!("(
                                 SELECT GROUP_CONCAT(CAST(TABLE{}_OID AS TEXT)) 
