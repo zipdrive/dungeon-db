@@ -16,6 +16,7 @@ mod column;
 mod row;
 mod cell;
 mod file;
+mod export;
 
 #[tauri::command]
 /// Initialize a connection to a StaticDB database file.

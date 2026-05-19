@@ -382,7 +382,7 @@ impl Cell {
         )?;
         for row_result in stmt_orderby.query_and_then(params![schema_oid], |row| { Ok::<(String, i64, bool), rusqlite::Error>((row.get::<_, String>("DATASOURCE_ALIAS")?, row.get::<_, i64>("COLUMN_OID")?, row.get::<_, bool>("SORT_ASCENDING")?)) })? {
             let (datasource_alias, column_oid, sort_ascending) = row_result?;
-            let column_datasource: datasource::Datasource = datasource::Datasource::from_path_transact(&conn, datasource_alias.split('_').map(|s| String::from(s)).collect())?;
+            let column_datasource: datasource::Datasource = datasource::Datasource::from_alias_transact(&conn, datasource_alias)?;
             let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(&conn, column_oid)?;
 
             // Insert ORDER BY clause
@@ -402,8 +402,7 @@ impl Cell {
             // First, check for which datasources in the query are unfixed
             let mut unfixed_datasources: HashSet<Datasource> = HashSet::new();
             for datasource_alias in datasource_aliases.iter() {
-                let datasource_path: Vec<String> = datasource_alias.split('_').map(|s| String::from(s)).collect();
-                let datasource: Datasource = Datasource::from_path(datasource_path)?;
+                let datasource: Datasource = Datasource::from_alias(datasource_alias)?;
                 let base_datasource: Datasource = datasource.seek_basis()?;
                 let base_datasource_alias: String = base_datasource.get_alias();
 
@@ -676,7 +675,7 @@ impl Cell {
                                                 cell_oid, 
                                                 value_oid, 
                                                 multiselect_schema_oid: if {
-                                                    let value_datasource: Datasource = Datasource::from_path(value_datasource_alias.split('_').map(|s| String::from(s)).collect())?;
+                                                    let value_datasource: Datasource = Datasource::from_alias(value_datasource_alias)?;
                                                     value_datasource.get_schema_oid()?
                                                 } == value_column.schema.oid {
                                                     // If the multiselect column belongs to the schema of the datasource, do not invert
