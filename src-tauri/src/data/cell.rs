@@ -402,7 +402,7 @@ impl Cell {
             // First, check for which datasources in the query are unfixed
             let mut unfixed_datasources: HashSet<Datasource> = HashSet::new();
             for datasource_alias in datasource_aliases.iter() {
-                let datasource: Datasource = Datasource::from_alias(datasource_alias)?;
+                let datasource: Datasource = Datasource::from_alias(datasource_alias.clone())?;
                 let base_datasource: Datasource = datasource.seek_basis()?;
                 let base_datasource_alias: String = base_datasource.get_alias();
 
@@ -675,7 +675,7 @@ impl Cell {
                                                 cell_oid, 
                                                 value_oid, 
                                                 multiselect_schema_oid: if {
-                                                    let value_datasource: Datasource = Datasource::from_alias(value_datasource_alias)?;
+                                                    let value_datasource: Datasource = Datasource::from_alias(String::from(value_datasource_alias))?;
                                                     value_datasource.get_schema_oid()?
                                                 } == value_column.schema.oid {
                                                     // If the multiselect column belongs to the schema of the datasource, do not invert

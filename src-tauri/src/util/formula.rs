@@ -663,7 +663,7 @@ impl Formula {
                     substring_with_error: String::from(remaining_str.trim_start()) 
                 }); 
             };
-            return Self::parse_dependent_expr(full_str, following, Formula::Param { datasource_alias, column_oid });
+            return Self::parse_dependent_expr(full_str, following, Formula::Param { datasource_alias: String::from(datasource_alias), column_oid });
         }
 
         // Check for a function call

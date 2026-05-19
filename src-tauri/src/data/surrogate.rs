@@ -205,7 +205,7 @@ impl Surrogate {
             .query_map(params![schema_oid, datasource_alias], |row| Ok((row.get::<_, i64>("OID")?, row.get::<_, String>("NAME")?, row.get::<_, String>("DATASOURCE_PATH")?)))? {
 
             let (inheritor_schema_oid, inheritor_schema_name, inheritor_schema_datasource_path) = result?;
-            let inheritor_datasource: Datasource = Datasource::from_path_transact(conn, inheritor_schema_datasource_path.split("_").map(|s| s.to_string()).collect())?;
+            let inheritor_datasource: Datasource = Datasource::from_alias_transact(conn, format!("{datasource_alias}{inheritor_schema_datasource_path}"))?;
             schema_to_datasource.insert(inheritor_schema_oid, inheritor_datasource);
             inheritor_datasources.push((subquery.insert_datasource(&schema_to_datasource[&inheritor_schema_oid])?, inheritor_schema_name));
         }
