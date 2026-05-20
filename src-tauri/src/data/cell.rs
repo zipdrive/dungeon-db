@@ -62,7 +62,7 @@ impl CellOid {
     pub fn get_column_oid(&self) -> i64 {
         match self {
             Self::TableCell { column_oid, .. }
-            | Self::ReportCell { column_oid, .. } => column_oid
+            | Self::ReportCell { column_oid, .. } => column_oid.clone()
         }
     }
 }

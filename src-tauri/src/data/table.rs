@@ -75,7 +75,7 @@ impl FullMetadata {
         trans.execute("INSERT INTO METADATA_DATASOURCE (TABLE_OID) VALUES (?1)", params![self.schema.oid])?;
 
         // Regenerate the label view
-        regenerate_label_view(&trans, self.schema.oid)?;
+        regenerate_table_views(&trans, self.schema.oid)?;
 
         // Commit the transaction
         trans.commit()?;
@@ -91,7 +91,7 @@ impl FullMetadata {
         self.schema.set(&trans)?;
 
         // Regenerate the label view
-        regenerate_label_view(&trans, self.schema.oid)?;
+        regenerate_table_views(&trans, self.schema.oid)?;
 
         // Commit the transaction
         trans.commit()?;
@@ -101,63 +101,15 @@ impl FullMetadata {
 
 
 
-struct LabelExpression {
-    /// An expression for the OID of the row.
-    oid_expr: String,
-
-    /// An expression for a label for the row, in plaintext format (if the table is not inherited from AND the table only has a single primary key) 
-    /// or JSON format otherwise.
-    plain_expr: String,
-
-    /// An expression for a label for the row, in JSON format.
-    json_expr: String
-}
-
-impl LabelExpression {
-    /// Compiles the label expressions for a table.
-    fn compile_transact(trans: &Transaction, query: &mut QueryBuilder, datasource: Datasource) -> Result<Self, Error> {
-        let datasource_alias: String = query.insert_datasource(&datasource)?;
-
-        let mut column_subqueries: Vec<(String, String)> = Vec::new();
-
-        // Iterate over each column of the table and its master tables
-        for row_result in trans.prepare("SELECT sc.COLUMN_OID FROM METADATA_SCHEMA_COLUMN_VIEW sc INNER JOIN METADATA_COLUMN c ON c.OID = sc.COLUMN_OID WHERE sc.SCHEMA_OID = ?1 AND sc.IS_REQUIRED ORDER BY c.ORDERING")?.query_map(params![datasource.get_schema_oid()?], |row| row.get::<_, i64>("COLUMN_OID"))? {
-            let column_oid: i64 = row_result?;
-            let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
-
-            
-        }
-
-        // Compile into a single query
-        Ok(Self {
-            oid_expr: format!("{datasource_alias}.OID"),
-            plain_expr: if column_subqueries.len() > 1 {
-                String::from("NULL")
-            } else if column_subqueries.len() == 1 {
-                column_subqueries[0].0.clone()
-            } else {
-                String::from("'— NO PRIMARY KEY —'")
-            },
-            json_expr: if column_subqueries.len() > 0 {
-                format!(
-                    "(SELECT '{{' || COALESCE(GROUP_CONCAT(({}), ', '), '') || '}}')",
-                    column_subqueries.into_iter().map(|(_, key_value_pair)| key_value_pair).reduce(|acc, e| format!("{acc} UNION ALL {e}")).unwrap()
-                )
-            } else {
-                String::from("'{{}}'")
-            }
-        })
-    }
-}
-
-
-
 /// Compiles a CTE to determine the lowest-level inheritor table that is associated with a particular row in the master table.
 fn compile_polymorphism_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mut HashMap<String, String>) -> Result<(), Error> {
     let cte_name: String = format!("TABLE{table_oid}_POLYMORPHISM_CTE");
+    if compiled_cte.contains_key(&cte_name) {
+        return Ok(()); // Prevent infinite recursion, just in case
+    }
     
     // The components of the query will be combined with UNION
-    let polymorphism_cte_components: Vec<String> = Vec::new();
+    let mut polymorphism_cte_components: Vec<String> = Vec::new();
 
     // Get polymorphism of inheritor tables
     for row_result in trans.prepare("SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE WHERE MASTER_SCHEMA_OID = ?1 AND NOT TRASH")?.query_map(params![table_oid], |row| row.get::<_, i64>("INHERITOR_SCHEMA_OID"))? {
@@ -178,7 +130,7 @@ fn compile_polymorphism_cte(trans: &Transaction, table_oid: i64, compiled_cte: &
         ));
     }
 
-    /// Compile the final CTE
+    // Compile the final CTE
     compiled_cte.insert(cte_name, 
         if polymorphism_cte_components.len() > 0 {
             format!(
@@ -214,7 +166,7 @@ fn create_polymorphism_view(trans: &Transaction, table_oid: i64) -> Result<(), E
 
     // Compile all necessary CTEs
     let mut compiled_cte: HashMap<String, String> = HashMap::new();
-    compile_polymorphism_cte(trans, table_oid.clone(), &compiled_cte)?;
+    compile_polymorphism_cte(trans, table_oid.clone(), &mut compiled_cte)?;
 
     // Compile and create the final view
     if let Some(final_cte) = compiled_cte.remove(&final_cte_name) {
@@ -237,6 +189,7 @@ fn create_polymorphism_view(trans: &Transaction, table_oid: i64) -> Result<(), E
         );
         trans.execute(&create_sql, [])?;
     }
+    Ok(())
 }
 
 
@@ -248,10 +201,10 @@ fn compile_keycolumn_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mut
     if compiled_cte.contains_key(&cte_name) {
         return Ok(compiled_cte[&cte_name] != "...");
     }
-    compiled_cte.insert(cte_name, String::from("..."))
+    compiled_cte.insert(cte_name.clone(), String::from("..."));
 
     // The components of the query will be combined with UNION
-    let column_cte_components: Vec<String> = Vec::new();
+    let mut column_cte_components: Vec<String> = Vec::new();
 
     // Get primary keys of master tables
     for row_result in trans.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE WHERE INHERITOR_SCHEMA_OID = ?1 AND NOT TRASH")?.query_map(params![table_oid], |row| row.get::<_, i64>("MASTER_SCHEMA_OID"))? {
@@ -434,207 +387,7 @@ fn compile_keycolumn_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mut
         }
     }
 
-    /// Compile the final CTE
-    compiled_cte.insert(cte_name, column_cte_components.into_iter().reduce(|acc, e| format!("{acc} UNION {e}")).unwrap());
-    Ok(true)
-}
-
-
-
-/// Compiles a CTE to get all columns for a particular row in a table.
-fn compile_column_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mut HashMap<String, String>) -> Result<bool, Error> {
-    // Prevent duplication
-    let cte_name: String = format!("TABLE{table_oid}_COLUMNS_CTE");
-    if compiled_cte.contains_key(&cte_name) {
-        return Ok(compiled_cte[&cte_name] != "...");
-    }
-    compiled_cte.insert(cte_name, String::from("..."))
-
-    // The components of the query will be combined with UNION
-    let column_cte_components: Vec<String> = Vec::new();
-
-    // Get primary keys of master tables
-    for row_result in trans.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE WHERE INHERITOR_SCHEMA_OID = ?1 AND NOT TRASH")?.query_map(params![table_oid], |row| row.get::<_, i64>("MASTER_SCHEMA_OID"))? {
-        // Ensure that master CTE is compiled
-        let master_table_oid: i64 = row_result?;
-        if compile_keycolumn_cte(trans, master_table_oid, compiled_cte)? {
-            // Get the columns from the master CTE
-            column_cte_components.push(format!(
-                "
-                SELECT
-                    t.OID,
-                    m.PLAIN_LABEL,
-                    m.JSON_LABEL
-                FROM TABLE{master_table_oid}_KEYCOLUMNS_CTE m
-                INNER JOIN TABLE{table_oid} t ON t.MASTER{master_table_oid}_OID = m.OID
-                "
-            ));
-        } // Otherwise, ignore the primary keys of the master table
-    }
-
-    // Get each primary key column from this table
-    for row_result in trans.prepare("SELECT OID FROM METADATA_COLUMN WHERE SCHEMA_OID = ?1 AND IS_PRIMARY_KEY AND NOT TRASH")?.query_map(params![table_oid], |row| row.get::<_, i64>("OID"))? {
-        let column_oid: i64 = row_result?;
-        let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
-        let sanitized_column_name: String = column_metadata.name.replace("\\", "\\\\").replace("\"", "\\\"").replace("'", "''");
-
-        // Determine expression for this specific column
-        match column_metadata.column_type {
-            column_type::ColumnType::Primitive(prim) => {
-                match prim {
-                    column_type::Primitive::Integer
-                    | column_type::Primitive::Number 
-                    | column_type::Primitive::JSON => {
-                        column_cte_components.push(format!(
-                            "
-                            SELECT
-                                t.OID,
-                                t.COLUMN{column_oid} AS PLAIN_LABEL,
-                                '\"{sanitized_column_name}\": ' || COALESCE(CAST(t.COLUMN{column_oid} AS TEXT), 'null') AS JSON_LABEL
-                            FROM TABLE{table_oid} t
-                            "
-                        ));
-                    }
-                    column_type::Primitive::Text => {
-                        column_cte_components.push(format!(
-                            "
-                            SELECT
-                                t.OID,
-                                t.COLUMN{column_oid} AS PLAIN_LABEL,
-                                '\"{sanitized_column_name}\": ' || COALESCE('\"' || REPLACE(REPLACE(t.COLUMN{column_oid}, '\\', '\\\\'), '\"', '\\\"') || '\"', 'null') AS JSON_LABEL
-                            FROM TABLE{table_oid} t
-                            "
-                        ));
-                    }
-                    column_type::Primitive::Checkbox => {
-                        column_cte_components.push(format!(
-                            "
-                            SELECT
-                                t.OID,
-                                IF(t.COLUMN{column_oid}, 'True', 'False') AS PLAIN_LABEL,
-                                '\"{sanitized_column_name}\": ' || CASE WHEN t.COLUMN{column_oid} IS NULL THEN 'null' WHEN t.COLUMN{column_oid} THEN 'true' ELSE 'false' END AS JSON_LABEL
-                            FROM TABLE{table_oid} t
-                            "
-                        ));
-                    }
-                    column_type::Primitive::Date => {
-                        column_cte_components.push(format!(
-                            "
-                            SELECT
-                                t.OID,
-                                DATE(t.COLUMN{column_oid}, 'julianday') AS PLAIN_LABEL,
-                                '\"{sanitized_column_name}\": ' || COALESCE('\"' || DATE(t.COLUMN{column_oid}, 'julianday') || '\"', 'null') AS JSON_LABEL
-                            FROM TABLE{table_oid} t
-                            "
-                        ));
-                    }
-                    column_type::Primitive::Datetime => {
-                        column_cte_components.push(format!(
-                            "
-                            SELECT
-                                t.OID,
-                                STRFTIME('%FT%TZ', t.COLUMN{column_oid}, 'julianday') AS PLAIN_LABEL,
-                                '\"{sanitized_column_name}\": ' || COALESCE('\"' || STRFTIME('%FT%TZ', t.COLUMN{column_oid}, 'julianday') || '\"', 'null') AS JSON_LABEL
-                            FROM TABLE{table_oid} t
-                            "
-                        ));
-                    }
-                    column_type::Primitive::File 
-                    | column_type::Primitive::Image => {
-                        column_cte_components.push(format!(
-                            "
-                            SELECT
-                                t.OID,
-                                f.LABEL AS PLAIN_LABEL,
-                                '\"{sanitized_column_name}\": ' || COALESCE('\"' || REPLACE(REPLACE(f.LABEL, '\\', '\\\\'), '\"', '\\\"') || '\"', 'null') AS JSON_LABEL
-                            FROM TABLE{table_oid} t
-                            LEFT JOIN METADATA_FILE_VIEW f ON f.OID = t.COLUMN{column_oid}
-                            "
-                        ));
-                    }
-                }
-            }
-            column_type::ColumnType::Object { table_oid: object_table_oid, .. } => {
-                if compile_full_label_cte(trans, object_table_oid, compiled_cte)? {
-                    column_cte_components.push(format!(
-                        "
-                        SELECT
-                            t.OID,
-                            o.PLAIN_LABEL,
-                            '\"{sanitized_column_name}\": ' || COALESCE('\"' || REPLACE(REPLACE(s.NAME, '\\', '\\\\'), '\"', '\\\"') || '\": {{' || s.JSON_LABEL || '}}', 'null') AS JSON_LABEL
-                        FROM TABLE{table_oid} t
-                        LEFT JOIN TABLE{object_table_oid}_LABEL_CTE o ON o.OID = t.COLUMN{column_oid}
-                        LEFT JOIN METADATA_SCHEMA s ON s.OID = o.SCHEMA_OID
-                        "
-                    ));
-                } else {
-                    column_cte_components.push(format!(
-                        "
-                        SELECT
-                            t.OID,
-                            '...' AS PLAIN_LABEL,
-                            '\"{sanitized_column_name}\": ...' AS JSON_LABEL
-                        FROM TABLE{table_oid} t
-                        "
-                    ));
-                }
-            }
-            column_type::ColumnType::Select { table_oid: select_table_oid, .. } => {
-                if compile_full_label_cte(trans, select_table_oid, compiled_cte)? {
-                    column_cte_components.push(format!(
-                        "
-                        SELECT
-                            t.OID,
-                            s.PLAIN_LABEL,
-                            '\"{sanitized_column_name}\": ' || COALESCE(s.JSON_LABEL, 'null') AS JSON_LABEL
-                        FROM TABLE{table_oid} t
-                        LEFT JOIN TABLE{select_table_oid}_LABEL_CTE s ON s.OID = t.COLUMN{column_oid}
-                        "
-                    ));
-                } else {
-                    column_cte_components.push(format!(
-                        "
-                        SELECT
-                            t.OID,
-                            '...' AS PLAIN_LABEL,
-                            '\"{sanitized_column_name}\": ...' AS JSON_LABEL
-                        FROM TABLE{table_oid} t
-                        "
-                    ));
-                }
-            }
-            column_type::ColumnType::Multiselect { table_oid: select_table_oid, .. } => {
-                if compile_full_label_cte(trans, select_table_oid, compiled_cte)? {
-                    column_cte_components.push(format!(
-                        "
-                        SELECT
-                            m.TABLE{table_oid}_OID AS OID,
-                            '[' || GROUP_CONCAT('\"' || REPLACE(REPLACE(s.PLAIN_LABEL, '\\', '\\\\'), '\"', '\\\"') || '\"', ', ') || ']' AS PLAIN_LABEL,
-                            '\"{sanitized_column_name}\": [' || COALESCE(GROUP_CONCAT(s.JSON_LABEL, ', '), '') || ']' AS JSON_LABEL
-                        FROM MULTISELECT{column_oid} m
-                        LEFT JOIN TABLE{select_table_oid}_LABEL_CTE s ON s.OID = m.TABLE{select_table_oid}_OID
-                        GROUP BY m.TABLE{table_oid}_OID
-                        "
-                    ));
-                } else {
-                    column_cte_components.push(format!(
-                        "
-                        SELECT
-                            t.OID,
-                            '[...]' AS PLAIN_LABEL,
-                            '\"{sanitized_column_name}\": [...]' AS JSON_LABEL
-                        FROM TABLE{table_oid} t
-                        "
-                    ));
-                }
-            }
-            _ => {
-                // Skip any other type of column
-            }
-        }
-    }
-
-    /// Compile the final CTE
+    // Compile the final CTE
     compiled_cte.insert(cte_name, column_cte_components.into_iter().reduce(|acc, e| format!("{acc} UNION {e}")).unwrap());
     Ok(true)
 }
@@ -645,13 +398,10 @@ fn compile_full_label_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mu
     if compiled_cte.contains_key(&cte_name) {
         return Ok(compiled_cte[&cte_name] == "...");
     }
-    compiled_cte.insert(cte_name, String::from("..."));
+    compiled_cte.insert(cte_name.clone(), String::from("..."));
 
     // Ensure that the polymorphism CTE has been compiled
-    if !compile_polymorphism_cte(trans, table_oid, compiled_cte)? {
-        // Something is completely fucked, recursion-wise
-        return Ok(false);
-    }
+    compile_polymorphism_cte(trans, table_oid, compiled_cte)?;
 
     // Ensure that the keycolumns CTE has been compiled
     if !compile_keycolumn_cte(trans, table_oid, compiled_cte)? {
@@ -762,30 +512,30 @@ fn create_label_view(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
         );
         trans.execute(&create_sql, [])?;
     }
+    Ok(())
 }
 
-fn create_main_view(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
+/// Regenerates the views related to a specific table.
+pub fn regenerate_table_views(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
+    // TODO logic for when inheritance is dropped?
 
-}
-
-/// Regenerates the label view related to a specific table.
-pub fn regenerate_label_view(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
     // Drop and recreate the label views for the tables that this table inherits from
-    let mut top_down_cte: HashMap<i64, String> = HashMap::new();
     for row_result in trans.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE INHERITOR_SCHEMA_OID = ?1 ORDER BY MAX_DEPTH DESC")?.query_map(params![table_oid], |row| row.get::<_, i64>("MASTER_SCHEMA_OID"))? {
         let cte_table_oid: i64 = row_result?;
         
         let drop_sql: String = format!("DROP VIEW IF EXISTS TABLE{cte_table_oid}_LABEL_VIEW; DROP VIEW IF EXISTS TABLE{cte_table_oid}_POLYMORPHISM_VIEW;");
         trans.execute_batch(&drop_sql)?;
 
+        create_polymorphism_view(trans, cte_table_oid)?;
         create_label_view(trans, cte_table_oid)?;
     }
 
     // Drop and recreate this table's label view
     {
-        let drop_sql: String = format!("DROP VIEW IF EXISTS TABLE{table_oid}_LABEL_VIEW");
+        let drop_sql: String = format!("DROP VIEW IF EXISTS TABLE{table_oid}_LABEL_VIEW; DROP VIEW IF EXISTS TABLE{table_oid}_POLYMORPHISM_VIEW;");
         trans.execute_batch(&drop_sql)?;
         
+        create_polymorphism_view(trans, table_oid)?;
         create_label_view(trans, table_oid)?;
     }
 
@@ -793,9 +543,10 @@ pub fn regenerate_label_view(trans: &Transaction, table_oid: i64) -> Result<(), 
     for row_result in trans.prepare("SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE MASTER_SCHEMA_OID = ?1 ORDER BY MAX_DEPTH ASC")?.query_map(params![table_oid], |row| row.get::<_, i64>("MASTER_SCHEMA_OID"))? {
         let cte_table_oid: i64 = row_result?;
         
-        let drop_sql: String = format!("DROP VIEW IF EXISTS TABLE{cte_table_oid}_LABEL_VIEW");
+        let drop_sql: String = format!("DROP VIEW IF EXISTS TABLE{cte_table_oid}_LABEL_VIEW; DROP VIEW IF EXISTS TABLE{cte_table_oid}_POLYMORPHISM_VIEW;");
         trans.execute_batch(&drop_sql)?;
 
+        create_polymorphism_view(trans, cte_table_oid)?;
         create_label_view(trans, cte_table_oid)?;
     }
     Ok(())
