@@ -28,7 +28,8 @@ pub enum RetrievalLimit {
         num: i64,
         size: i64     
     },
-    SingleRow
+    SingleRow,
+    None
 }
 
 impl RetrievalLimit {
@@ -36,7 +37,8 @@ impl RetrievalLimit {
     pub fn get_size(&self) -> i64 {
         match self {
             Self::Page { size, .. } => size.clone(),
-            Self::SingleRow => 1
+            Self::SingleRow => 1,
+            Self::None => i64::MAX
         }
     }
 }
@@ -52,6 +54,16 @@ pub enum CellOid {
     ReportCell {
         column_oid: i64,
         filters: Vec<(String, i64)>
+    }
+}
+
+impl CellOid {
+    /// Retrieves the column OID associated with this cell.
+    pub fn get_column_oid(&self) -> i64 {
+        match self {
+            Self::TableCell { column_oid, .. }
+            | Self::ReportCell { column_oid, .. } => column_oid
+        }
     }
 }
 
@@ -447,7 +459,8 @@ impl Cell {
             // Add row limits
             let cmd_query: String = match limit {
                 RetrievalLimit::SingleRow => format!("{cmd_query} LIMIT 1"),
-                RetrievalLimit::Page { num, size } => format!("{cmd_query} LIMIT {size} OFFSET {}", size * (num - 1))
+                RetrievalLimit::Page { num, size } => format!("{cmd_query} LIMIT {size} OFFSET {}", size * (num - 1)),
+                RetrievalLimit::None => cmd_query
             };
 
             // Run the query
