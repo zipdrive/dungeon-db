@@ -85,7 +85,7 @@ impl HierarchicalListItemMetadata {
                     0 AS LEVEL
                 FROM METADATA_TABLE tbl
                 INNER JOIN METADATA_SCHEMA s ON s.OID = tbl.OID AND NOT s.TRASH
-                WHERE tbl.OID NOT IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE)
+                WHERE tbl.OID NOT IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW)
 
                 UNION
 
@@ -95,8 +95,8 @@ impl HierarchicalListItemMetadata {
                     h.OID AS MASTER_OID,
                     h.LEVEL + 1 AS LEVEL
                 FROM TABLE_HIERARCHY h
-                INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID AND NOT inh.TRASH
-                INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID AND NOT s.TRASH
+                INNER JOIN METADATA_SCHEMA_INHERITANCE_VIEW inh ON inh.MASTER_SCHEMA_OID = h.OID
+                INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID
                 WHERE EXISTS(SELECT OID FROM METADATA_TABLE WHERE OID = s.OID)
 
                 ORDER BY LEVEL DESC, NAME -- Order depth first, then by name within a depth
@@ -131,7 +131,7 @@ impl HierarchicalListItemMetadata {
                     0 AS LEVEL
                 FROM METADATA_REPORT r
                 INNER JOIN METADATA_SCHEMA s ON s.OID = r.OID AND NOT s.TRASH
-                WHERE r.OID NOT IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE)
+                WHERE r.OID NOT IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW)
 
                 UNION
 
@@ -141,8 +141,8 @@ impl HierarchicalListItemMetadata {
                     h.OID AS MASTER_OID,
                     h.LEVEL + 1 AS LEVEL
                 FROM REPORT_HIERARCHY h
-                INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID AND NOT inh.TRASH
-                INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID AND NOT s.TRASH
+                INNER JOIN METADATA_SCHEMA_INHERITANCE_VIEW inh ON inh.MASTER_SCHEMA_OID = h.OID
+                INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID
                 WHERE EXISTS(SELECT OID FROM METADATA_REPORT WHERE OID = s.OID)
 
                 ORDER BY LEVEL DESC, NAME -- Order depth first, then by name within a depth
@@ -202,8 +202,8 @@ impl SelectedHierarchicalListItemMetadata {
                     h.OID AS MASTER_OID,
                     h.LEVEL + 1 AS LEVEL
                 FROM TABLE_HIERARCHY h
-                INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID AND NOT inh.TRASH
-                INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID AND NOT s.TRASH
+                INNER JOIN METADATA_SCHEMA_INHERITANCE_VIEW inh ON inh.MASTER_SCHEMA_OID = h.OID
+                INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID
                 WHERE EXISTS(SELECT OID FROM METADATA_TABLE WHERE OID = s.OID)
 
                 ORDER BY LEVEL DESC, NAME -- Order depth first, then by name within a depth
@@ -272,7 +272,7 @@ impl ToggledHierarchicalListItemMetadata {
                         (s.OID IS ?1) AS DISABLED
                     FROM METADATA_SCHEMA s 
                     WHERE (NOT s.TRASH)
-                        AND s.OID NOT IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE)
+                        AND s.OID NOT IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW)
 
                     UNION
 
@@ -281,10 +281,10 @@ impl ToggledHierarchicalListItemMetadata {
                         s.NAME,
                         h.OID AS MASTER_OID,
                         h.LEVEL + 1 AS LEVEL,
-                        (s.OID IS ?1 OR s.OID IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE MASTER_SCHEMA_OID = ?1)) AS DISABLED
+                        (s.OID IS ?1 OR s.OID IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW WHERE MASTER_SCHEMA_OID = ?1)) AS DISABLED
                     FROM SCHEMA_HIERARCHY h
-                    INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID AND NOT inh.TRASH
-                    INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID AND NOT s.TRASH
+                    INNER JOIN METADATA_SCHEMA_INHERITANCE_VIEW inh ON inh.MASTER_SCHEMA_OID = h.OID
+                    INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID
 
                     ORDER BY LEVEL DESC, NAME -- Order depth first, then by name within a depth
                 )
@@ -302,7 +302,7 @@ impl ToggledHierarchicalListItemMetadata {
                     (s.OID IS ?1) AS DISABLED
                 FROM METADATA_REPORT r
                 INNER JOIN METADATA_SCHEMA s ON s.OID = r.OID AND NOT s.TRASH
-                WHERE r.OID NOT IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE)
+                WHERE r.OID NOT IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW)
 
                 UNION
 
@@ -311,11 +311,11 @@ impl ToggledHierarchicalListItemMetadata {
                     s.NAME,
                     h.OID AS MASTER_OID,
                     h.LEVEL + 1 AS LEVEL,
-                    (s.OID IS ?1 OR s.OID IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE MASTER_SCHEMA_OID = ?1)) AS DISABLED
+                    (s.OID IS ?1 OR s.OID IN (SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW WHERE MASTER_SCHEMA_OID = ?1)) AS DISABLED
                 FROM REPORT_HIERARCHY h
-                INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.MASTER_SCHEMA_OID = h.OID AND NOT inh.TRASH
+                INNER JOIN METADATA_SCHEMA_INHERITANCE_VIEW inh ON inh.MASTER_SCHEMA_OID = h.OID
                 INNER JOIN METADATA_REPORT r ON r.OID = inh.INHERITOR_SCHEMA_OID
-                INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID AND NOT s.TRASH
+                INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID
 
                 ORDER BY LEVEL DESC, NAME -- Order depth first, then by name within a depth
             )
@@ -422,11 +422,9 @@ impl FullMetadata {
             let mut master_schema_oid_statement = conn.prepare(
                 "
                 SELECT 
-                    u.MASTER_SCHEMA_OID 
-                FROM METADATA_SCHEMA_INHERITANCE u
-                INNER JOIN METADATA_SCHEMA s ON s.OID = u.MASTER_SCHEMA_OID AND NOT s.TRASH
-                WHERE u.INHERITOR_SCHEMA_OID = ?1 
-                    AND NOT u.TRASH
+                    MASTER_SCHEMA_OID 
+                FROM METADATA_SCHEMA_INHERITANCE_VIEW 
+                WHERE INHERITOR_SCHEMA_OID = ?1 
                 "
             )?;
             let master_schema_oid_rows = master_schema_oid_statement.query_and_then(
@@ -581,16 +579,6 @@ impl FullMetadata {
                     TRASH = FALSE,
                     ORDERING = excluded.ORDERING,
                     SORT_ASCENDING = excluded.SORT_ASCENDING
-                WHERE EXISTS(
-                    SELECT
-                        c.OID
-                    FROM METADATA_COLUMN c
-                    WHERE c.OID = excluded.COLUMN_OID
-                        AND NOT c.TRASH
-                        AND (c.SCHEMA_OID = excluded.SCHEMA_OID
-                            OR EXISTS(SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE WHERE INHERITOR_SCHEMA_OID = excluded.SCHEMA_OID)
-                        )
-                )
                 ",
                 params![self.oid, order_by_column_oid, order_by_column_ordering, order_by_column_ascending]
             )?;
@@ -615,7 +603,7 @@ impl FullMetadata {
 
                     SELECT
                         INHERITOR_SCHEMA_OID
-                    FROM METADATA_SCHEMA_INHERITANCE_VIEW
+                    FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW
                     WHERE MASTER_SCHEMA_OID IN rarray(?1)
                 ), 
                 AFFECTED_FORMULAE (SCHEMA_OID, FORMULA_OID) AS (

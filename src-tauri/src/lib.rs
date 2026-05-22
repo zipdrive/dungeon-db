@@ -10,6 +10,7 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             {
+                use tauri_plugin_dialog::DialogExt;
                 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
                 let undo_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::KeyZ);
@@ -21,7 +22,7 @@ pub fn run() {
 
                 let new_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::KeyN);
                 let save_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::KeyS);
-                let open_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::KeyO);
+                let load_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::KeyO);
 
                 app.handle().plugin(
                     tauri_plugin_global_shortcut::Builder::new().with_handler(move |_app, shortcut, event| {
@@ -30,6 +31,14 @@ pub fn run() {
                                 data::undo(_app);
                             } else if shortcut == &redo_shortcut {
                                 data::redo(_app); 
+                            } else if shortcut == &new_shortcut {
+                                data::init_new();
+                            } else if shortcut == &load_shortcut {
+                                if let Some(path) = _app.dialog().file().blocking_pick_file() {
+                                    data::init_existing(path.to_string());
+                                }
+                            } else if shortcut == &save_shortcut {
+                                data::save();
                             }
                         }
                     })
@@ -38,11 +47,16 @@ pub fn run() {
 
                 app.global_shortcut().register(undo_shortcut)?;
                 app.global_shortcut().register(redo_shortcut)?;
+                app.global_shortcut().register(new_shortcut)?;
+                app.global_shortcut().register(load_shortcut)?;
+                app.global_shortcut().register(save_shortcut)?;
             }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            data::init,
+            data::init_new,
+            data::init_existing,
+            data::save,
             util::dialog::dialog_open,
             util::dialog::dialog_close,
             data::query,

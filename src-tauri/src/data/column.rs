@@ -139,8 +139,7 @@ impl FullMetadata {
     pub fn query_by_schema(mut sender: Sender<Self>, schema_oid: i64) -> Result<(), Error> {
         let conn = db::open()?;
 
-        let mut select_statement = conn.prepare(
-            "
+        let mut select_statement = conn.prepare("
             SELECT
                 c.OID,
                 c.HIDDEN,
@@ -151,15 +150,10 @@ impl FullMetadata {
                 c.ORDERING,
                 c.DEFAULT_VALUE,
                 c.IS_NULLABLE,
-                c.IS_UNIQUE,
                 c.IS_PRIMARY_KEY
-            FROM METADATA_COLUMN c
-            INNER JOIN (
-                SELECT ?1 AS OID
-                UNION
-                SELECT MASTER_SCHEMA_OID AS OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE INHERITOR_SCHEMA_OID = ?1
-            ) s ON c.SCHEMA_OID = s.OID
-            WHERE NOT c.TRASH
+            FROM METADATA_SCHEMA_COLUMN_VIEW sc
+            INNER JOIN METADATA_COLUMN c ON c.OID = sc.COLUMN_OID
+            WHERE sc.SCHEMA_OID = ?1
             ORDER BY c.ORDERING
             "
         )?;

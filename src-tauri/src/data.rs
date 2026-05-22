@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use tauri::{AppHandle, Emitter, Webview};
 use tauri::ipc::JavaScriptChannelId;
+use tauri_plugin_dialog::DialogExt;
 use std::sync::Mutex;
 use crate::util::channel::Sender;
 use crate::util::error::Error;
@@ -19,9 +20,27 @@ mod file;
 mod export;
 
 #[tauri::command]
-/// Initialize a connection to a StaticDB database file.
-pub fn init(path: String) -> Result<(), Error> {
-    return db::init(path);
+/// Create a new DungeonDB database file.
+pub fn init_new() -> Result<(), Error> {
+    return db::init_new();
+}
+
+#[tauri::command]
+/// Initialize a connection to an existing DungeonDB database file.
+pub fn init_existing(path: String) -> Result<(), Error> {
+    return db::init_existing(path);
+}
+
+#[tauri::command]
+pub fn save() -> Result<(), Error> {
+    // Open connection to the main file
+    let conn = db::save()?;
+
+    // Clean the main file
+    // TODO
+
+    // Terminate the function
+    Ok(())
 }
 
 

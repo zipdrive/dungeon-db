@@ -19,7 +19,7 @@ pub struct Surrogate {
 impl Surrogate {
     /// Recursively build mapping from schema to default datasource by traversing up the inheritance hierarchy.
     fn build_schema_to_datasource_mapping(conn: &Connection, schema_oid: i64, schema_to_datasource: &mut HashMap<i64, datasource::Datasource>) -> Result<(), Error> {
-        for master_schema_oid_result in conn.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE WHERE INHERITOR_SCHEMA_OID = ?1")?.query_map(params![schema_oid], |row| row.get::<_, i64>(0))? {
+        for master_schema_oid_result in conn.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE INHERITOR_SCHEMA_OID = ?1")?.query_map(params![schema_oid], |row| row.get::<_, i64>(0))? {
             let master_schema_oid: i64 = master_schema_oid_result?;
             if !schema_to_datasource.contains_key(&master_schema_oid) {
                 let datasource: datasource::Datasource = datasource::Datasource::MasterTable { 
@@ -64,7 +64,7 @@ impl Surrogate {
                 FROM (
                     SELECT ?1 AS OID
                     UNION
-                    SELECT MASTER_SCHEMA_OID AS OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE INHERITOR_SCHEMA_OID = ?1
+                    SELECT MASTER_SCHEMA_OID AS OID FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW WHERE INHERITOR_SCHEMA_OID = ?1
                 ) s
                 INNER JOIN METADATA_COLUMN c ON c.SCHEMA_OID = s.OID
                 WHERE c.IS_PRIMARY_KEY
@@ -158,9 +158,9 @@ impl Surrogate {
                 FROM (
                     SELECT ?1 AS OID
                     UNION
-                    SELECT MASTER_SCHEMA_OID AS OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE INHERITOR_SCHEMA_OID = ?1
+                    SELECT MASTER_SCHEMA_OID AS OID FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW WHERE INHERITOR_SCHEMA_OID = ?1
                     UNION
-                    SELECT INHERITOR_SCHEMA_OID AS OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE MASTER_SCHEMA_OID = ?1
+                    SELECT INHERITOR_SCHEMA_OID AS OID FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW WHERE MASTER_SCHEMA_OID = ?1
                 ) s
                 INNER JOIN METADATA_COLUMN c ON c.SCHEMA_OID = s.OID
                 WHERE c.IS_PRIMARY_KEY
@@ -195,7 +195,7 @@ impl Surrogate {
                     s.NAME,
                     ?2 || inh.INHERITOR_DATASOURCE_PATH AS DATASOURCE_PATH,
                     inh.MAX_DEPTH
-                FROM METADATA_SCHEMA_INHERITANCE_VIEW inh
+                FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW inh
                 INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID
                 WHERE inh.MASTER_SCHEMA_OID = ?1
 

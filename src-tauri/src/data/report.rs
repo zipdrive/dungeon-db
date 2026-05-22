@@ -128,11 +128,10 @@ impl FullMetadata {
                 WHERE EXISTS(
                     SELECT
                         c.OID
-                    FROM METADATA_COLUMN c
+                    FROM METADATA_COLUMN_VIEW c
                     WHERE c.OID = excluded.COLUMN_OID
-                        AND NOT c.TRASH
                         AND (c.SCHEMA_OID = excluded.REPORT_OID
-                            OR EXISTS(SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE WHERE INHERITOR_SCHEMA_OID = excluded.REPORT_OID)
+                            OR EXISTS(SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE INHERITOR_SCHEMA_OID = excluded.REPORT_OID)
                         )
                 )
                 ",

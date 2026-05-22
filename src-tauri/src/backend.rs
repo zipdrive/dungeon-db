@@ -69,7 +69,6 @@ pub enum Action {
         column_ordering: Option<i64>,
         column_style: String,
         is_nullable: bool,
-        is_unique: bool,
         is_primary_key: bool,
         dropdown_values: Option<Vec<table_column::DropdownValue>>
     },
@@ -80,7 +79,6 @@ pub enum Action {
         column_type: data_type::MetadataColumnType,
         column_style: String,
         is_nullable: bool,
-        is_unique: bool,
         is_primary_key: bool,
         dropdown_values: Option<Vec<table_column::DropdownValue>>
     },
@@ -342,7 +340,6 @@ impl Action {
                 column_ordering,
                 column_style,
                 is_nullable,
-                is_unique,
                 is_primary_key,
                 dropdown_values
             } => {
@@ -353,7 +350,6 @@ impl Action {
                     column_ordering.clone(),
                     column_style,
                     is_nullable.clone(),
-                    is_unique.clone(),
                     is_primary_key.clone(),
                     dropdown_values.clone()
                 )?;
@@ -370,7 +366,6 @@ impl Action {
                 column_type,
                 column_style,
                 is_nullable,
-                is_unique,
                 is_primary_key,
                 dropdown_values
             } => {
@@ -381,7 +376,6 @@ impl Action {
                     column_type.clone(),
                     column_style,
                     is_nullable.clone(),
-                    is_unique.clone(),
                     is_primary_key.clone(),
                     dropdown_values.clone()
                 )? {

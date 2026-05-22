@@ -3,11 +3,13 @@ use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
 use rusqlite::{
     params, Connection, DropBehavior, Params, Result, Row, Transaction, TransactionBehavior,
 };
-use std::any::Any;
+use std::fs;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
+use tempfile::NamedTempFile;
 
 static DATABASE_PATH: Mutex<Option<String>> = Mutex::new(None);
+static DATABASE_AUTOSAVE_PATH: Mutex<Option<NamedTempFile>> = Mutex::new(None);
 
 /// Data structure locking access to the database while a function performs an action.
 pub struct DbAction<'a> {
@@ -75,6 +77,51 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
     );
     CREATE INDEX IF NOT EXISTS METADATA_SCHEMA_INHERITANCE_INDEX_BY_INHERITOR_SCHEMA_OID ON METADATA_SCHEMA_INHERITANCE (INHERITOR_SCHEMA_OID);
 
+    -- METADATA_SCHEMA_INHERITANCE_VIEW is a view that filters out trashed schema inheritance relationships.
+    CREATE VIEW IF NOT EXISTS METADATA_SCHEMA_INHERITANCE_VIEW AS 
+        SELECT
+            inh.INHERITOR_SCHEMA_OID,
+            inh.MASTER_SCHEMA_OID
+        FROM METADATA_SCHEMA_INHERITANCE inh 
+        INNER JOIN METADATA_SCHEMA m ON m.OID = inh.MASTER_SCHEMA_OID 
+        INNER JOIN METADATA_SCHEMA i ON i.OID = inh.INHERITOR_SCHEMA_OID
+        WHERE NOT inh.TRASH 
+            AND NOT m.TRASH 
+            AND NOT i.TRASH
+    ;
+
+    -- METADATA_SCHEMA_INHERITANCE_PATH_VIEW is a view that flattens the inheritance hierarchy.
+    CREATE VIEW IF NOT EXISTS METADATA_SCHEMA_INHERITANCE_PATH_VIEW AS 
+        WITH RECURSIVE FLATTENING (INHERITOR_SCHEMA_OID, MASTER_SCHEMA_OID, INHERITOR_DATASOURCE_PATH, MASTER_DATASOURCE_PATH, DEPTH) AS (
+            SELECT
+                u.INHERITOR_SCHEMA_OID,
+                u.MASTER_SCHEMA_OID,
+                '_INHERITOR' || u.INHERITOR_SCHEMA_OID INHERITOR_DATASOURCE_PATH,
+                '_MASTER' || u.MASTER_SCHEMA_OID MASTER_DATASOURCE_PATH,
+                1 DEPTH
+            FROM METADATA_SCHEMA_INHERITANCE_VIEW u
+
+            UNION
+
+            SELECT
+                u.INHERITOR_SCHEMA_OID,
+                s.MASTER_SCHEMA_OID,
+                s.INHERITOR_DATASOURCE_PATH || '_INHERITOR' || u.INHERITOR_SCHEMA_OID INHERITOR_DATASOURCE_PATH,
+                '_MASTER' || u.MASTER_SCHEMA_OID || s.MASTER_DATASOURCE_PATH MASTER_DATASOURCE_PATH,
+                s.DEPTH + 1 DEPTH
+            FROM FLATTENING s
+            INNER JOIN METADATA_SCHEMA_INHERITANCE_VIEW u ON u.MASTER_SCHEMA_OID = s.INHERITOR_SCHEMA_OID
+        )
+        SELECT 
+            INHERITOR_SCHEMA_OID,
+            MASTER_SCHEMA_OID,
+            MIN(INHERITOR_DATASOURCE_PATH) INHERITOR_DATASOURCE_PATH,
+            MIN(MASTER_DATASOURCE_PATH) MASTER_DATASOURCE_PATH,
+            MAX(DEPTH) MAX_DEPTH  
+        FROM FLATTENING
+        GROUP BY INHERITOR_SCHEMA_OID, MASTER_SCHEMA_OID
+    ;
+
     -- METADATA_SCHEMA_VALIDATION represents a validation performed on a schema.
     -- A validation takes the form of a boolean validation formula that is evaluated for each row in the schema,
     -- and a text message formula which is the error message displayed if the validation formula returns FALSE.
@@ -131,24 +178,25 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
         CONTENT BLOB NOT NULL
     );
     
-    DROP VIEW IF EXISTS METADATA_FILE_VIEW;
-    CREATE VIEW METADATA_FILE_VIEW AS 
-    SELECT
-        OID,
-        FILENAME || ' (' || CASE 
-            WHEN CONTENT IS NULL THEN NULL 
-            WHEN LENGTH(CONTENT) > 1000000000 THEN FORMAT('%.1f GB', LENGTH(CONTENT) * 0.000000001)
-            WHEN LENGTH(CONTENT) > 1000000 THEN FORMAT('%.1f MB', LENGTH(CONTENT) * 0.000001)
-            ELSE FORMAT('%.1f KB', LENGTH(CONTENT) * 0.001)
-        END || ')' AS LABEL
-    FROM METADATA_FILE__BLOB
-    
-    UNION
-    
-    SELECT
-        OID,
-        FILEPATH AS LABEL
-    FROM METADATA_FILE__PATH;
+    -- METADATA_FILE_VIEW constructs a label for each file.
+    CREATE VIEW IF NOT EXISTS METADATA_FILE_VIEW AS 
+        SELECT
+            OID,
+            FILENAME || ' (' || CASE 
+                WHEN CONTENT IS NULL THEN NULL 
+                WHEN LENGTH(CONTENT) > 1000000000 THEN FORMAT('%.1f GB', LENGTH(CONTENT) * 0.000000001)
+                WHEN LENGTH(CONTENT) > 1000000 THEN FORMAT('%.1f MB', LENGTH(CONTENT) * 0.000001)
+                ELSE FORMAT('%.1f KB', LENGTH(CONTENT) * 0.001)
+            END || ')' AS LABEL
+        FROM METADATA_FILE__BLOB
+        
+        UNION ALL
+        
+        SELECT
+            OID,
+            FILEPATH AS LABEL
+        FROM METADATA_FILE__PATH
+    ;
 
 
 
@@ -224,6 +272,52 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
             ON UPDATE CASCADE
     );
 
+    -- METADATA_COLUMN_TYPE_VIEW filters out all trashed column types.
+    CREATE VIEW IF NOT EXISTS METADATA_COLUMN_TYPE_VIEW AS 
+        SELECT ct.OID 
+        FROM METADATA_COLUMN_TYPE ct 
+        INNER JOIN METADATA_COLUMN_TYPE__FORMULA ctf ON ctf.OID = ct.OID 
+        WHERE NOT ct.TRASH 
+
+        UNION ALL 
+
+        SELECT ct.OID 
+        FROM METADATA_COLUMN_TYPE ct 
+        INNER JOIN METADATA_COLUMN_TYPE__SUBREPORT cts ON cts.OID = ct.OID 
+        INNER JOIN METADATA_SCHEMA s ON s.OID = cts.REPORT_OID 
+        WHERE NOT ct.TRASH AND NOT s.TRASH
+
+        UNION ALL 
+
+        SELECT ct.OID 
+        FROM METADATA_COLUMN_TYPE ct 
+        INNER JOIN METADATA_COLUMN_TYPE__PRIMITIVE ctp ON ctp.OID = ct.OID 
+        WHERE NOT ct.TRASH 
+
+        UNION ALL 
+
+        SELECT ct.OID 
+        FROM METADATA_COLUMN_TYPE ct 
+        INNER JOIN METADATA_COLUMN_TYPE__OBJECT cto ON cto.OID = ct.OID 
+        INNER JOIN METADATA_SCHEMA s ON s.OID = cto.TABLE_OID 
+        WHERE NOT ct.TRASH AND NOT s.TRASH
+        
+        UNION ALL 
+
+        SELECT ct.OID 
+        FROM METADATA_COLUMN_TYPE ct 
+        INNER JOIN METADATA_COLUMN_TYPE__SELECT cto ON cto.OID = ct.OID 
+        INNER JOIN METADATA_SCHEMA s ON s.OID = cto.TABLE_OID 
+        WHERE NOT ct.TRASH AND NOT s.TRASH
+        
+        UNION ALL 
+
+        SELECT ct.OID 
+        FROM METADATA_COLUMN_TYPE ct 
+        INNER JOIN METADATA_COLUMN_TYPE__MULTISELECT cto ON cto.OID = ct.OID 
+        INNER JOIN METADATA_SCHEMA s ON s.OID = cto.TABLE_OID 
+        WHERE NOT ct.TRASH AND NOT s.TRASH
+    ;
 
 
     -- METADATA_COLUMN stores all columns of user-defined data types
@@ -243,12 +337,59 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
         ORDERING INTEGER NOT NULL,
             -- The ordering of columns as displayed in the table
         IS_NULLABLE BOOLEAN NOT NULL DEFAULT TRUE,
-        IS_UNIQUE BOOLEAN NOT NULL DEFAULT FALSE,
         IS_PRIMARY_KEY BOOLEAN NOT NULL DEFAULT FALSE,
         DEFAULT_VALUE TEXT
     );
     CREATE INDEX IF NOT EXISTS METADATA_COLUMN_INDEX_BY_SCHEMA_OID ON METADATA_COLUMN (SCHEMA_OID);
 
+    -- METADATA_COLUMN_VIEW filters out all trashed columns.
+    CREATE VIEW IF NOT EXISTS METADATA_COLUMN_VIEW AS 
+        SELECT 
+            c.OID,
+            c.HIDDEN,
+            c.SCHEMA_OID,
+            c.NAME,
+            c.TYPE_OID,
+            c.STYLE,
+            c.ORDERING,
+            c.IS_NULLABLE,
+            c.IS_PRIMARY_KEY,
+            c.DEFAULT_VALUE 
+        FROM METADATA_COLUMN c 
+        INNER JOIN METADATA_SCHEMA s ON s.OID = c.SCHEMA_OID 
+        INNER JOIN METADATA_COLUMN_TYPE_VIEW ct ON ct.OID = c.TYPE_OID 
+        WHERE NOT c.TRASH AND NOT s.TRASH
+    ;
+
+    -- METADATA_SCHEMA_COLUMN_VIEW is a view that lists the columns of a schema.
+    CREATE VIEW IF NOT EXISTS METADATA_SCHEMA_COLUMN_VIEW AS 
+        SELECT
+            c.SCHEMA_OID,
+            '' DATASOURCE_PATH,
+            c.OID COLUMN_OID,
+            TRUE IS_REQUIRED
+        FROM METADATA_COLUMN_VIEW c
+        
+        UNION ALL
+        
+        SELECT
+            inh.INHERITOR_SCHEMA_OID SCHEMA_OID,
+            inh.MASTER_DATASOURCE_PATH DATASOURCE_PATH,
+            c.OID COLUMN_OID,
+            TRUE IS_REQUIRED
+        FROM METADATA_SCHEMA_INHERITANCE_VIEW inh
+        INNER JOIN METADATA_COLUMN_VIEW c ON c.SCHEMA_OID = inh.MASTER_SCHEMA_OID
+
+        UNION ALL
+
+        SELECT
+            inh.MASTER_SCHEMA_OID SCHEMA_OID,
+            inh.INHERITOR_DATASOURCE_PATH DATASOURCE_PATH,
+            c.OID COLUMN_OID,
+            FALSE IS_REQUIRED
+        FROM METADATA_SCHEMA_INHERITANCE_VIEW inh
+        INNER JOIN METADATA_COLUMN_VIEW c ON c.SCHEMA_OID = inh.INHERITOR_SCHEMA_OID
+    ;
 
 
     -- METADATA_DATASOURCE stores root datasources for a schema.
@@ -277,6 +418,21 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
         PRIMARY KEY (SCHEMA_OID, COLUMN_OID)
     );
 
+    -- METADATA_SCHEMA_ORDERBY_VIEW is a view that filters out any trashed METADATA_SCHEMA_ORDERBY rows.
+    CREATE VIEW IF NOT EXISTS METADATA_SCHEMA_ORDERBY_VIEW AS
+        SELECT 
+            so.SCHEMA_OID,
+            sc.DATASOURCE_PATH,
+            so.COLUMN_OID,
+            so.ORDERING,
+            so.SORT_ASCENDING
+        FROM METADATA_SCHEMA_ORDERBY so 
+        INNER JOIN METADATA_SCHEMA_COLUMN_VIEW sc 
+            ON sc.SCHEMA_OID = so.SCHEMA_OID
+                AND sc.COLUMN_OID = so.COLUMN_OID
+        WHERE NOT so.TRASH
+    ;
+
 
 
     -- METADATA_REPORT_GROUPBY stores what columns (if any) the report is aggregated over.
@@ -291,124 +447,16 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
         PRIMARY KEY (REPORT_OID, COLUMN_OID)
     );
 
-
-
-    DROP VIEW IF EXISTS METADATA_SCHEMA_GROUPBY_VIEW;
-    DROP VIEW IF EXISTS METADATA_SCHEMA_ORDERBY_VIEW;
-    DROP VIEW IF EXISTS METADATA_SCHEMA_COLUMN_VIEW;
-    DROP VIEW IF EXISTS METADATA_SCHEMA_INHERITANCE_VIEW;
-
-    -- METADATA_SCHEMA_INHERITANCE_VIEW is a view that flattens the inheritance hierarchy.
-    DROP VIEW METADATA_SCHEMA_INHERITANCE_VIEW;
-    CREATE VIEW IF NOT EXISTS METADATA_SCHEMA_INHERITANCE_VIEW AS 
-        WITH RECURSIVE FLATTENING (INHERITOR_SCHEMA_OID, MASTER_SCHEMA_OID, INHERITOR_DATASOURCE_PATH, MASTER_DATASOURCE_PATH, DEPTH) AS (
-            SELECT
-                u.INHERITOR_SCHEMA_OID,
-                u.MASTER_SCHEMA_OID,
-                '_INHERITOR' || u.INHERITOR_SCHEMA_OID INHERITOR_DATASOURCE_PATH,
-                '_MASTER' || u.MASTER_SCHEMA_OID MASTER_DATASOURCE_PATH,
-                1 DEPTH
-            FROM METADATA_SCHEMA_INHERITANCE u
-
-            UNION
-
-            SELECT
-                u.INHERITOR_SCHEMA_OID,
-                s.MASTER_SCHEMA_OID,
-                s.INHERITOR_DATASOURCE_PATH || '_INHERITOR' || u.INHERITOR_SCHEMA_OID INHERITOR_DATASOURCE_PATH,
-                '_MASTER' || u.MASTER_SCHEMA_OID || s.MASTER_DATASOURCE_PATH MASTER_DATASOURCE_PATH,
-                s.DEPTH + 1 DEPTH
-            FROM FLATTENING s
-            INNER JOIN METADATA_SCHEMA_INHERITANCE u ON u.MASTER_SCHEMA_OID = s.INHERITOR_SCHEMA_OID
-        )
-        SELECT 
-            INHERITOR_SCHEMA_OID,
-            MASTER_SCHEMA_OID,
-            MIN(INHERITOR_DATASOURCE_PATH) INHERITOR_DATASOURCE_PATH,
-            MIN(MASTER_DATASOURCE_PATH) MASTER_DATASOURCE_PATH,
-            MAX(DEPTH) MAX_DEPTH  
-        FROM FLATTENING
-        GROUP BY INHERITOR_SCHEMA_OID, MASTER_SCHEMA_OID
-    ;
-
-    -- METADATA_SCHEMA_COLUMN_VIEW is a view that lists the columns of a schema.
-    CREATE VIEW IF NOT EXISTS METADATA_SCHEMA_COLUMN_VIEW AS 
-        SELECT
-            c.SCHEMA_OID,
-            '' DATASOURCE_PATH,
-            c.OID COLUMN_OID,
-            TRUE IS_REQUIRED
-        FROM METADATA_COLUMN c
-        WHERE NOT c.TRASH
-        
-        UNION
-        
-        SELECT
-            inh.INHERITOR_SCHEMA_OID SCHEMA_OID,
-            inh.MASTER_DATASOURCE_PATH DATASOURCE_PATH,
-            c.OID COLUMN_OID,
-            TRUE IS_REQUIRED
-        FROM METADATA_SCHEMA_INHERITANCE_VIEW inh
-        INNER JOIN METADATA_COLUMN c ON c.SCHEMA_OID = inh.MASTER_SCHEMA_OID
-        WHERE NOT c.TRASH
-
-        UNION
-
-        SELECT
-            inh.MASTER_SCHEMA_OID SCHEMA_OID,
-            inh.INHERITOR_DATASOURCE_PATH DATASOURCE_PATH,
-            c.OID COLUMN_OID,
-            FALSE IS_REQUIRED
-        FROM METADATA_SCHEMA_INHERITANCE_VIEW inh
-        INNER JOIN METADATA_COLUMN c ON c.SCHEMA_OID = inh.INHERITOR_SCHEMA_OID
-        WHERE NOT c.TRASH
-    ;
-
-    -- METADATA_SCHEMA_ORDERBY_VIEW is a view that filters out any bad METADATA_SCHEMA_ORDERBY rows.
-    CREATE VIEW IF NOT EXISTS METADATA_SCHEMA_ORDERBY_VIEW AS
-        WITH RECURSIVE DATASOURCES (ROOT_SCHEMA_OID, SCHEMA_OID, DATASOURCE_ALIAS) AS (
-            SELECT
-                t.OID AS ROOT_SCHEMA_OID,
-                t.OID AS SCHEMA_OID,
-                'ROOT' || FORMAT('%d', (SELECT d.OID FROM METADATA_DATASOURCE d WHERE d.TABLE_OID = t.OID LIMIT 1)) AS DATASOURCE_ALIAS
-            FROM METADATA_TABLE t
-
-            UNION
-            
-            SELECT
-                d.ROOT_SCHEMA_OID,
-                inh.MASTER_SCHEMA_OID AS SCHEMA_OID,
-                d.DATASOURCE_ALIAS || '_MASTER' || FORMAT('%d', inh.MASTER_SCHEMA_OID) AS DATASOURCE_ALIAS
-            FROM DATASOURCES d
-            INNER JOIN METADATA_SCHEMA_INHERITANCE inh ON inh.INHERITOR_SCHEMA_OID = d.SCHEMA_OID
-            INNER JOIN METADATA_SCHEMA s ON s.OID = inh.MASTER_SCHEMA_OID
-            WHERE NOT s.TRASH AND NOT inh.TRASH
-        )
-        SELECT 
-            d.ROOT_SCHEMA_OID AS SCHEMA_OID,
-            d.DATASOURCE_ALIAS,
-            u.COLUMN_OID,
-            u.SORT_ASCENDING
-        FROM METADATA_SCHEMA_ORDERBY u
-        INNER JOIN METADATA_COLUMN c ON c.OID = u.COLUMN_OID
-        INNER JOIN DATASOURCES d ON d.ROOT_SCHEMA_OID = u.SCHEMA_OID AND d.SCHEMA_OID = c.SCHEMA_OID
-        WHERE NOT u.TRASH
-            AND NOT c.TRASH
-        ORDER BY u.ORDERING
-    ;
-
-    -- METADATA_REPORT_GROUPBY_VIEW is a view that filters out any bad METADATA_REPORT_GROUPBY rows.
+    -- METADATA_REPORT_GROUPBY_VIEW is a view that filters out any trashed METADATA_REPORT_GROUPBY rows.
     CREATE VIEW IF NOT EXISTS METADATA_REPORT_GROUPBY_VIEW AS
         SELECT 
-            u.REPORT_OID,
-            u.COLUMN_OID
-        FROM METADATA_REPORT_GROUPBY u
-        INNER JOIN METADATA_COLUMN c ON c.OID = u.COLUMN_OID
-        WHERE NOT u.TRASH
-            AND NOT c.TRASH
-            AND (c.SCHEMA_OID = u.REPORT_OID 
-                OR EXISTS(SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE WHERE INHERITOR_SCHEMA_OID = u.REPORT_OID)
-            )
+            rg.REPORT_OID,
+            rg.COLUMN_OID
+        FROM METADATA_REPORT_GROUPBY rg
+        INNER JOIN METADATA_SCHEMA_COLUMN_VIEW sc
+            ON sc.SCHEMA_OID = rg.REPORT_OID
+                AND sc.COLUMN_OID = rg.COLUMN_OID
+        WHERE NOT rg.TRASH
     ;
     
 
@@ -437,23 +485,61 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
     return Ok(());
 }
 
+/// Closes any previous database connection, and opens 
+pub fn init_new() -> Result<(), error::Error> {
+    // Reset static variables
+    let mut database_path = DATABASE_PATH.lock().unwrap();
+    let mut database_autosave_tempfile = DATABASE_AUTOSAVE_PATH.lock().unwrap();
+    *database_path = None;
+    *database_autosave_tempfile = None;
+
+    // Create new autosave file
+    let Ok(tempfile) = NamedTempFile::new() else {
+        return Err(error::Error::AdhocError("Unable to make an autosave file."));
+    };
+
+    // Initialize the database at the path
+    setup_db_at_path(tempfile.path())?;
+
+    // Transfer ownership of the tempfile to the static variable
+    *database_autosave_tempfile = Some(tempfile);
+
+    Ok(())
+}
+
 /// Closes any previous database connection, and opens a new one.
-pub fn init(path: String) -> Result<(), error::Error> {
-    // Initialize the database if it did not already exist
-    setup_db_at_path(&path)?;
+pub fn init_existing(path: String) -> Result<(), error::Error> {
+    // Reset static variables
+    let mut database_path = DATABASE_PATH.lock().unwrap();
+    let mut database_autosave_tempfile = DATABASE_AUTOSAVE_PATH.lock().unwrap();
+    *database_path = None;
+    *database_autosave_tempfile = None;
+
+    // Make a new autosave file
+    let Ok(tempfile) = NamedTempFile::new() else {
+        return Err(error::Error::AdhocError("Unable to make an autosave file."));
+    };
+
+    // Copy the data over from the main file to the autosave
+    let Ok(_) = fs::copy(&path, tempfile.path()) else {
+        return Err(error::Error::AdhocError("Unable to transfer contents of autosave to main file."));
+    };
+    setup_db_at_path(tempfile.path())?;
 
     // Record the path to static variable
-    let mut database_path = DATABASE_PATH.lock().unwrap();
     *database_path = Some(path);
-    return Ok(());
+    // Transfer ownership of the tempfile to the static variable
+    *database_autosave_tempfile = Some(tempfile);
+
+    Ok(())
 }
 
 /// Opens a connection to the database.
 pub fn open() -> Result<Connection, error::Error> {
-    let database_path = DATABASE_PATH.lock().unwrap();
-    match *database_path {
-        Some(ref path) => {
-            let conn = Connection::open(path)?;
+    let database_autosave_tempfile = DATABASE_AUTOSAVE_PATH.lock().unwrap();
+    match *database_autosave_tempfile {
+        Some(ref tempfile) => {
+            let conn = Connection::open(tempfile.path())?;
             conn.execute_batch(
                 "
             PRAGMA foreign_keys = ON;
@@ -469,4 +555,102 @@ pub fn open() -> Result<Connection, error::Error> {
     }
 }
 
+/// Copies the data from the autosave file to the main file, then open a connection to the main file for cleaning purposes.
+pub fn save() -> Result<(), error::Error> {
+    let mut database_path = DATABASE_PATH.lock().unwrap();
+    let database_autosave_tempfile = DATABASE_AUTOSAVE_PATH.lock().unwrap();
+    match *database_autosave_tempfile {
+        Some(ref tempfile) => {
+            let save_path: &String = match *database_path {
+                Some(ref path) => path,
+                None => {
+                    *database_path = Some(String::from("bababoieu"));
+                    (database_path.as_ref()).unwrap()
+                }
+            };
 
+            // Copy the data from the autosave back to the main file
+            let Ok(_) = fs::copy(tempfile.path(), save_path) else {
+                return Err(error::Error::AdhocError("Unable to transfer contents of autosave to main file."));
+            };
+
+            // Open connection to the main file
+            let mut conn = Connection::open(save_path)?;
+            conn.execute_batch(
+                "
+            PRAGMA foreign_keys = ON;
+            PRAGMA journal_mode = WAL;
+            ",
+            )?;
+            rusqlite::vtab::array::load_module(&conn)?;
+
+            // Start transaction to clean database
+            let trans = conn.transaction()?;
+
+            // Delete data columns
+            for row_result in trans.prepare("SELECT c.SCHEMA_OID, c.OID AS COLUMN_OID FROM METADATA_COLUMN c WHERE NOT EXISTS (SELECT OID FROM METADATA_COLUMN_VIEW WHERE OID = c.OID)")?.query_map([], |row| Ok((row.get::<_, i64>("SCHEMA_OID")?, row.get::<_, i64>("COLUMN_OID")?)))? {
+                let (schema_oid, column_oid) = row_result?;
+                let table_name: String = format!("TABLE{schema_oid}");
+
+                // Drop the multiselect *-to-* mapping table
+                let drop_multiselect_sql: String = format!("DROP TABLE IF EXISTS MULTISELECT{column_oid}");
+                trans.execute(&drop_multiselect_sql, [])?;
+
+                // Drop the column from its host table
+                if trans.table_exists(Some("main"), &table_name)? {
+                    let drop_sql: String = format!("ALTER TABLE {table_name} DROP COLUMN COLUMN{column_oid}");
+                    trans.execute(&drop_sql, [])?;
+                }
+            }
+
+            // Delete data inheritance columns
+            for row_result in trans.prepare("SELECT inh.MASTER_SCHEMA_OID, inh.INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE inh INNER JOIN METADATA_SCHEMA m ON m.OID = inh.MASTER_SCHEMA_OID WHERE inh.TRASH OR m.TRASH")?.query_map([], |row| Ok((row.get::<_, i64>("MASTER_SCHEMA_OID")?, row.get::<_, i64>("INHERITOR_SCHEMA_OID")?)))? {
+                let (master_schema_oid, inheritor_schema_oid) = row_result?;
+                let inheritor_table_name: String = format!("TABLE{inheritor_schema_oid}");
+
+                // Drop the inheritance definition column from the inheriting table
+                if trans.table_exists(Some("main"), &inheritor_table_name)? {
+                    let drop_sql: String = format!("ALTER TABLE {inheritor_table_name} DROP COLUMN MASTER{master_schema_oid}_OID");
+                    trans.execute(&drop_sql, [])?;
+                }
+            }
+
+            // Delete data tables
+            for row_result in trans.prepare("SELECT s.OID FROM METADATA_SCHEMA s INNER JOIN METADATA_TABLE t ON s.OID = t.OID WHERE s.TRASH")?.query_map([], |row| row.get("OID"))? {
+                let table_oid: i64 = row_result?;
+
+                // Drop the table itself
+                let drop_sql: String = format!("DROP TABLE TABLE{table_oid}");
+                trans.execute(&drop_sql, [])?;
+            }
+
+            // Finish cleaning metadata
+            trans.execute_batch("
+            DELETE FROM METADATA_COLUMN_TYPE AS ct WHERE ct.TRASH OR NOT EXISTS(
+                SELECT OID FROM METADATA_COLUMN_TYPE__FORMULA WHERE OID = ct.OID
+                UNION ALL
+                SELECT OID FROM METADATA_COLUMN_TYPE__SUBREPORT WHERE OID = ct.OID 
+                UNION ALL 
+                SELECT OID FROM METADATA_COLUMN_TYPE__PRIMITIVE WHERE OID = ct.OID
+                UNION ALL 
+                SELECT OID FROM METADATA_COLUMN_TYPE__OBJECT WHERE OID = ct.OID 
+                UNION ALL 
+                SELECT OID FROM METADATA_COLUMN_TYPE__SELECT WHERE OID = ct.OID
+                UNION ALL 
+                SELECT OID FROM METADATA_COLUMN_TYPE__MULTISELECT WHERE OID = ct.OID 
+            );
+            DELETE FROM METADATA_COLUMN WHERE TRASH;
+            DELETE FROM METADATA_SCHEMA WHERE TRASH;
+            DELETE FROM METADATA_SCHEMA_INHERITANCE WHERE TRASH;
+            DELETE FROM METADATA_SCHEMA_VALIDATION WHERE TRASH;
+            DELETE FROM METADATA_SCHEMA_ORDERBY WHERE TRASH;
+            DELETE FROM METADATA_REPORT_GROUPBY WHERE TRASH;
+            ")?;
+
+            return Ok(());
+        }
+        None => {
+            return Err(error::Error::AdhocError("No file is open!"));
+        }
+    }
+}

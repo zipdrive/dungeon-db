@@ -13,7 +13,7 @@ fn map_all_master_tables(conn: &Connection, table_oid: i64, row_oid: i64, mapped
     if !mapped_table_oid.contains_key(&table_oid) {
         mapped_table_oid.insert(table_oid, Some(row_oid));
 
-        for master_table_oid_result in conn.prepare("SELECT inh.MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE inh INNER JOIN METADATA_SCHEMA s ON s.OID = inh.MASTER_SCHEMA_OID WHERE inh.INHERITOR_SCHEMA_OID = ?1 AND NOT inh.TRASH AND NOT s.TRASH")?.query_map(params![table_oid], |row| row.get::<_, i64>(0))? {
+        for master_table_oid_result in conn.prepare("SELECT inh.MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW inh INNER JOIN METADATA_SCHEMA s ON s.OID = inh.MASTER_SCHEMA_OID WHERE inh.INHERITOR_SCHEMA_OID = ?1")?.query_map(params![table_oid], |row| row.get::<_, i64>(0))? {
             // Query for the associated row in the master table
             let master_table_oid: i64 = master_table_oid_result?;
             let sql_select: String = format!("SELECT MASTER{master_table_oid}_OID FROM TABLE{table_oid} WHERE OID = ?1");
@@ -34,7 +34,7 @@ fn map_all_inheritor_tables(conn: &Connection, table_oid: i64, row_oid: Option<i
         let mut deepest_level: usize = 0;
         let mut deepest_table_oid: Option<i64> = None;
 
-        for inheritor_table_oid_result in conn.prepare("SELECT inh.INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE inh INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID WHERE inh.MASTER_SCHEMA_OID = ?1 AND NOT inh.TRASH AND NOT s.TRASH")?.query_map(params![table_oid], |row| row.get::<_, i64>(0))? {
+        for inheritor_table_oid_result in conn.prepare("SELECT inh.INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW inh INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID WHERE inh.MASTER_SCHEMA_OID = ?1")?.query_map(params![table_oid], |row| row.get::<_, i64>(0))? {
             // Query for the associated row in the inheritor table
             let inheritor_table_oid: i64 = inheritor_table_oid_result?;
             let sql_select: String = format!("SELECT OID, TRASH FROM TABLE{inheritor_table_oid} WHERE MASTER{table_oid}_OID = ?1");
@@ -72,7 +72,7 @@ pub fn insert_transact(trans: &Transaction, table_oid: i64, row_oid: Option<i64>
 
     // Add a related row to every master table
     let mut cols: Vec<(String, String)> = Vec::new();
-    let mut query_master_cmd = trans.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE WHERE INHERITOR_SCHEMA_OID = ?1")?;
+    let mut query_master_cmd = trans.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE INHERITOR_SCHEMA_OID = ?1")?;
     for master_schema_oid_result in query_master_cmd.query_and_then(params![table_oid], |row| row.get(0))? {
         let master_schema_oid: i64 = master_schema_oid_result?;
         let master_table_name: String = format!("TABLE{master_schema_oid}");
@@ -234,7 +234,7 @@ pub fn trash_transact(trans: &Transaction, table_oid: i64, row_oid: i64, complet
     trans.execute(&sql_trash, params![row_oid])?;
 
     // Trash upwards in the inheritance tree
-    let mut query_master_cmd = trans.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE WHERE INHERITOR_SCHEMA_OID = ?1")?;
+    let mut query_master_cmd = trans.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE INHERITOR_SCHEMA_OID = ?1")?;
     for master_schema_oid_result in query_master_cmd.query_map(params![table_oid], |row| row.get(0))? {
         let master_schema_oid: i64 = master_schema_oid_result?;
         let master_table_name: String = format!("TABLE{master_schema_oid}");
@@ -247,7 +247,7 @@ pub fn trash_transact(trans: &Transaction, table_oid: i64, row_oid: i64, complet
     }
 
     // Trash deeper in the inheritance tree
-    let mut query_inheritor_cmd = trans.prepare("SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE WHERE MASTER_SCHEMA_OID = ?1")?;
+    let mut query_inheritor_cmd = trans.prepare("SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE MASTER_SCHEMA_OID = ?1")?;
     for inheritor_schema_oid_result in query_inheritor_cmd.query_map(params![table_oid], |row| row.get(0))? {
         let inheritor_schema_oid: i64 = inheritor_schema_oid_result?;
         let inheritor_table_name: String = format!("TABLE{inheritor_schema_oid}");
@@ -289,7 +289,7 @@ pub fn untrash_transact(trans: &Transaction, table_oid: i64, row_oid: i64, compl
     trans.execute(&sql_trash, params![row_oid])?;
 
     // Untrash upwards in the inheritance tree
-    let mut query_master_cmd = trans.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE WHERE INHERITOR_SCHEMA_OID = ?1")?;
+    let mut query_master_cmd = trans.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE INHERITOR_SCHEMA_OID = ?1")?;
     for master_schema_oid_result in query_master_cmd.query_map(params![table_oid], |row| row.get(0))? {
         let master_schema_oid: i64 = master_schema_oid_result?;
         let master_table_name: String = format!("TABLE{master_schema_oid}");

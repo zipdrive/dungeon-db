@@ -286,11 +286,9 @@ impl Datasource {
             SELECT 
                 s.OID,
                 s.NAME
-            FROM METADATA_SCHEMA_INHERITANCE inh
+            FROM METADATA_SCHEMA_INHERITANCE_VIEW inh
             INNER JOIN METADATA_SCHEMA s ON s.OID = inh.MASTER_SCHEMA_OID
             WHERE inh.INHERITOR_SCHEMA_OID = ?1
-                AND NOT inh.TRASH
-                AND NOT s.TRASH
                 AND EXISTS(SELECT OID FROM METADATA_TABLE WHERE OID = inh.MASTER_SCHEMA_OID)
             ")?
             .query_map(params![table_oid], |row| Ok::<(i64, String), rusqlite::Error>((row.get("OID")?, row.get("NAME")?)))? {
@@ -312,11 +310,9 @@ impl Datasource {
             SELECT 
                 s.OID,
                 s.NAME
-            FROM METADATA_SCHEMA_INHERITANCE inh
+            FROM METADATA_SCHEMA_INHERITANCE_VIEW inh
             INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID
             WHERE inh.MASTER_SCHEMA_OID = ?1
-                AND NOT inh.TRASH
-                AND NOT s.TRASH
                 AND EXISTS(SELECT OID FROM METADATA_TABLE WHERE OID = inh.INHERITOR_SCHEMA_OID)
             ")?
             .query_map(params![table_oid], |row| Ok::<(i64, String), rusqlite::Error>((row.get("OID")?, row.get("NAME")?)))? {

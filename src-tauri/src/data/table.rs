@@ -112,7 +112,7 @@ fn compile_polymorphism_cte(trans: &Transaction, table_oid: i64, compiled_cte: &
     let mut polymorphism_cte_components: Vec<String> = Vec::new();
 
     // Get polymorphism of inheritor tables
-    for row_result in trans.prepare("SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE WHERE MASTER_SCHEMA_OID = ?1 AND NOT TRASH")?.query_map(params![table_oid], |row| row.get::<_, i64>("INHERITOR_SCHEMA_OID"))? {
+    for row_result in trans.prepare("SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE MASTER_SCHEMA_OID = ?1")?.query_map(params![table_oid], |row| row.get::<_, i64>("INHERITOR_SCHEMA_OID"))? {
         // Ensure that inheritor CTE is compiled
         let inheritor_table_oid: i64 = row_result?;
         compile_polymorphism_cte(trans, inheritor_table_oid, compiled_cte)?;
@@ -207,7 +207,7 @@ fn compile_keycolumn_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mut
     let mut column_cte_components: Vec<String> = Vec::new();
 
     // Get primary keys of master tables
-    for row_result in trans.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE WHERE INHERITOR_SCHEMA_OID = ?1 AND NOT TRASH")?.query_map(params![table_oid], |row| row.get::<_, i64>("MASTER_SCHEMA_OID"))? {
+    for row_result in trans.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE INHERITOR_SCHEMA_OID = ?1")?.query_map(params![table_oid], |row| row.get::<_, i64>("MASTER_SCHEMA_OID"))? {
         // Ensure that master CTE is compiled
         let master_table_oid: i64 = row_result?;
         if compile_keycolumn_cte(trans, master_table_oid, compiled_cte)? {
@@ -412,7 +412,7 @@ fn compile_full_label_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mu
     let mut label_cte_components: Vec<String> = Vec::new();
 
     // Get labels of inheritor tables
-    for row_result in trans.prepare("SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE WHERE MASTER_SCHEMA_OID = ?1 AND NOT TRASH")?.query_map(params![table_oid], |row| row.get::<_, i64>("INHERITOR_SCHEMA_OID"))? {
+    for row_result in trans.prepare("SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE MASTER_SCHEMA_OID = ?1")?.query_map(params![table_oid], |row| row.get::<_, i64>("INHERITOR_SCHEMA_OID"))? {
         // Ensure that inheritor CTE is compiled
         let inheritor_table_oid: i64 = row_result?;
         if compile_full_label_cte(trans, inheritor_table_oid, compiled_cte)? {
@@ -520,7 +520,7 @@ pub fn regenerate_table_views(trans: &Transaction, table_oid: i64) -> Result<(),
     // TODO logic for when inheritance is dropped?
 
     // Drop and recreate the label views for the tables that this table inherits from
-    for row_result in trans.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE INHERITOR_SCHEMA_OID = ?1 ORDER BY MAX_DEPTH DESC")?.query_map(params![table_oid], |row| row.get::<_, i64>("MASTER_SCHEMA_OID"))? {
+    for row_result in trans.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW WHERE INHERITOR_SCHEMA_OID = ?1 ORDER BY MAX_DEPTH DESC")?.query_map(params![table_oid], |row| row.get::<_, i64>("MASTER_SCHEMA_OID"))? {
         let cte_table_oid: i64 = row_result?;
         
         let drop_sql: String = format!("DROP VIEW IF EXISTS TABLE{cte_table_oid}_LABEL_VIEW; DROP VIEW IF EXISTS TABLE{cte_table_oid}_POLYMORPHISM_VIEW;");
@@ -540,7 +540,7 @@ pub fn regenerate_table_views(trans: &Transaction, table_oid: i64) -> Result<(),
     }
 
     // Drop and recreate every label view inheriting from this one
-    for row_result in trans.prepare("SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE MASTER_SCHEMA_OID = ?1 ORDER BY MAX_DEPTH ASC")?.query_map(params![table_oid], |row| row.get::<_, i64>("MASTER_SCHEMA_OID"))? {
+    for row_result in trans.prepare("SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW WHERE MASTER_SCHEMA_OID = ?1 ORDER BY MAX_DEPTH ASC")?.query_map(params![table_oid], |row| row.get::<_, i64>("MASTER_SCHEMA_OID"))? {
         let cte_table_oid: i64 = row_result?;
         
         let drop_sql: String = format!("DROP VIEW IF EXISTS TABLE{cte_table_oid}_LABEL_VIEW; DROP VIEW IF EXISTS TABLE{cte_table_oid}_POLYMORPHISM_VIEW;");
