@@ -388,8 +388,15 @@ fn compile_keycolumn_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mut
     }
 
     // Compile the final CTE
-    compiled_cte.insert(cte_name, column_cte_components.into_iter().reduce(|acc, e| format!("{acc} UNION {e}")).unwrap());
-    Ok(true)
+    match column_cte_components.into_iter().reduce(|acc, e| format!("{acc} UNION {e}")) {
+        Some(compiled_column_cte) => {
+            compiled_cte.insert(cte_name, compiled_column_cte);
+            Ok(true)
+        }
+        None => {
+            Ok(false)
+        }
+    } 
 }
 
 /// Compile a CTE that combines the polymorphism CTE and the key columns CTE into a single CTE.

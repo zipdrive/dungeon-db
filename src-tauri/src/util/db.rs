@@ -377,7 +377,7 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
             inh.MASTER_DATASOURCE_PATH DATASOURCE_PATH,
             c.OID COLUMN_OID,
             TRUE IS_REQUIRED
-        FROM METADATA_SCHEMA_INHERITANCE_VIEW inh
+        FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW inh
         INNER JOIN METADATA_COLUMN_VIEW c ON c.SCHEMA_OID = inh.MASTER_SCHEMA_OID
 
         UNION ALL
@@ -387,7 +387,7 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
             inh.INHERITOR_DATASOURCE_PATH DATASOURCE_PATH,
             c.OID COLUMN_OID,
             FALSE IS_REQUIRED
-        FROM METADATA_SCHEMA_INHERITANCE_VIEW inh
+        FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW inh
         INNER JOIN METADATA_COLUMN_VIEW c ON c.SCHEMA_OID = inh.INHERITOR_SCHEMA_OID
     ;
 
@@ -619,9 +619,13 @@ pub fn save() -> Result<(), error::Error> {
             for row_result in trans.prepare("SELECT s.OID FROM METADATA_SCHEMA s INNER JOIN METADATA_TABLE t ON s.OID = t.OID WHERE s.TRASH")?.query_map([], |row| row.get("OID"))? {
                 let table_oid: i64 = row_result?;
 
-                // Drop the table itself
-                let drop_sql: String = format!("DROP TABLE TABLE{table_oid}");
-                trans.execute(&drop_sql, [])?;
+                // Drop the table and views related to the table
+                let drop_sql: String = format!("
+                    DROP VIEW IF EXISTS TABLE{table_oid}_LABEL_VIEW;
+                    DROP VIEW IF EXISTS TABLE{table_oid}_POLYMORPHISM_VIEW;
+                    DROP TABLE IF EXISTS TABLE{table_oid};
+                ");
+                trans.execute_batch(&drop_sql)?;
             }
 
             // Finish cleaning metadata
