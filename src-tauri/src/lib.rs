@@ -4,7 +4,6 @@ mod data;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -34,11 +33,9 @@ pub fn run() {
                             } else if shortcut == &new_shortcut {
                                 data::init_new();
                             } else if shortcut == &load_shortcut {
-                                if let Some(path) = _app.dialog().file().blocking_pick_file() {
-                                    data::init_existing(path.to_string());
-                                }
+                                data::load_shortcut(_app);
                             } else if shortcut == &save_shortcut {
-                                data::save();
+                                data::save_shortcut(_app);
                             }
                         }
                     })

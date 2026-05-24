@@ -449,8 +449,8 @@ fn compile_full_label_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mu
                     (
                         SELECT
                             CASE
-                                WHEN COUNT(k.*) = 0 THEN '— NO PRIMARY KEY —'
-                                WHEN COUNT(k.*) = 1 THEN MIN(k.PLAIN_LABEL)
+                                WHEN COUNT(k.JSON_LABEL) = 0 THEN '— NO PRIMARY KEY —'
+                                WHEN COUNT(k.JSON_LABEL) = 1 THEN MIN(k.PLAIN_LABEL)
                                 ELSE NULL
                             END
                         FROM TABLE{table_oid}_KEYCOLUMNS_CTE k 
@@ -480,8 +480,8 @@ fn compile_full_label_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mu
                 p.SCHEMA_OID,
                 p.ROW_OID,
                 CASE
-                    WHEN COUNT(k.*) = 0 THEN '— NO PRIMARY KEY —'
-                    WHEN COUNT(k.*) = 1 THEN MIN(k.PLAIN_LABEL)
+                    WHEN COUNT(k.JSON_LABEL) = 0 THEN '— NO PRIMARY KEY —'
+                    WHEN COUNT(k.JSON_LABEL) = 1 THEN MIN(k.PLAIN_LABEL)
                     ELSE NULL
                 END AS PLAIN_LABEL,
                 '{{' || COALESCE(GROUP_CONCAT(k.JSON_LABEL, ', '), '') || '}}' AS JSON_LABEL

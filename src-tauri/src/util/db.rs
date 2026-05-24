@@ -3,6 +3,7 @@ use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
 use rusqlite::{
     params, Connection, DropBehavior, Params, Result, Row, Transaction, TransactionBehavior,
 };
+use tauri::AppHandle;
 use std::fs;
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
@@ -556,7 +557,7 @@ pub fn open() -> Result<Connection, error::Error> {
 }
 
 /// Copies the data from the autosave file to the main file, then open a connection to the main file for cleaning purposes.
-pub fn save() -> Result<(), error::Error> {
+pub fn save(app: &AppHandle) -> Result<(), error::Error> {
     let mut database_path = DATABASE_PATH.lock().unwrap();
     let database_autosave_tempfile = DATABASE_AUTOSAVE_PATH.lock().unwrap();
     match *database_autosave_tempfile {
@@ -564,8 +565,14 @@ pub fn save() -> Result<(), error::Error> {
             let save_path: &String = match *database_path {
                 Some(ref path) => path,
                 None => {
-                    *database_path = Some(String::from("bababoieu"));
-                    (database_path.as_ref()).unwrap()
+                    use tauri_plugin_dialog::DialogExt;
+
+                    if let Some(file_path) = app.dialog().file().add_filter("DungeonDB File", &["db"]).blocking_save_file() {
+                        *database_path = Some(file_path.to_string());
+                        (database_path.as_ref()).unwrap()
+                    } else {
+                        return Ok(());
+                    }
                 }
             };
 

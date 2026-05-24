@@ -32,14 +32,27 @@ pub fn init_existing(path: String) -> Result<(), Error> {
 }
 
 #[tauri::command]
-pub fn save() -> Result<(), Error> {
-    // Open connection to the main file
-    let conn = db::save()?;
+pub fn save(app: AppHandle) -> Result<(), Error> {
+    // Save to main file, then clean database
+    db::save(&app)?;
+    Ok(())
+}
 
-    // Clean the main file
-    // TODO
+pub fn save_shortcut(app: &AppHandle) -> Result<(), Error> {
+    // Save to main file, then clean database
+    db::save(app)?;
+    Ok(())
+}
 
-    // Terminate the function
+#[tauri::command]
+pub fn load(app: AppHandle) -> Result<(), Error> {
+    load_shortcut(&app)
+}
+
+pub fn load_shortcut(app: &AppHandle) -> Result<(), Error> {
+    if let Some(path) = app.dialog().file().add_filter("DungeonDB File", &["db"]).blocking_pick_file() {
+        db::init_existing(path.to_string())?;
+    }
     Ok(())
 }
 

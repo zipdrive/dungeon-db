@@ -8,7 +8,9 @@
   "windows": [
     "main"
   ],
-  "permissions": [
-    "global-shortcut:default"
+  "permissions": [    
+    "global-shortcut:allow-is-registered",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister"
   ]
 }
