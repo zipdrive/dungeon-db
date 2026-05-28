@@ -1,3 +1,4 @@
+use crate::data::view::regenerate_schema_views;
 use crate::util::channel::Sender;
 use crate::util::db;
 use crate::util::error::Error;
@@ -588,7 +589,7 @@ impl FullMetadata {
     }
 
     /// Emit signal to update schema related to the indicated schemas.
-    pub fn query_affected_schema(app: &AppHandle, schema_oids: Vec<i64>) -> Result<(), Error> {
+    pub fn emit_affected_schema(app: &AppHandle, schema_oids: Vec<i64>) -> Result<(), Error> {
         let conn = db::open()?;
         for affected_schema_results in conn
             .prepare(
@@ -647,5 +648,9 @@ impl FullMetadata {
             app.emit(UPDATE_SCHEMA_SIGNAL, affected_schema_results?)?;
         }
         Ok(())
+    }
+
+    pub fn emit_all_schema(app: &AppHandle) -> Result<(), Error> {
+        todo!("Implement this function")
     }
 }

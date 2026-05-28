@@ -11,6 +11,7 @@ mod datasource;
 mod schema;
 mod table;
 mod report;
+mod view;
 mod surrogate;
 mod column_type;
 mod column;
@@ -34,13 +35,18 @@ pub fn init_existing(path: String) -> Result<(), Error> {
 #[tauri::command]
 pub fn save(app: AppHandle) -> Result<(), Error> {
     // Save to main file, then clean database
-    db::save(&app)?;
-    Ok(())
+    save_shortcut(&app)
 }
 
 pub fn save_shortcut(app: &AppHandle) -> Result<(), Error> {
     // Save to main file, then clean database
     db::save(app)?;
+
+    // Record that there are no changes since the last save
+    {
+        let mut has_unsaved_changes = HAS_UNSAVED_CHANGES.lock().unwrap();
+        *has_unsaved_changes = false;
+    }
     Ok(())
 }
 
@@ -50,10 +56,16 @@ pub fn load(app: AppHandle) -> Result<(), Error> {
 }
 
 pub fn load_shortcut(app: &AppHandle) -> Result<(), Error> {
-    if let Some(path) = app.dialog().file().add_filter("DungeonDB File", &["db"]).blocking_pick_file() {
+    if let Some(path) = app.dialog().file().add_filter("DungeonDB File (*.dndb)", &["dndb"]).blocking_pick_file() {
         db::init_existing(path.to_string())?;
     }
     Ok(())
+}
+
+/// Check if the autosave has changes that have not been saved.
+pub fn has_unsaved_changes() -> bool {
+    let has_unsaved_changes = HAS_UNSAVED_CHANGES.lock().unwrap();
+    (*has_unsaved_changes).clone()
 }
 
 
@@ -268,15 +280,22 @@ pub enum Action {
 
 static REVERSE_STACK: Mutex<Vec<Action>> = Mutex::new(Vec::new());
 static FORWARD_STACK: Mutex<Vec<Action>> = Mutex::new(Vec::new());
+static HAS_UNSAVED_CHANGES: Mutex<bool> = Mutex::new(false);
 
 /// Records the opposite action to the one that was just performed, for undo/redo purposes.
 fn record_action(action: Action, is_forward: bool) {
-    let mut reverse_stack = if is_forward {
-        REVERSE_STACK.lock().unwrap()
-    } else {
-        FORWARD_STACK.lock().unwrap()
-    };
-    (*reverse_stack).push(action);
+    {
+        let mut reverse_stack = if is_forward {
+            REVERSE_STACK.lock().unwrap()
+        } else {
+            FORWARD_STACK.lock().unwrap()
+        };
+        (*reverse_stack).push(action);
+    }
+    {
+        let mut has_unsaved_changes = HAS_UNSAVED_CHANGES.lock().unwrap();
+        *has_unsaved_changes = true;
+    }
 }
 
 impl Action {
@@ -288,7 +307,7 @@ impl Action {
                 record_action(Self::TrashSchema(metadata.schema.oid), is_forward);
 
                 // Send signal to update table
-                schema::FullMetadata::query_affected_schema(app, vec![metadata.schema.oid])?;
+                schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
 
                 // Open new window to view the table
                 dialog::dialog_open(app.clone(), dialog::Dialog::Schema { 
@@ -303,7 +322,7 @@ impl Action {
                 record_action(Self::EditTable(old_metadata), is_forward);
 
                 // Send signal to update table
-                schema::FullMetadata::query_affected_schema(app, vec![metadata.schema.oid])?;
+                schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
             Self::CreateReport(mut metadata) => {
                 // Create the report
@@ -311,7 +330,7 @@ impl Action {
                 record_action(Self::TrashSchema(metadata.schema.oid), is_forward);
 
                 // Send signal to update report
-                schema::FullMetadata::query_affected_schema(app, vec![metadata.schema.oid])?;
+                schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
 
                 // Open new window to view the report
                 dialog::dialog_open(app.clone(), dialog::Dialog::Schema { 
@@ -326,7 +345,7 @@ impl Action {
                 record_action(Self::EditReport(old_metadata), is_forward);
 
                 // Send signal to update report
-                schema::FullMetadata::query_affected_schema(app, vec![metadata.schema.oid])?;
+                schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
             Self::TrashSchema(schema_oid) => {
                 // Flag the schema for garbage collection
@@ -334,7 +353,7 @@ impl Action {
                 record_action(Self::UntrashSchema(schema_oid), is_forward);
 
                 // Send signal to update schema
-                schema::FullMetadata::query_affected_schema(app, vec![schema_oid])?;
+                schema::FullMetadata::emit_affected_schema(app, vec![schema_oid])?;
             }
             Self::UntrashSchema(schema_oid) => {
                 // Unflag the schema for garbage collection
@@ -342,7 +361,7 @@ impl Action {
                 record_action(Self::TrashSchema(schema_oid), is_forward);
 
                 // Send signal to update schema
-                schema::FullMetadata::query_affected_schema(app, vec![schema_oid])?;
+                schema::FullMetadata::emit_affected_schema(app, vec![schema_oid])?;
             }
 
 
@@ -353,7 +372,7 @@ impl Action {
                 record_action(Self::TrashColumn(metadata.oid), is_forward);
 
                 // Send signal to update schema
-                schema::FullMetadata::query_affected_schema(app, vec![metadata.schema.oid])?;
+                schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
             Self::EditColumn(mut metadata) => {
                 // Update the column
@@ -365,7 +384,7 @@ impl Action {
                 }, is_forward);
 
                 // Send signal to update schema
-                schema::FullMetadata::query_affected_schema(app, vec![metadata.schema.oid])?;
+                schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
             Self::EditColumnStyle { mut metadata, new_column_style } => {
                 // Update the column style
@@ -377,7 +396,7 @@ impl Action {
                 }, is_forward);
 
                 // Send signal to update schema
-                schema::FullMetadata::query_affected_schema(app, vec![metadata.schema.oid])?;
+                schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
             Self::EditColumnOrdering { mut metadata, new_column_ordering } => {
                 // Update the column style
@@ -389,7 +408,7 @@ impl Action {
                 }, is_forward);
 
                 // Send signal to update schema
-                schema::FullMetadata::query_affected_schema(app, vec![metadata.schema.oid])?;
+                schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
             Self::TrashColumn(column_oid) => {
                 // Flag the column for garbage collection
@@ -430,7 +449,7 @@ impl Action {
                 }, is_forward);
 
                 // Send signal to update table
-                schema::FullMetadata::query_affected_schema(app, vec![table_oid])?;
+                schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
             }
             Self::EditRowOid { table_oid, row_oid, new_row_oid } => {
                 let new_row_oid: i64 = row::reorder(table_oid, row_oid, new_row_oid)?;
@@ -441,7 +460,7 @@ impl Action {
                 }, is_forward);
 
                 // Send signal to update table
-                schema::FullMetadata::query_affected_schema(app, vec![table_oid])?;
+                schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
             }
             Self::TrashRow { table_oid, row_oid } => {
                 if let Some((table_oid, row_oid)) = row::trash(table_oid, row_oid)? {
@@ -451,7 +470,7 @@ impl Action {
                     }, is_forward);
 
                     // Send signal to update table
-                    schema::FullMetadata::query_affected_schema(app, vec![table_oid])?;
+                    schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
                 }
             }
             Self::UntrashRow { table_oid, row_oid } => {
@@ -462,7 +481,7 @@ impl Action {
                 }, is_forward);
 
                 // Send signal to update table
-                schema::FullMetadata::query_affected_schema(app, vec![table_oid])?;
+                schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
             }
             Self::EditRowSubtype { table_oid, row_oid, inheritor_table_oid } => {
                 let old_inheritor_table_oid: i64 = row::change_object_type(table_oid, row_oid, inheritor_table_oid)?;
@@ -473,7 +492,7 @@ impl Action {
                 }, is_forward);
 
                 // Send signal to update table
-                schema::FullMetadata::query_affected_schema(app, vec![table_oid])?;
+                schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
             }
 
 

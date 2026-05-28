@@ -7,7 +7,7 @@ use crate::util::channel::Sender;
 use crate::data::schema;
 use crate::data::surrogate;
 use crate::data::column_type;
-use crate::data::table::{regenerate_table_views};
+use crate::data::view::{regenerate_schema_views};
 use rusqlite::OptionalExtension;
 use rusqlite::{Connection, Transaction, params};
 use serde::{Serialize, Deserialize};
@@ -391,16 +391,13 @@ impl FullMetadata {
                 );
                 trans.execute(&cmd, [])?;
             }
-            column_type::ColumnType::Formula { oid, formula } => {
-                // If the column is a formula, make a view for the values therein
-            }
             _ => {
                 // Otherwise, a virtual column that requires nothing to be done
             }
         }
 
-        // Regenerate the label view for the table hosting this column
-        regenerate_table_views(&trans, self.schema.oid)?;
+        // Regenerate the views for the schema hosting this column
+        regenerate_schema_views(&trans, self.schema.oid)?;
 
         Ok(())
     }

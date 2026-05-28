@@ -5,6 +5,13 @@ use tauri::{ipc::Invoke, Error as TauriError};
 
 pub enum Error {
     AdhocError(&'static str),
+    
+    /// Error for when a column with type Primitive, Object, Select, or Multiselect does not belong to a table.
+    OrphanedDataColumn {
+        column_oid: i64,
+        column_name: String 
+    },
+
     FormulaParseError {
         msg: String,
         full_formula: String,
@@ -56,6 +63,11 @@ impl Into<String> for Error {
             Self::AdhocError(s) => {
                 return s.into();
             }
+
+            Self::OrphanedDataColumn { column_oid, column_name } => {
+                return format!("Data column \"{}\" (ID {column_oid}) does not belong to a table!", column_name.replace("\\", "\\\\").replace("\"", "\\\""));
+            }
+            
             Self::FormulaParseError { msg, full_formula, substring_with_error } => {
                 return match full_formula.find(&substring_with_error) {
                     Some(idx) => format!(

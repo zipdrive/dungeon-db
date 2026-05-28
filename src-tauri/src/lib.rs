@@ -1,3 +1,6 @@
+use tauri::Manager;
+use tauri_plugin_dialog::DialogExt;
+
 mod util;
 mod data;
 
@@ -9,15 +12,10 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             {
-                use tauri_plugin_dialog::DialogExt;
                 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
                 let undo_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::KeyZ);
                 let redo_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::KeyY);
-
-                let cut_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::KeyX);
-                let copy_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::KeyC);
-                let paste_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::KeyV);
 
                 let new_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::KeyN);
                 let save_shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::KeyS);
@@ -27,17 +25,17 @@ pub fn run() {
                     tauri_plugin_global_shortcut::Builder::new().with_handler(move |_app, shortcut, event| {
                         if event.state() == ShortcutState::Pressed {
                             if shortcut == &undo_shortcut {
-                                data::undo(_app);
+                                let _ = data::undo(_app);
                             } else if shortcut == &redo_shortcut {
-                                data::redo(_app); 
+                                let _ = data::redo(_app);
                             } else if shortcut == &new_shortcut {
-                                data::init_new();
+                                let _ = data::init_new();
                             } else if shortcut == &load_shortcut {
-                                data::load_shortcut(_app);
+                                let _ = data::load_shortcut(_app);
                             } else if shortcut == &save_shortcut {
-                                data::save_shortcut(_app);
+                                let _ = data::save_shortcut(_app);
                             }
-                        }
+                        };
                     })
                     .build(),
                 )?;
@@ -54,6 +52,7 @@ pub fn run() {
             data::init_new,
             data::init_existing,
             data::save,
+            data::load,
             util::dialog::dialog_open,
             util::dialog::dialog_close,
             data::query,
@@ -71,7 +70,32 @@ pub fn run() {
             match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     if window.label() == "main" {
-                        // TODO show save popup?
+                        if data::has_unsaved_changes() {
+                            // If there are unsaved changes, prompt user to save file before closing window
+                            match window.app_handle().dialog()
+                                .message("Do you want to save your changes?")
+                                .buttons(tauri_plugin_dialog::MessageDialogButtons::YesNoCancel)
+                                .blocking_show_with_result() {
+                                
+                                tauri_plugin_dialog::MessageDialogResult::Yes => {
+                                    // Save the file before closing
+                                    let _ = data::save_shortcut(window.app_handle());
+                                }
+                                tauri_plugin_dialog::MessageDialogResult::No => {
+                                    // Do not save the file before closing
+                                }
+                                _ => {
+                                    // Do not close the app
+                                    api.prevent_close();
+                                    return;
+                                }
+                            }
+                        }
+
+                        // Since the user is trying to close the main window, also close every other window
+                        for (_, subwindow) in window.webview_windows().iter() {
+                            let _ = subwindow.close();
+                        }
                     }
                 }
                 _ => {}

@@ -1,3 +1,4 @@
+use crate::data::view::regenerate_schema_views;
 use crate::util::error::Error;
 use crate::util::db;
 use crate::data::{schema, datasource};
@@ -138,6 +139,9 @@ impl FullMetadata {
                 params![self.schema.oid, group_by_column_oid]
             )?;
         }
+
+        // Regenerate views related to the schema
+        regenerate_schema_views(&trans, self.schema.oid)?;
         Ok(())
     }
 }

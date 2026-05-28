@@ -128,7 +128,7 @@ impl ValueOid {
             // Update the entire schema containing the affected column, just in case
             affected_schema_oid.insert(affected_column_schema_oid);
         }
-        schema::FullMetadata::query_affected_schema(app, affected_schema_oid.into_iter().collect())?;
+        schema::FullMetadata::emit_affected_schema(app, affected_schema_oid.into_iter().collect())?;
 
         Ok(())
     }

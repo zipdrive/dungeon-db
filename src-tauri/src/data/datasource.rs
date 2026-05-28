@@ -143,8 +143,18 @@ impl Datasource {
         };
     }
 
+    /// Returns the datasource with a path appended.
+    pub fn append_path(&self, path: String) -> Result<Self, Error> {
+        let path: Vec<String> = path.split('_').filter_map(|s| if s == "" { None} else { Some(String::from(s)) }).collect();
+        if path.len() == 0 {
+            Ok(self.clone())
+        } else {
+            Self::from_parent_and_path(self.clone(), &path)
+        }
+    }
+
     /// Retrieve a root datasource by OID, as part of a transaction.
-    fn get_transact(conn: &Connection, oid: i64) -> Result<Self, Error> {
+    pub fn get_transact(conn: &Connection, oid: i64) -> Result<Self, Error> {
         let (table_oid, label) = conn.query_one(
             "
             SELECT
@@ -409,6 +419,16 @@ impl Datasource {
         Ok(())
     }
 
+    /// Seeks the root datasource.
+    pub fn seek_root(&self) -> Datasource {
+        match self {
+            Self::Table { .. } => self.clone(),
+            Self::MasterTable { parent_datasource, .. }
+            | Self::InheritorTable { parent_datasource, .. } 
+            | Self::Column { parent_datasource, .. } => parent_datasource.seek_root()
+        }
+    }
+
     /// Seeks the deepest parent which is either (a) a Table datasource, or (b) has a 1-to-* relationship with its parent.
     pub fn seek_basis(&self) -> Result<Datasource, Error> {
         Ok(match self {
@@ -431,5 +451,15 @@ impl Datasource {
                 }
             }
         })
+    }
+
+    /// Extracts the parent of this datasource.
+    pub fn get_parent(&self) -> Option<Datasource> {
+        match self {
+            Self::Table { .. } => None,
+            Self::MasterTable { parent_datasource, .. }
+            | Self::InheritorTable { parent_datasource, .. }
+            | Self::Column { parent_datasource, .. } => Some((**parent_datasource).clone())
+        }
     }
 }

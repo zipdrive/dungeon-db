@@ -1,53 +1,13 @@
 use crate::util::error;
-use rusqlite::fallible_streaming_iterator::FallibleStreamingIterator;
-use rusqlite::{
-    params, Connection, DropBehavior, Params, Result, Row, Transaction, TransactionBehavior,
-};
+use rusqlite::{Connection, Result};
 use tauri::AppHandle;
 use std::fs;
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex};
 use tempfile::NamedTempFile;
 
 static DATABASE_PATH: Mutex<Option<String>> = Mutex::new(None);
 static DATABASE_AUTOSAVE_PATH: Mutex<Option<NamedTempFile>> = Mutex::new(None);
-
-/// Data structure locking access to the database while a function performs an action.
-pub struct DbAction<'a> {
-    conn: Connection,
-    pub trans: Transaction<'a>,
-}
-
-impl DbAction<'_> {
-    /// Convenience method to execute a query that returns multiple rows, then execute a function for each row.
-    pub fn query_iterate<P: Params, F: FnMut(&Row<'_>) -> Result<(), error::Error>>(
-        &self,
-        sql: &str,
-        p: P,
-        f: &mut F,
-    ) -> Result<(), error::Error> {
-        // Prepare a statement
-        let mut stmt = match self.trans.prepare(sql) {
-            Ok(s) => s,
-            Err(e) => {
-                return Err(error::Error::RusqliteError(e));
-            }
-        };
-
-        // Execute the statement to query rows
-        let mut rows = stmt.query(p)?;
-        loop {
-            let row = match rows.next()? {
-                Some(r) => r,
-                None => {
-                    break;
-                }
-            };
-            f(row);
-        }
-        return Ok(());
-    }
-}
 
 /// Applies the metadata schema to the database at the given path.
 fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
@@ -368,7 +328,8 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
             c.SCHEMA_OID,
             '' DATASOURCE_PATH,
             c.OID COLUMN_OID,
-            TRUE IS_REQUIRED
+            TRUE IS_REQUIRED,
+            c.ORDERING
         FROM METADATA_COLUMN_VIEW c
         
         UNION ALL
@@ -377,7 +338,8 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
             inh.INHERITOR_SCHEMA_OID SCHEMA_OID,
             inh.MASTER_DATASOURCE_PATH DATASOURCE_PATH,
             c.OID COLUMN_OID,
-            TRUE IS_REQUIRED
+            TRUE IS_REQUIRED,
+            c.ORDERING
         FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW inh
         INNER JOIN METADATA_COLUMN_VIEW c ON c.SCHEMA_OID = inh.MASTER_SCHEMA_OID
 
@@ -387,7 +349,8 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
             inh.MASTER_SCHEMA_OID SCHEMA_OID,
             inh.INHERITOR_DATASOURCE_PATH DATASOURCE_PATH,
             c.OID COLUMN_OID,
-            FALSE IS_REQUIRED
+            FALSE IS_REQUIRED,
+            c.ORDERING
         FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW inh
         INNER JOIN METADATA_COLUMN_VIEW c ON c.SCHEMA_OID = inh.INHERITOR_SCHEMA_OID
     ;
@@ -567,7 +530,7 @@ pub fn save(app: &AppHandle) -> Result<(), error::Error> {
                 None => {
                     use tauri_plugin_dialog::DialogExt;
 
-                    if let Some(file_path) = app.dialog().file().add_filter("DungeonDB File", &["db"]).blocking_save_file() {
+                    if let Some(file_path) = app.dialog().file().add_filter("DungeonDB File (*.dndb)", &["dndb"]).blocking_save_file() {
                         *database_path = Some(file_path.to_string());
                         (database_path.as_ref()).unwrap()
                     } else {
@@ -623,14 +586,16 @@ pub fn save(app: &AppHandle) -> Result<(), error::Error> {
             }
 
             // Delete data tables
-            for row_result in trans.prepare("SELECT s.OID FROM METADATA_SCHEMA s INNER JOIN METADATA_TABLE t ON s.OID = t.OID WHERE s.TRASH")?.query_map([], |row| row.get("OID"))? {
-                let table_oid: i64 = row_result?;
+            for row_result in trans.prepare("SELECT s.OID FROM METADATA_SCHEMA s WHERE s.TRASH")?.query_map([], |row| row.get("OID"))? {
+                let schema_oid: i64 = row_result?;
 
                 // Drop the table and views related to the table
                 let drop_sql: String = format!("
-                    DROP VIEW IF EXISTS TABLE{table_oid}_LABEL_VIEW;
-                    DROP VIEW IF EXISTS TABLE{table_oid}_POLYMORPHISM_VIEW;
-                    DROP TABLE IF EXISTS TABLE{table_oid};
+                    DROP VIEW IF EXISTS REPORT{schema_oid}_VIEW;
+                    DROP VIEW IF EXISTS TABLE{schema_oid}_VIEW;
+                    DROP VIEW IF EXISTS TABLE{schema_oid}_LABEL_VIEW;
+                    DROP VIEW IF EXISTS TABLE{schema_oid}_POLYMORPHISM_VIEW;
+                    DROP TABLE IF EXISTS TABLE{schema_oid};
                 ");
                 trans.execute_batch(&drop_sql)?;
             }
