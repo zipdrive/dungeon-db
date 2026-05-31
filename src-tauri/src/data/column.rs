@@ -380,13 +380,32 @@ impl FullMetadata {
                             ON DELETE CASCADE,
                         PRIMARY KEY (TABLE{}_OID, TABLE{}_OID)
                     );
+                    CREATE VIEW MULTISELECT{}_VIEW AS
+                        SELECT 
+                            m.TABLE{}_OID,
+                            m.TABLE{}_OID
+                        FROM MULTISELECT{} m
+                        INNER JOIN TABLE{} t1 ON t1.OID = m.TABLE{}_OID
+                        INNER JOIN TABLE{} t2 ON t2.OID = m.TABLE{}_OID
+                        WHERE NOT t1.TRASH AND NOT t2.TRASH
+                    ;
                     ",
+                    
                     self.oid,
                     self.schema.oid,
                     self.schema.oid,
                     table_oid,
                     table_oid,
                     self.schema.oid,
+                    table_oid,
+
+                    self.oid,
+                    self.schema.oid,
+                    table_oid,
+                    self.oid,
+                    self.schema.oid,
+                    self.schema.oid,
+                    table_oid,
                     table_oid
                 );
                 trans.execute(&cmd, [])?;
