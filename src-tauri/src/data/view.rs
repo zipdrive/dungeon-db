@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use bitflags::bitflags;
-use rusqlite::{OptionalExtension, Transaction, params};
-use crate::{data::{column, column_type, datasource::Datasource}, util::error::Error};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use crate::{data::{column, column_type, datasource::Datasource, schema, table}, util::{error::Error, formula::Formula}};
 
 struct ViewsToCreate {
     /// The OID of the schema to create views for.
@@ -624,15 +624,16 @@ impl SchemaViewColumn {
 #[derive(PartialEq, Eq, Clone)]
 struct PrimitiveScalarType(u32);
 bitflags! {
-    impl ScalarType: u32 {
+    impl PrimitiveScalarType: u32 {
         const Null          = 0b00000000;
-        const Any           = 0b11111111;
+        const AnyPrimitive  = 0b11111111;
         const Boolean       = 0b00000001;
         const Integer       = 0b00000010;
         const Number        = 0b00000110;
         const Date          = 0b00001000;
         const Datetime      = 0b00011000;
         const Text          = 0b00100000;
+        const JSON          = 0b01000000;
 
         /// File data is represented as an OID in the METADATA_FILE table.
         const File          = 0b10000000;
@@ -642,7 +643,7 @@ bitflags! {
 impl PrimitiveScalarType {
     /// Converts from a scalar type to a string.
     fn to_string(&self) -> String {
-        let mut flags: Vec<ScalarType> = self.iter().collect();
+        let mut flags: Vec<Self> = self.iter().collect();
         // Reduce flags to minimal set
         let mut k: usize = 0;
         while k < flags.len() {
@@ -664,7 +665,7 @@ impl PrimitiveScalarType {
         // Concatenate different types together
         flags.into_iter().map(|flag| match flag {
             Self::Null => String::from("null"),
-            Self::Any => String::from("any"),
+            Self::AnyPrimitive => String::from("primitive"),
             Self::Boolean => String::from("boolean"),
             Self::Integer => String::from("integer"),
             Self::Number => String::from("number"),
@@ -673,49 +674,112 @@ impl PrimitiveScalarType {
             Self::Text => String::from("text"),
             Self::JSON => String::from("JSON"),
             Self::File => String::from("file"),
-            Self::Record => String::from("record"),
             _ => String::from("unknown") // This case shouldn't ever happen; if it does, something has gone wrong
         }).reduce(|acc, e| format!("{acc} | {e}")).unwrap_or(String::from("null"))
     }
 }
 
+#[derive(PartialEq, Eq, Clone)]
 enum ExpressionReturnType {
-    /// A primitive type.
-    Primitive(PrimitiveScalarType),
+    // Any possible value or reference.
+    Any,
 
-    /// A reference to a record in a table.
-    Record {
-        table_oid: i64
+    // A more specific type.
+    Selected {
+        // The type can take on a primitive value.
+        primitive: PrimitiveScalarType,
+
+        // The type can take on a reference to a record in one of the indicated tables.
+        record_in_table_oid: HashSet<i64>
     }
 }
 
 impl ExpressionReturnType {
+    /// Construct a new type representing a primitive value.
+    pub fn new_primitive(primitive: PrimitiveScalarType) -> Self { 
+        Self::Selected { primitive, record_in_table_oid: HashSet::new() }
+    }
+
+    /// Construct a new type representing a reference to a record in the table with the provided OID.
+    pub fn new_record(table_oid: i64) -> Self {
+        let mut record_in_table_oid: HashSet<i64> = HashSet::new();
+        record_in_table_oid.insert(table_oid);
+        Self::Selected {
+            primitive: PrimitiveScalarType::Null,
+            record_in_table_oid
+        }
+    }
+
     /// Returns true if a parameter of this type can accept an argument of the given type.
     /// In other words, returns true if this type is equivalent to or a supertype of the given type.
     pub fn accepts_arg(&self, other: &ExpressionReturnType) -> bool {
         match self {
-            Self::Primitive(self_prim) => match other {
-                Self::Primitive(other_prim) => self_prim.contains(other_prim.clone()),
-                Self::Record { .. } => match self_prim {
-                    PrimitiveScalarType::Any => true,
-                    _ => false
+            Self::Any => true,
+            Self::Selected { primitive: self_primitive, record_in_table_oid: self_table_oid } => match other {
+                Self::Any => false,
+                Self::Selected { primitive: other_primitive, record_in_table_oid: other_table_oid } => {
+                    self_primitive.contains(other_primitive.clone()) && self_table_oid.is_superset(other_table_oid)
                 }
-            },
-            Self::Record { table_oid: self_table_oid } => match other {
-                Self::Primitive(other_prim) => match other_prim {
-                    PrimitiveScalarType::Null => true,
-                    _ => false 
-                },
-                Self::Record { table_oid: other_table_oid } => (self_table_oid == other_table_oid)
             }
         }
     }
 
-    /// Converts the expression return type to a string.
-    pub fn to_string(&self) -> String {
+    /// Returns a type that encompasses both this type and the given type.
+    pub fn generalize(&self, other: &ExpressionReturnType) -> Self {
         match self {
-            Self::Primitive(prim) => prim.to_string(),
-            Self::Record { .. } => format!("record")
+            Self::Any => Self::Any,
+            Self::Selected { primitive: self_primitive, record_in_table_oid: self_table_oid } => match other {
+                Self::Any => Self::Any,
+                Self::Selected { primitive: other_primitive, record_in_table_oid: other_table_oid } => Self::Selected {
+                    primitive: self_primitive.clone() | other_primitive.clone(),
+                    record_in_table_oid: self_table_oid.union(other_table_oid).map(|ir| ir.clone()).collect()
+                }
+            }
+        }
+    }
+
+    /// Returns a type that is encompassed by both this type and the given type.
+    pub fn specialize(&self, other: &ExpressionReturnType) -> Self {
+        match self {
+            Self::Any => other.clone(),
+            Self::Selected { primitive: self_primitive, record_in_table_oid: self_table_oid } => match other {
+                Self::Any => Self::Selected {
+                    primitive: self_primitive.clone(),
+                    record_in_table_oid: self_table_oid.clone()
+                },
+                Self::Selected { primitive: other_primitive, record_in_table_oid: other_table_oid } => Self::Selected {
+                    primitive: self_primitive.clone() & other_primitive.clone(),
+                    record_in_table_oid: self_table_oid.intersection(other_table_oid).map(|ir| ir.clone()).collect()
+                }
+            }
+        }
+    }
+
+
+    /// Converts the expression return type to a string.
+    pub fn to_string(&self, conn: &Connection) -> String {
+        match self {
+            Self::Any => format!("any"),
+            Self::Selected { primitive, record_in_table_oid } => {
+                let mut record_types: Vec<String> = Vec::new();
+                if record_in_table_oid.len() > 0 {
+                    for table_oid in record_in_table_oid {
+                        if let Ok(schema_metadata) = schema::FullMetadata::get(conn, table_oid.clone()) {
+                            record_types.push(format!("record [{}]", schema_metadata.name));
+                        } else {
+                            record_types.push(String::from("record [-ERROR-]"));
+                        }
+                    }
+
+                    if primitive == &PrimitiveScalarType::Null {
+                        record_types.into_iter().reduce(|acc, e| format!("{acc} | {e}")).unwrap_or(String::from("null"))
+                    } else {
+                        record_types.into_iter().fold(primitive.to_string(), |acc, e| format!("{acc} | {e}"))
+                    }
+                } else {
+                    primitive.to_string()
+                }
+            }
         }
     } 
 }
@@ -908,7 +972,7 @@ fn add_param<'a>(param_cte: &'a mut HashMap<Datasource, ParamCTE>, datasource: D
                             value_expr: format!("d.COLUMN{}", column.oid), 
                             value_ord: format!("{column_path}_VALUE"), 
                             arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()),  
-                            arg_type: ExpressionReturnType::Primitive(PrimitiveScalarType::Boolean),
+                            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Boolean),
                             cell: Some(ParamCTEColumnCell {
                                 table_oid: column.schema.oid,
                                 column_oid: column.oid,
@@ -921,7 +985,7 @@ fn add_param<'a>(param_cte: &'a mut HashMap<Datasource, ParamCTE>, datasource: D
                             value_expr: format!("d.COLUMN{}", column.oid), 
                             value_ord: format!("{column_path}_VALUE"), 
                             arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()),  
-                            arg_type: ExpressionReturnType::Primitive(PrimitiveScalarType::Integer),
+                            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
                             cell: Some(ParamCTEColumnCell {
                                 table_oid: column.schema.oid,
                                 column_oid: column.oid,
@@ -934,7 +998,7 @@ fn add_param<'a>(param_cte: &'a mut HashMap<Datasource, ParamCTE>, datasource: D
                             value_expr: format!("d.COLUMN{}", column.oid), 
                             value_ord: format!("{column_path}_VALUE"), 
                             arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()),  
-                            arg_type: ExpressionReturnType::Primitive(PrimitiveScalarType::Number),
+                            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number),
                             cell: Some(ParamCTEColumnCell {
                                 table_oid: column.schema.oid,
                                 column_oid: column.oid,
@@ -947,7 +1011,7 @@ fn add_param<'a>(param_cte: &'a mut HashMap<Datasource, ParamCTE>, datasource: D
                             value_expr: format!("d.COLUMN{}", column.oid), 
                             value_ord: format!("{column_path}_VALUE"), 
                             arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()),  
-                            arg_type: ExpressionReturnType::Primitive(PrimitiveScalarType::Text),
+                            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Text),
                             cell: Some(ParamCTEColumnCell {
                                 table_oid: column.schema.oid,
                                 column_oid: column.oid,
@@ -960,7 +1024,7 @@ fn add_param<'a>(param_cte: &'a mut HashMap<Datasource, ParamCTE>, datasource: D
                             value_expr: format!("d.COLUMN{}", column.oid), 
                             value_ord: format!("{column_path}_VALUE"),
                             arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()), 
-                            arg_type: ExpressionReturnType::Primitive(PrimitiveScalarType::JSON),
+                            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::JSON),
                             cell: Some(ParamCTEColumnCell {
                                 table_oid: column.schema.oid,
                                 column_oid: column.oid,
@@ -973,7 +1037,7 @@ fn add_param<'a>(param_cte: &'a mut HashMap<Datasource, ParamCTE>, datasource: D
                             value_expr: format!("d.COLUMN{}", column.oid), 
                             value_ord: format!("{column_path}_VALUE"), 
                             arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()), 
-                            arg_type: ExpressionReturnType::Primitive(PrimitiveScalarType::Date),
+                            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Date),
                             cell: Some(ParamCTEColumnCell {
                                 table_oid: column.schema.oid,
                                 column_oid: column.oid,
@@ -986,7 +1050,7 @@ fn add_param<'a>(param_cte: &'a mut HashMap<Datasource, ParamCTE>, datasource: D
                             value_expr: format!("d.COLUMN{}", column.oid), 
                             value_ord: format!("{column_path}_VALUE"), 
                             arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()), 
-                            arg_type: ExpressionReturnType::Primitive(PrimitiveScalarType::Datetime),
+                            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Datetime),
                             cell: Some(ParamCTEColumnCell {
                                 table_oid: column.schema.oid,
                                 column_oid: column.oid,
@@ -999,7 +1063,7 @@ fn add_param<'a>(param_cte: &'a mut HashMap<Datasource, ParamCTE>, datasource: D
                             value_expr: format!("d.COLUMN{}", column.oid), 
                             value_ord: format!("{column_path}_VALUE"), 
                             arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()), 
-                            arg_type: ExpressionReturnType::Primitive(PrimitiveScalarType::File),
+                            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::File),
                             cell: Some(ParamCTEColumnCell {
                                 table_oid: column.schema.oid,
                                 column_oid: column.oid,
@@ -1017,7 +1081,7 @@ fn add_param<'a>(param_cte: &'a mut HashMap<Datasource, ParamCTE>, datasource: D
                             value_expr: format!("d.COLUMN{}", column.oid),
                             value_ord: format!("{column_path}_VALUE"),
                             arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()), 
-                            arg_type: ExpressionReturnType::Record { table_oid },
+                            arg_type: ExpressionReturnType::new_record(table_oid),
                             cell: Some(ParamCTEColumnCell {
                                 table_oid: column.schema.oid,
                                 column_oid: column.oid,
@@ -1063,7 +1127,7 @@ fn add_param<'a>(param_cte: &'a mut HashMap<Datasource, ParamCTE>, datasource: D
                                 datasource.seek_root().get_alias(),
                                 datasource.get_alias()
                             ), 
-                            arg_type: ExpressionReturnType::Record { table_oid: column.schema.oid },
+                            arg_type: ExpressionReturnType::new_record(column.schema.oid),
                             cell: Some(ParamCTEColumnCell {
                                 table_oid,
                                 column_oid: column.oid,
@@ -1081,7 +1145,7 @@ fn add_param<'a>(param_cte: &'a mut HashMap<Datasource, ParamCTE>, datasource: D
                             value_expr: format!("d.COLUMN{}", column.oid),
                             value_ord: format!("{column_path}_VALUE"),
                             arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()), 
-                            arg_type: ExpressionReturnType::Record { table_oid },
+                            arg_type: ExpressionReturnType::new_record(table_oid),
                             cell: Some(ParamCTEColumnCell {
                                 table_oid: column.schema.oid,
                                 column_oid: column.oid,
@@ -1127,7 +1191,7 @@ fn add_param<'a>(param_cte: &'a mut HashMap<Datasource, ParamCTE>, datasource: D
                                 datasource.seek_root().get_alias(),
                                 datasource.get_alias()
                             ), 
-                            arg_type: ExpressionReturnType::Record { table_oid: column.schema.oid },
+                            arg_type: ExpressionReturnType::new_record(column.schema.oid),
                             cell: Some(ParamCTEColumnCell {
                                 table_oid,
                                 column_oid: column.oid,
@@ -1172,9 +1236,11 @@ fn add_param<'a>(param_cte: &'a mut HashMap<Datasource, ParamCTE>, datasource: D
                                     WHERE TABLE{}_OID = {}.{}_OID AND TABLE{table_oid}_OID IN (SELECT OID FROM TABLE{table_oid} WHERE NOT TRASH)
                                 )", 
                                 column.oid,
-                                column.schema.oid
+                                column.schema.oid,
+                                datasource.seek_root().get_alias(),
+                                datasource.get_alias()
                             ),
-                            arg_type: ExpressionReturnType::Record { table_oid },
+                            arg_type: ExpressionReturnType::new_record(table_oid),
                             cell: Some(ParamCTEColumnCell {
                                 table_oid: column.schema.oid,
                                 column_oid: column.oid,
@@ -1222,7 +1288,7 @@ fn add_param<'a>(param_cte: &'a mut HashMap<Datasource, ParamCTE>, datasource: D
                                 column.schema.oid,
                                 column.schema.oid 
                             ),
-                            arg_type: ExpressionReturnType::Record { table_oid: column.schema.oid },
+                            arg_type: ExpressionReturnType::new_record(column.schema.oid),
                             cell: Some(ParamCTEColumnCell {
                                 table_oid,
                                 column_oid: column.oid,
@@ -1255,7 +1321,7 @@ struct ScalarExpression {
     arg_expr: String,
 
     /// The scalar type returned by the arg_expr SQL expression.
-    arg_return_type: ScalarType,
+    arg_type: ExpressionReturnType,
 
     /// The SQL expression resulting in a scalar value representing the true value of the parameter.
     /// This will typically be the same as arg_expr, with the exception that Select/Multiselect/Object columns will have their primary keys 
@@ -1277,7 +1343,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
     Ok(match *formula {
         Formula::Null => ScalarExpression {
             arg_expr: String::from("NULL"),
-            arg_return_type: ExpressionReturnType::Primitive(PrimitiveScalarType::Null),
+            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Null),
             value_expr: String::from("NULL"),
             label_expr: String::from("NULL"),
             param_expr: String::from("NULL"),
@@ -1291,7 +1357,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
             };
             ScalarExpression {
                 arg_expr: value_expr.clone(),
-                arg_return_type: ExpressionReturnType::Primitive(PrimitiveScalarType::Boolean),
+                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Boolean),
                 value_expr,
                 label_expr,
                 param_expr: String::from("NULL"),
@@ -1300,7 +1366,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
         }
         Formula::LiteralInt(num) => ScalarExpression {
             arg_expr: format!("{num}"),
-            arg_return_type: ExpressionReturnType::Primitive(PrimitiveScalarType::Integer),
+            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
             value_expr: format!("{num}"),
             label_expr: format!("'{num}'"),
             param_expr: String::from("NULL"),
@@ -1308,7 +1374,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
         },
         Formula::LiteralFloat(num) => ScalarExpression {
             arg_expr: format!("{num}"),
-            arg_return_type: ExpressionReturnType::Primitive(PrimitiveScalarType::Number),
+            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number),
             value_expr: format!("{num}"),
             label_expr: format!("'{num}'"),
             param_expr: String::from("NULL"),
@@ -1318,7 +1384,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
             let safe_str: String = format!("'{}'", str.replace("'", "''"));
             ScalarExpression {
                 arg_expr: safe_str.clone(),
-                arg_return_type: ExpressionReturnType::Primitive(PrimitiveScalarType::Text),
+                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Text),
                 value_expr: safe_str.clone(),
                 label_expr: safe_str.clone(),
                 param_expr: String::from("NULL"),
@@ -1327,7 +1393,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
         }
         Formula::RandomInt => ScalarExpression {
             arg_expr: format!("RANDOM()"),
-            arg_return_type: ExpressionReturnType::Primitive(PrimitiveScalarType::Integer),
+            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
             value_expr: format!("RANDOM()"),
             label_expr: format!("CAST(RANDOM() AS TEXT)"),
             param_expr: String::from("NULL"),
@@ -1341,7 +1407,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
                 | column_type::ColumnType::Object { .. }
                 | column_type::ColumnType::Select { .. }
                 | column_type::ColumnType::Multiselect { .. } => {
-                    let param: ParamCTEColumn = add_param(param_cte, column_datasource, column_metadata)?;
+                    let (_, param) = add_param(param_cte, column_datasource, column_metadata)?;
                     
                     // Parameter expressions return a string in the form "{TABLE_OID}:{COLUMN_OID}:{ROW_OID}"
                     let param_expr: String = if let Some(param_cell) = param.cell {
@@ -1350,29 +1416,19 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
                         String::from("NULL")
                     };
 
-                    if let Some(param_arg) = param.arg {
-                        ScalarExpression {
-                            arg_expr: if param_arg.ord == param.label_ord { param.label_expr.clone() } else { param.value_expr.clone() },
-                            arg_return_type: param_arg.scalar_type,
-                            value_expr: param.value_expr,
-                            label_expr: param.label_expr,
-                            param_expr,
-                            deterministic: true
-                        }
-                    } else {
-                        ScalarExpression {
-                            arg_expr: String::from("NULL"),
-                            arg_return_type: ScalarType::Null,
-                            value_expr: param.value_expr,
-                            label_expr: param.label_expr,
-                            param_expr,
-                            deterministic: true
-                        }
+                    // 
+                    ScalarExpression {
+                        arg_expr: param.arg_expr,
+                        arg_type: param.arg_type,
+                        value_expr: param.value_expr,
+                        label_expr: param.label_expr,
+                        param_expr,
+                        deterministic: true
                     }
                 }
                 column_type::ColumnType::Formula { formula, .. } => {
                     // Parse the formula
-                    let parsed_formula: Box<Formula> = Box::new(Formula::parse(formula)?);
+                    let parsed_formula: Box<Formula> = Box::new(Formula::parse(formula.clone())?);
 
                     // Compile the formula into a scalar expression
                     compile_formula(trans, param_cte, parsed_formula)?
@@ -1386,21 +1442,12 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
         Formula::Coalesce(items) => {
             let mut items_compiled: Vec<ScalarExpression> = Vec::new();
             for item in items {
-                let item_compiled: ScalarExpression = compile_formula(param_cte, Box::new(item))?;
+                let item_compiled: ScalarExpression = compile_formula(trans, param_cte, Box::new(item))?;
                 items_compiled.push(item_compiled);
             }
 
             let deterministic: bool = items_compiled.iter().all(|item_compiled| item_compiled.deterministic);
-            let arg_return_type: ScalarType = items_compiled.iter().fold(ExpressionReturnType::Primitive(PrimitiveScalarType::Null), |acc, item_compiled| 
-                match acc {
-                    ExpressionReturnType::Primitive(acc_prim) => match item_compiled.arg_return_type {
-                        acc | item_compiled.arg_return_type.clone()
-                    }
-                    ExpressionReturnType::Record { acc_table_oid } => match item_compiled.arg_return_type {
-                        
-                    }
-                }
-            );
+            let arg_type: ExpressionReturnType = items_compiled.iter().fold(ExpressionReturnType::new_primitive(PrimitiveScalarType::Null), |acc, item_compiled| acc.generalize(&item_compiled.arg_type));
             let (label_expr, param_expr) = if items_compiled.len() > 1 {
                 (
                     format!("{} ELSE {} END",
@@ -1431,7 +1478,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
 
             ScalarExpression {
                 arg_expr,
-                arg_return_type,
+                arg_type,
                 value_expr,
                 label_expr,
                 param_expr,
@@ -1440,13 +1487,13 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
         }
         Formula::Abs(inner) => {
             let inner_name: String = inner.to_string();
-            let inner_compiled: ScalarExpression = compile_formula(param_cte, inner)?;
-            if !ExpressionReturnType::Primitive(PrimitiveScalarType::Number).accepts_arg(inner_compiled.arg_return_type.clone()) {
+            let inner_compiled: ScalarExpression = compile_formula(trans, param_cte, inner)?;
+            if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
                 return Err(Error::FormulaTypeValidationError { 
                     outer_name: "abs", 
                     inner_name, 
-                    expected_type: ExpressionReturnType::Primitive(PrimitiveScalarType::Number).to_string(), 
-                    received_type: inner_compiled.arg_return_type.to_string() 
+                    expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
+                    received_type: inner_compiled.arg_type.to_string(trans) 
                 });
             }
 
@@ -1455,7 +1502,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
 
             ScalarExpression {
                 arg_expr: value_expr.clone(),
-                arg_return_type: inner_compiled.arg_return_type,
+                arg_type: inner_compiled.arg_type,
                 label_expr,
                 value_expr,
                 param_expr: String::from("NULL"),
@@ -1464,13 +1511,13 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
         }
         Formula::Sign(inner) => {
             let inner_name: String = inner.to_string();
-            let inner_compiled: ScalarExpression = compile_formula(param_cte, inner)?;
-            if !ScalarType::Number.contains(inner_compiled.arg_return_type.clone()) {
+            let inner_compiled: ScalarExpression = compile_formula(trans, param_cte, inner)?;
+            if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
                 return Err(Error::FormulaTypeValidationError { 
                     outer_name: "sign", 
                     inner_name, 
-                    expected_type: ScalarType::Number.to_string(), 
-                    received_type: inner_compiled.arg_return_type.to_string() 
+                    expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
+                    received_type: inner_compiled.arg_type.to_string(trans) 
                 });
             }
 
@@ -1479,7 +1526,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
 
             ScalarExpression {
                 arg_expr: value_expr.clone(),
-                arg_return_type: ScalarType::Integer,
+                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
                 label_expr,
                 value_expr,
                 param_expr: String::from("NULL"),
@@ -1488,13 +1535,13 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
         }
         Formula::Floor(inner) => {
             let inner_name: String = inner.to_string();
-            let inner_compiled: ScalarExpression = compile_formula(param_cte, inner)?;
-            if !ScalarType::Number.contains(inner_compiled.arg_return_type.clone()) {
+            let inner_compiled: ScalarExpression = compile_formula(trans, param_cte, inner)?;
+            if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
                 return Err(Error::FormulaTypeValidationError { 
                     outer_name: "floor", 
                     inner_name, 
-                    expected_type: ScalarType::Number.to_string(), 
-                    received_type: inner_compiled.arg_return_type.to_string() 
+                    expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
+                    received_type: inner_compiled.arg_type.to_string(trans) 
                 });
             }
 
@@ -1503,7 +1550,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
 
             ScalarExpression {
                 arg_expr: value_expr.clone(),
-                arg_return_type: ScalarType::Integer,
+                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
                 label_expr,
                 value_expr,
                 param_expr: String::from("NULL"),
@@ -1512,13 +1559,13 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
         }
         Formula::Ceiling(inner) => {
             let inner_name: String = inner.to_string();
-            let inner_compiled: ScalarExpression = compile_formula(param_cte, inner)?;
-            if !ScalarType::Number.contains(inner_compiled.arg_return_type.clone()) {
+            let inner_compiled: ScalarExpression = compile_formula(trans, param_cte, inner)?;
+            if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
                 return Err(Error::FormulaTypeValidationError { 
                     outer_name: "ceil", 
                     inner_name, 
-                    expected_type: ScalarType::Number.to_string(), 
-                    received_type: inner_compiled.arg_return_type.to_string() 
+                    expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
+                    received_type: inner_compiled.arg_type.to_string(trans) 
                 });
             }
 
@@ -1527,7 +1574,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
 
             ScalarExpression {
                 arg_expr: value_expr.clone(),
-                arg_return_type: ScalarType::Integer,
+                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
                 label_expr,
                 value_expr,
                 param_expr: String::from("NULL"),
@@ -1536,13 +1583,13 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
         }
         Formula::Round(inner) => {
             let inner_name: String = inner.to_string();
-            let inner_compiled: ScalarExpression = compile_formula(param_cte, inner)?;
-            if !ScalarType::Number.contains(inner_compiled.arg_return_type.clone()) {
+            let inner_compiled: ScalarExpression = compile_formula(trans, param_cte, inner)?;
+            if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
                 return Err(Error::FormulaTypeValidationError { 
                     outer_name: "round", 
                     inner_name, 
-                    expected_type: ScalarType::Number.to_string(), 
-                    received_type: inner_compiled.arg_return_type.to_string() 
+                    expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
+                    received_type: inner_compiled.arg_type.to_string(trans) 
                 });
             }
 
@@ -1551,7 +1598,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
 
             ScalarExpression {
                 arg_expr: value_expr.clone(),
-                arg_return_type: ScalarType::Integer,
+                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
                 label_expr,
                 value_expr,
                 param_expr: String::from("NULL"),
@@ -1607,9 +1654,20 @@ fn create_schema_view(trans: &Transaction, schema_oid: i64) -> Result<(), Error>
             }
             column_type::ColumnType::Formula { formula, .. } => {
                 // Parse the formula
-                let parsed_formula: Box<Formula> = Box::new(Formula::parse(formula)?);
+                let parsed_formula: Box<Formula> = Box::new(Formula::parse(formula.clone())?);
 
                 // Compile the formula into SQL
+                let scalar_expression: ScalarExpression = compile_formula(trans, &mut param_cte, parsed_formula)?;
+
+                // Turn into a column
+                view_columns.insert(column_oid, SchemaViewColumn::Formula { 
+                    label_expr: scalar_expression.label_expr, 
+                    label_ord: format!("COLUMN{}_LABEL", column_metadata.oid), 
+                    value_expr: scalar_expression.value_expr, 
+                    value_ord: format!("COLUMN{}_VALUE", column_metadata.oid), 
+                    param_expr: scalar_expression.param_expr, 
+                    param_ord: format!("COLUMN{}_PARAM", column_metadata.oid) 
+                });
             }
             _ => {
                 // Ignore other virtual column types
