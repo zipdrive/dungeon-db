@@ -17,6 +17,10 @@ struct ViewsToCreate {
 
 /// Drop the views associated with a schema.
 fn drop_all_views(trans: &Transaction, schema_oid: i64, create_schema_oid_seq: &mut Vec<ViewsToCreate>) -> Result<(), Error> {
+    if create_schema_oid_seq.iter().any(|view_to_create| view_to_create.schema_oid == schema_oid) {
+        // Prevent possible infinite recursions
+        return Ok(());
+    }
     create_schema_oid_seq.push(ViewsToCreate { 
         schema_oid, 
         create_label_view: true, 
@@ -81,6 +85,10 @@ fn drop_all_views(trans: &Transaction, schema_oid: i64, create_schema_oid_seq: &
 
 /// Drop the views that reference the label of another schema.
 fn drop_views_associated_with_label(trans: &Transaction, schema_oid: i64, drop_label_view: bool, create_schema_oid_seq: &mut Vec<ViewsToCreate>) -> Result<(), Error> {
+    if create_schema_oid_seq.iter().any(|view_to_create| view_to_create.schema_oid == schema_oid) {
+        // Prevent possible infinite recursions
+        return Ok(());
+    }
     create_schema_oid_seq.push(ViewsToCreate { 
         schema_oid, 
         create_label_view: drop_label_view.clone(), 
@@ -202,6 +210,8 @@ fn compile_polymorphism_cte(trans: &Transaction, table_oid: i64, compiled_cte: &
 
 /// Create a view describing the lowest-level table that has a row inheriting from a particular row in the table.
 fn create_table_polymorphism_view(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
+    println!("Creating TABLE{table_oid}_POLYMORPHISM_VIEW...");
+
     let final_cte_name: String = format!("TABLE{table_oid}_POLYMORPHISM_CTE");
     let view_name: String = format!("TABLE{table_oid}_POLYMORPHISM_VIEW");
 
@@ -228,6 +238,7 @@ fn create_table_polymorphism_view(trans: &Transaction, table_oid: i64) -> Result
                 String::from("")
             }
         );
+        println!("{create_sql}");
         trans.execute(&create_sql, [])?;
     }
     Ok(())
@@ -540,6 +551,8 @@ fn compile_label_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mut Has
 
 /// Create a view for the label of each row in the table.
 fn create_table_label_view(trans: &Transaction, table_oid: i64) -> Result<(), Error> {
+    println!("Creating TABLE{table_oid}_LABEL_VIEW...");
+
     let mut compiled_cte: HashMap<String, String> = HashMap::new();
     let create_sql: String = if compile_label_cte(trans, table_oid, &mut compiled_cte)? {
         format!(
@@ -585,6 +598,7 @@ fn create_table_label_view(trans: &Transaction, table_oid: i64) -> Result<(), Er
             "
         )
     };
+    println!("{create_sql}");
     trans.execute(&create_sql, [])?;
     Ok(())
 }
@@ -859,9 +873,10 @@ impl ParamCTE {
         };
 
         // Select the columns for OIDs/parameters from child datasources and the FROM/JOIN tables/CTEs
-        let (oid_columns, datasources) = self.child_datasources.into_iter().map(|child_datasource| {
+        let mut oid_columns_and_datasources_raw: Vec<(String, String)> = Vec::new();
+        for child_datasource in self.child_datasources.into_iter() {
             let child_datasource_alias: String = child_datasource.get_alias();
-            (
+            oid_columns_and_datasources_raw.push((
                 format!("{child_datasource_alias}.*"),
                 match &child_datasource {
                     Datasource::Table { .. } => {
@@ -902,13 +917,18 @@ impl ParamCTE {
                                 }
                             }
                             _ => {
-                                todo!("Error message here?")
+                                return Err(Error::InvalidDatasourceColumn { 
+                                    column_oid: column.oid.clone(), 
+                                    column_name: column.name.clone(), 
+                                    column_type: column.column_type.to_str()
+                                });
                             }
                         }
                     }
                 }
-            )
-        }).fold(
+            ));
+        }
+        let (oid_columns, datasources) = oid_columns_and_datasources_raw.into_iter().fold(
             (
                 format!("d.OID AS {datasource_alias}_OID{key}"), 
                 format!("FROM TABLE{datasource_schema_oid} d")
@@ -1298,15 +1318,21 @@ fn add_param<'a>(param_cte: &'a mut HashMap<Datasource, ParamCTE>, datasource: D
                     }
                 }
                 _ => {
-                    // Not added as a parameter
-                    todo!("Need error here")
+                    // Column cannot be added as a parameter
+                    return Err(Error::InvalidParameter { 
+                        column_oid: column.oid, 
+                        column_name: column.name, 
+                        column_type: column.column_type.to_str() 
+                    });
                 }
             });
         }
         
         datasource_cte.columns[&column_path].clone()
     } else {
-        todo!("Need error here")
+        return Err(Error::InvalidDatasource { 
+            datasource_alias: datasource.get_alias() 
+        });
     };
     Ok((datasource.seek_root(), param))
 }
@@ -1435,7 +1461,11 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
                 }
                 _ => {
                     // Column type is not allowed to be used as a parameter in a formula
-                    todo!("Error message here")
+                    return Err(Error::InvalidParameter { 
+                        column_oid, 
+                        column_name: column_metadata.name, 
+                        column_type: column_metadata.column_type.to_str() 
+                    });
                 }
             }
         }
@@ -1615,6 +1645,8 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
 
 /// Create a view for the table.
 fn create_schema_view(trans: &Transaction, schema_oid: i64) -> Result<(), Error> {
+    println!("Creating schema view SCHEMA{schema_oid}_VIEW...");
+
     // Get the root table datasource for the view
     let mut param_cte: HashMap<Datasource, ParamCTE> = HashMap::new();
     let root_datasource: Option<Datasource> = if let Some(root_datasource_oid) = trans.query_one("SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = ?1 LIMIT 1", params![schema_oid], |row| row.get("OID")).optional()? {
@@ -1765,6 +1797,7 @@ fn create_schema_view(trans: &Transaction, schema_oid: i64) -> Result<(), Error>
             {from_expr}
         "
     );
+    println!("{create_sql}");
     trans.execute(&create_sql, [])?;
     Ok(())
 }

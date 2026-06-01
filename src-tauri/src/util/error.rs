@@ -12,6 +12,25 @@ pub enum Error {
         column_name: String 
     },
 
+    /// Error for when a datasource cannot be added to a view.
+    InvalidDatasource {
+        datasource_alias: String
+    },
+
+    /// Error for when a datasource is identified by an improper column.
+    InvalidDatasourceColumn {
+        column_oid: i64,
+        column_name: String,
+        column_type: &'static str
+    },
+
+    /// Error for when a virtual column is attempted to be added as a parameter to the view for a schema.
+    InvalidParameter {
+        column_oid: i64,
+        column_name: String,
+        column_type: &'static str
+    },
+
     FormulaParseError {
         msg: String,
         full_formula: String,
@@ -66,6 +85,18 @@ impl Into<String> for Error {
 
             Self::OrphanedDataColumn { column_oid, column_name } => {
                 return format!("Data column \"{}\" (ID {column_oid}) does not belong to a table!", column_name.replace("\\", "\\\\").replace("\"", "\\\""));
+            }
+
+            Self::InvalidDatasource { datasource_alias } => {
+                return format!("Datasource \"{datasource_alias}\" could not be queried!");
+            }
+
+            Self::InvalidDatasourceColumn { column_oid, column_name, column_type } => {
+                return format!("The source for a data column cannot be identified by the {column_type} column \"{column_name}\" (ID {column_oid})!");
+            }
+
+            Self::InvalidParameter { column_oid, column_name, column_type } => {
+                return format!("{column_type} column \"{column_name}\" (ID {column_oid}) cannot be a parameter!");
             }
             
             Self::FormulaParseError { msg, full_formula, substring_with_error } => {

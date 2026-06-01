@@ -32,6 +32,21 @@ impl Primitive {
             Self::JSON => -9
         }
     }
+
+    /// Returns a static str representing the column type.
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            Self::Checkbox => "Checkbox",
+            Self::Date => "Date",
+            Self::Datetime => "Datetime",
+            Self::File => "File",
+            Self::Image => "Image",
+            Self::Integer => "Integer",
+            Self::JSON => "JSON",
+            Self::Number => "Number",
+            Self::Text => "Text"
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
@@ -300,6 +315,18 @@ impl ColumnType {
             Self::Object { oid, .. } => oid.clone(),
             Self::Select { oid, .. } => oid.clone(),
             Self::Multiselect { oid, .. } => oid.clone()
+        }
+    }
+
+    /// Return a static str representing the column type.
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            Self::Primitive(prim) => prim.to_str(),
+            Self::Object { .. } => "Object",
+            Self::Select { .. } => "Select",
+            Self::Multiselect { .. } => "Multiselect",
+            Self::Formula { .. } => "Formula",
+            Self::Subreport { .. } => "Subreport"
         }
     }
 
