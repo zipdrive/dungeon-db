@@ -46,14 +46,15 @@ impl RetrievalLimit {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all="camelCase", rename_all_fields="camelCase", untagged)]
 pub enum CellOid {
-    TableCell {
-        schema_oid: i64,
+    DataCell {
+        table_oid: i64,
         column_oid: i64,
         row_oid: i64
     },
-    ReportCell {
+    VirtualCell {
+        schema_oid: i64,
         column_oid: i64,
-        filters: Vec<(String, i64)>
+        query_filter: String
     }
 }
 
@@ -61,8 +62,8 @@ impl CellOid {
     /// Retrieves the column OID associated with this cell.
     pub fn get_column_oid(&self) -> i64 {
         match self {
-            Self::TableCell { column_oid, .. }
-            | Self::ReportCell { column_oid, .. } => column_oid.clone()
+            Self::DataCell { column_oid, .. }
+            | Self::VirtualCell { column_oid, .. } => column_oid.clone()
         }
     }
 }
@@ -136,6 +137,42 @@ impl ValueOid {
 
 
 
+/// A dependency that may affect the value of a cell.
+pub struct CellDependency {
+    table_oid: i64,
+    column_oid: i64,
+    row_oid: i64 
+}
+
+pub enum CellIdentifier {
+    /// A reference to a cell in a table.
+    /// Updates from the backend can be pushed directly to the frontend, and vice versa.
+    DataCell {
+        table_oid: i64,
+        column_oid: i64,
+        row_oid: i64 
+    },
+
+    /// A virtual cell.
+    VirtualCell {
+        /// The OID used to identify the cell's column.
+        column_oid: i64,
+
+        /// The query filter used to identify the cell's row.
+        query_filter: String,
+
+        /// The list of dependencies that always have a 1-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, only this cell needs to be updated.
+        isolated_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of dependencies that have a *-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, the entire schema needs to be reloaded.
+        full_reload_cell_dependencies: Vec<CellDependency>
+    }
+}
+
+
+
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum Cell {
@@ -146,64 +183,131 @@ pub enum Cell {
         fixed_parent_datasource: Option<(i64, i64, column::FullMetadata)>,
         validation_failures: Vec<FailedValidation>
     },
-    Readonly {
-        cell_oid: CellOid,
-        label: Option<String>,
-        validation_failures: Vec<FailedValidation>
-    },
-    Subreport {
-        cell_oid: CellOid,
-        label: String,
-        schema_query_string: String,
-        validation_failures: Vec<FailedValidation>
-    },
-    PrimitiveEntry {
-        cell_oid: CellOid,
-        value_oid: ValueOid,
-        label: Option<String>,
-        primitive_type: column_type::Primitive,
-        validation_failures: Vec<FailedValidation>
-    },
-    FileEntry {
-        cell_oid: CellOid,
-        value_oid: ValueOid,
-        file_oid: Option<i64>,
-        label: Option<String>,
-        validation_failures: Vec<FailedValidation>
-    },
-    Object {
-        cell_oid: CellOid,
-        value_oid: ValueOid,
-        object_schema_oid: i64,
-        object_query_string: Option<String>,
-        label: Option<String>,
-        validation_failures: Vec<FailedValidation>
-    },
-    SelectEntry {
-        cell_oid: CellOid,
-        value_oid: ValueOid,
-        select_schema_oid: i64,
-        select_row_oid: Option<i64>,
-        validation_failures: Vec<FailedValidation>
-    },
-    MultiselectEntry {
-        cell_oid: CellOid,
-        value_oid: ValueOid,
-        multiselect_schema_oid: i64,
-        multiselect_row_oid: Vec<i64>,
-        label: Option<String>,
-        validation_failures: Vec<FailedValidation>
-    },
+
     AddNewRowButton {
         table_oid: i64,
         fixed_parent_datasource: Option<(i64, i64, column::FullMetadata)>,
         column_span: usize
+    },
+
+    /// Virtual cell. Represented by a readonly label that cannot be edited.
+    Readonly {
+        cell_identifier: CellIdentifier,
+        label: Option<String>,
+        validation_failures: Vec<FailedValidation>
+    },
+
+    /// Data cell. Represented by a text entry field.
+    TextEntry {
+        cell_identifier: CellIdentifier,
+        data_column_oid: i64,
+        data_row_oid: i64,
+        label: Option<String>,
+        validation_failures: Vec<FailedValidation>
+    },
+
+    /// Data cell. Represented by a checkbox.
+    CheckboxEntry {
+        cell_identifier: CellIdentifier,
+        data_column_oid: i64,
+        data_row_oid: i64,
+        is_checked: bool,
+        validation_failures: Vec<FailedValidation>
+    },
+
+    /// Data cell. Represented by a filename, with buttons to upload or download.
+    FileEntry {
+        cell_identifier: CellIdentifier,
+        data_column_oid: i64,
+        data_row_oid: i64,
+        file_oid: Option<i64>,
+        label: Option<String>,
+        validation_failures: Vec<FailedValidation>
+    },
+
+    /// Data cell. Represented by an image, where clicking on the image brings up a dialog to open a new image to replace it.
+    ImageEntry {
+        cell_identifier: CellIdentifier,
+        data_column_oid: i64,
+        data_row_oid: i64,
+        file_oid: Option<i64>,
+        validation_failures: Vec<FailedValidation>
+    },
+
+    /// Virtual cell. Represented by a link to open a schema window that filters a report based on the current row.
+    SchemaLink {
+        cell_identifier: CellIdentifier,
+        label: Option<String>,
+        link_schema_oid: i64,
+        link_query_filter: String,
+        validation_failures: Vec<FailedValidation>
+    },
+
+    /// Data cell. Represented by a link to open an object window.
+    ObjectLink {
+        cell_identifier: CellIdentifier,
+        data_column_oid: i64,
+        data_row_oid: i64,
+        label: Option<String>,
+        link_schema_oid: i64,
+        link_query_filter: Option<String>,
+        validation_failures: Vec<FailedValidation>
+    },
+
+    /// Data cell. Represented by a dropdown, from which a single value can be selected.
+    SingleSelectDropdown {
+        cell_identifier: CellIdentifier,
+        data_column_oid: i64,
+        data_row_oid: i64,
+        dropdown_table_oid: i64,
+        dropdown_row_oid: Option<i64>,
+        validation_failures: Vec<FailedValidation>
+    },
+
+    /// Data cell. Represented by a dropdown, from which multiple values can be selected.
+    MultiSelectDropdown {
+        cell_identifier: CellIdentifier,
+        data_column_oid: i64,
+        data_row_oid: i64,
+        label: Option<String>,
+        dropdown_table_oid: i64,
+        dropdown_row_oid: Vec<i64>,
+        validation_failures: Vec<FailedValidation>
     }
 }
 
 
 
 impl Cell {
+    pub fn get(cell_identifier: CellIdentifier) -> Result<Self, Error> {
+        let conn = db::open()?;
+        Ok(match cell_identifier {
+            CellIdentifier::DataCell { table_oid, column_oid, row_oid } => {
+                // Get the column metadata
+                let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(&conn, column_oid.clone())?;
+                match column_metadata.column_type {
+                    column_type::ColumnType::Primitive(prim) => {
+                        match prim {
+                            column_type::Primitive::Checkbox => {
+                                let is_checked_sql: String = format!("SELECT COLUMN{column_oid}_VALUE AS IS_CHECKED FROM SCHEMA{table_oid}_VIEW WHERE {}_OID = ?1", Datasource::get_default_datasource_transact(conn, table_oid.clone())?.get_alias());
+                                Self::CheckboxEntry {
+                                    data_column_oid: column_oid.clone(),
+                                    data_row_oid: row_oid.clone(),
+                                    is_checked: conn.query_one(&is_checked_sql, params![row_oid], |row| row.get("IS_CHECKED"))?,
+                                    cell_identifier: CellIdentifier::DataCell {
+                                        table_oid,
+                                        column_oid,
+                                        row_oid
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
     /// Retrieves the value of a cell.
     pub fn get(cell_oid: CellOid) -> Result<Self, Error> {
         let conn = db::open()?;
@@ -787,27 +891,148 @@ impl Cell {
 
     /// Sends all cells on a page in a schema.
     pub fn query_by_schema(column_sender: Sender<column::FullMetadata>, cell_sender: Sender<Self>, schema_oid: i64, filters: Vec<(String, i64)>, limit: RetrievalLimit) -> Result<(), Error> {
-        let schema: schema::Schema = schema::Schema::get(schema_oid)?;
+        let conn: Connection = db::open()?;
 
-        let table_datasource: Option<Datasource> = match &schema {
-            schema::Schema::Table(table_metadata) => {
-                let conn = db::open()?;
-                Some(Datasource::get_default_datasource_transact(&conn, table_metadata.schema.oid)?)
-            }
-            schema::Schema::Report(_) => None 
-        };
+        // Query the columns of the schema
+        let mut cols: Vec<(column::FullMetadata, datasource_path)> = Vec::new();
+        for row_result in conn.prepare("SELECT COLUMN_OID, DATASOURCE_PATH FROM METADATA_SCHEMA_COLUMN_VIEW WHERE IS_REQUIRED AND SCHEMA_OID = ?1 ORDER BY ORDERING")?.query_map(params![schema_oid], |row| (row.get::<_, i64>("COLUMN_OID")?, row.get::<_, String>("DATASOURCE_PATH")?))? {
+            let (column_oid, datasource_path) = row_result?;
+            let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(conn, column_oid)?;
 
-        // Build the base query and retrieve columns
-        let query = Self::build_query(column_sender, schema_oid, 
-            match &table_datasource {
-                Some(table_datasource) => vec![table_datasource.clone()],
-                None => Vec::new()
+            // Send the column
+            column_sender.send(column_metadata.clone())?;
+
+            // Add to the list of columns
+            cols.push((column_metadata, datasource_path));
+        }
+
+        // Query the cells of the schema
+        let cell_sql: String = format!(
+            "SELECT ROW_NUMBER() OVER (ORDER BY ROW_INDEX) AS QUERY_ROW_INDEX, * FROM SCHEMA{schema_oid}_VIEW {} ORDER BY ROW_INDEX {}",
+
+            // Page-level filters
+            {
+                let schema_view_name: String = format!("SCHEMA{schema_oid}_VIEW");
+                let mut where_clause: Vec<String> = Vec::new();
+                for (filter_oid_column, filter_oid_value) in filters {
+                    if conn.query_one("SELECT (sql LIKE ?1 || ',') AS CONTAINS_COLUMN FROM sqlite_schema WHERE tbl_name = ?2", params![filter_oid_column, &schema_view_name], |row| row.get::<_, bool>("CONTAINS_COLUMN"))? {
+                        where_clause.push(format!("{filter_oid_column} = {filter_oid_value}"));
+                    }
+                }
+                if where_clause.len() > 0 {
+                    format!("WHERE {}", where_clause.into_iter().reduce(|acc, e| format!("{acc} AND {e}")).unwrap())
+                } else {
+                    String::from("")
+                }
             },
-            filters.clone()
-        )?;
 
-        // Compile and run the query
-        Self::run_query(cell_sender, query, filters, limit)?;
+            // Row limits
+            match limit {
+                SingleRow => String::from("LIMIT 1"),
+                Page { num, size } => format!("LIMIT {size} OFFSET {}", size * (num - 1)),
+                None => String::from("")
+            }
+        );
+        let mut stmt_query = conn.prepare(&cell_sql)?;
+        let mut rows_query = stmt_query.query([])?;
+        let mut row_count: i64 = 0;
+        loop {
+            // Get the next row of the query
+            let Some(row) = rows_query.next()? else { break; };
+            row_count += 1;
+
+            // Send indicator that a new row has started
+            cell_sender.send(Cell::Row { 
+                row_identifier,
+                index: row.get("QUERY_ROW_INDEX")?, 
+                fixed_parent_datasource: fixed_parent_datasource.clone(),
+                validation_failures: Vec::new() 
+            })?;
+
+            // Iterate over columns of schema
+            for (c, datasource_path) in cols.iter() {
+                let value_ord: String = format!("COLUMN{}_VALUE", c.oid);
+                let label_ord: String = format!("COLUMN{}_LABEL", c.oid);
+
+                cell_sender.send(match &c.column_type {
+                    column_type::ColumnType::Primitive(prim) => {
+                        let row_ord: String = format!("{}_OID", Datasource::get_default_datasource_transact(&conn, schema_oid.clone())?.append_path(datasource_path)?.get_alias());
+                        let cell_dependencies: Vec<CellDependency> = vec![CellDependency {
+                            table_oid: c.schema.oid.clone(),
+                            column_oid: c.oid.clone(),
+                            row_oid: row.get::<&str, i64>(&row_ord)?
+                        }];
+                        match &prim {
+                            // File
+                            column_type::Primitive::File => {
+
+                            }
+
+                            // Boolean value represented by a checkbox
+                            column_type::Primitive::Checkbox => {
+                                Cell::CheckboxEntry {
+                                    cell_dependencies,
+                                }
+                            }
+
+                            // Text entry
+
+                        }
+                    }
+                    column_type::ColumnType::Formula { .. } => {
+                        let param_ord: String = format!("COLUMN{}_PARAM", c.oid);
+                        match row.get::<&str, Option<String>>(&param_ord) {
+                            // Formula maps directly to a table cell
+                            Some(param) => {
+                                // Unpack the param
+                                let mut param_iter = param.splitn(3, ':');
+                                let Ok(param_table_oid) = i64::parse(param_iter.next().unwrap()) else {
+                                    return Err(Error::AdhocError("Param string (table OID) not in expected format."));
+                                };
+                                let Ok(param_column_oid) = i64::parse(param_iter.next().unwrap()) else {
+                                    return Err(Error::AdhocError("Param string (column OID) not in expected format."))
+                                };
+                                let Ok(param_row_oid) = i64::parse(param_iter.next().unwrap()) else {
+                                    return Err(Error::AdhocError("Param string (row OID) not in expected format."))
+                                }
+
+                                // Get the details of the table cell
+
+                            }
+
+                            // Formula does not map to a table cell, so is readonly
+                            None => {
+                                Cell::Readonly {
+                                    cell_oid: CellOid::VirtualCell {
+                                        schema_oid: schema_oid.clone(),
+                                        column_oid: &c.oid,
+                                        query_filter: row.get("QUERY_FILTER")?
+                                    },
+                                    label: row.get::<&str, _>(&label_ord)?,
+                                    validation_failures: Vec::new()
+                                }
+                            }
+                        }
+                    }
+                })?;
+            }
+        }
+
+        // If there is room at the end and it is appropriate, send an Add New Row button to the frontend
+        if row_count < limit.get_size() {
+            let table_name: String = format!("TABLE{schema_oid}");
+            if conn.table_exists(Some("main"), &table_name)? {
+                // Is a table, so always send Add New Row over at the end if there is room
+                cell_sender.send(Cell::AddNewRowButton {
+                    table_oid: schema_oid,
+                    fixed_parent_datasource: None,
+                    column_span: cols.len()
+                })?;
+            } else {
+                // Is a report, so only send Add New Row over at the end if there is a single unfixed datasource
+                // TODO read the datasources from the SQL definition
+            }
+        }
         Ok(())
     }
 
