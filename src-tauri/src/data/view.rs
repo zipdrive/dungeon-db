@@ -1386,7 +1386,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
                 arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Boolean),
                 value_expr,
                 label_expr,
-                param_expr: String::from("NULL"),
+                param_expr: String::from("'boolean'"),
                 deterministic: true
             }
         }
@@ -1395,7 +1395,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
             arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
             value_expr: format!("{num}"),
             label_expr: format!("'{num}'"),
-            param_expr: String::from("NULL"),
+            param_expr: String::from("'integer'"),
             deterministic: true
         },
         Formula::LiteralFloat(num) => ScalarExpression {
@@ -1403,7 +1403,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
             arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number),
             value_expr: format!("{num}"),
             label_expr: format!("'{num}'"),
-            param_expr: String::from("NULL"),
+            param_expr: String::from("'number'"),
             deterministic: true
         },
         Formula::LiteralString(str) => {
@@ -1413,7 +1413,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
                 arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Text),
                 value_expr: safe_str.clone(),
                 label_expr: safe_str.clone(),
-                param_expr: String::from("NULL"),
+                param_expr: String::from("'text'"),
                 deterministic: true
             }
         }
@@ -1422,7 +1422,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
             arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
             value_expr: format!("RANDOM()"),
             label_expr: format!("CAST(RANDOM() AS TEXT)"),
-            param_expr: String::from("NULL"),
+            param_expr: String::from("'integer'"),
             deterministic: false
         },
         Formula::Param { datasource_alias, column_oid } => {
@@ -1437,9 +1437,9 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
                     
                     // Parameter expressions return a string in the form "{TABLE_OID}:{COLUMN_OID}:{ROW_OID}"
                     let param_expr: String = if let Some(param_cell) = param.cell {
-                        format!("('{}:{}:' || CAST({} AS TEXT))", param_cell.table_oid, param_cell.column_oid, param_cell.row_ord)
+                        format!("('param:{}:{}:' || CAST({} AS TEXT))", param_cell.table_oid, param_cell.column_oid, param_cell.row_ord)
                     } else {
-                        String::from("NULL")
+                        String::from("NULL") // This case shouldn't happen?
                     };
 
                     // 
@@ -1535,7 +1535,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
                 arg_type: inner_compiled.arg_type,
                 label_expr,
                 value_expr,
-                param_expr: String::from("NULL"),
+                param_expr: inner_compiled.param_expr,
                 deterministic: inner_compiled.deterministic
             }
         }
@@ -1559,7 +1559,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
                 arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
                 label_expr,
                 value_expr,
-                param_expr: String::from("NULL"),
+                param_expr: String::from("'integer'"),
                 deterministic: inner_compiled.deterministic
             }
         }
@@ -1583,7 +1583,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
                 arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
                 label_expr,
                 value_expr,
-                param_expr: String::from("NULL"),
+                param_expr: String::from("'integer'"),
                 deterministic: inner_compiled.deterministic
             }
         }
@@ -1607,7 +1607,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
                 arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
                 label_expr,
                 value_expr,
-                param_expr: String::from("NULL"),
+                param_expr: String::from("'integer'"),
                 deterministic: inner_compiled.deterministic
             }
         }
@@ -1631,7 +1631,7 @@ fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasourc
                 arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
                 label_expr,
                 value_expr,
-                param_expr: String::from("NULL"),
+                param_expr: String::from("'integer'"),
                 deterministic: inner_compiled.deterministic
             }
         },
@@ -1714,10 +1714,10 @@ fn create_schema_view(trans: &Transaction, schema_oid: i64) -> Result<(), Error>
         let mut filter_expr: String = String::from("");
         let mut from_expr: String = String::from("FROM");
 
-        let mut basis_datasource: HashSet<Datasource> = HashSet::new();
+        let mut root_datasource: HashSet<Datasource> = HashSet::new();
         for (cte_datasource, cte) in param_cte.into_iter() {
             let cte_root_datasource: Datasource = cte_datasource.seek_root();
-            basis_datasource.insert(cte_datasource.seek_basis()?);
+            root_datasource.insert(cte_datasource.seek_root());
 
             let cte_datasource_alias: String = cte_datasource.get_alias();
             let cte_root_datasource_alias: String = cte_root_datasource.get_alias();
@@ -1740,16 +1740,16 @@ fn create_schema_view(trans: &Transaction, schema_oid: i64) -> Result<(), Error>
                 format!(
                     "{} AS QUERY_FILTER{}", 
                     if filter_expr == "" { String::from("''") } else { filter_expr },
-                    if basis_datasource.len() == 1 {
-                        let basis_datasource: Datasource = basis_datasource.into_iter().next().unwrap();
+                    if root_datasource.len() == 1 {
+                        let root_datasource: Datasource = root_datasource.into_iter().next().unwrap();
                         format!(
-                            ", {} AS TABLE_OID, {}.{}_OID AS ROW_OID", 
-                            basis_datasource.get_schema_oid()?, 
-                            basis_datasource.seek_root().get_alias(), 
-                            basis_datasource.get_alias()
+                            ", {}.{}_OID AS OID", 
+                            root_datasource.get_schema_oid()?, 
+                            root_datasource.seek_root().get_alias(), 
+                            root_datasource.get_alias()
                         )
                     } else {
-                        String::from(", NULL AS TABLE_OID, NULL AS ROW_OID")
+                        String::from(", NULL AS OID")
                     }
                 ),
                 |acc, e| format!("{acc}, {e}")

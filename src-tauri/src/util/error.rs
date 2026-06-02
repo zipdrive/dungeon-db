@@ -5,6 +5,11 @@ use tauri::{ipc::Invoke, Error as TauriError};
 
 pub enum Error {
     AdhocError(&'static str),
+
+    // Duplicate column name
+    DuplicateColumnName {
+        column_name: String
+    },
     
     /// Error for when a column with type Primitive, Object, Select, or Multiselect does not belong to a table.
     OrphanedDataColumn {
@@ -83,6 +88,10 @@ impl Into<String> for Error {
                 return s.into();
             }
 
+            Self::DuplicateColumnName { column_name } => {
+                return format!("Multiple columns in table with the name \"{}\"!", column_name.replace("\\", "\\\\").replace("\"", "\\\""))
+            }
+
             Self::OrphanedDataColumn { column_oid, column_name } => {
                 return format!("Data column \"{}\" (ID {column_oid}) does not belong to a table!", column_name.replace("\\", "\\\\").replace("\"", "\\\""));
             }
@@ -92,11 +101,11 @@ impl Into<String> for Error {
             }
 
             Self::InvalidDatasourceColumn { column_oid, column_name, column_type } => {
-                return format!("The source for a data column cannot be identified by the {column_type} column \"{column_name}\" (ID {column_oid})!");
+                return format!("The source for a data column cannot be identified by the {column_type} column \"{}\" (ID {column_oid})!", column_name.replace("\\", "\\\\").replace("\"", "\\\""));
             }
 
             Self::InvalidParameter { column_oid, column_name, column_type } => {
-                return format!("{column_type} column \"{column_name}\" (ID {column_oid}) cannot be a parameter!");
+                return format!("{column_type} column \"{}\" (ID {column_oid}) cannot be a parameter!", column_name.replace("\\", "\\\\").replace("\"", "\\\""));
             }
             
             Self::FormulaParseError { msg, full_formula, substring_with_error } => {

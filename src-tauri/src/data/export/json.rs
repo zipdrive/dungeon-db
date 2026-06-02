@@ -30,9 +30,170 @@ enum ExportSchema {
     }
 }
 
+/// Get the columns of a schema.
+fn get_columns<'a, 'b>(conn: &'a Connection, columns_by_schema: &'b mut HashMap<i64, Vec<column::FullMetadata>>, schema_oid: i64) -> Result<&'b Vec<column::FullMetadata>, Error> {
+    match columns_by_schema.get(&table_oid) {
+        Some(cols) => cols,
+        None => {
+            let mut cols: Vec<column::FullMetadata> = Vec::new();
+            for row_result in conn.prepare("SELECT COLUMN_OID FROM METADATA_SCHEMA_COLUMN_VIEW WHERE IS_REQUIRED AND SCHEMA_OID = ?1 ORDER BY ORDERING")?.query_map(params![schema_oid], |row| row.get::<_, i64>("COLUMN_OID"))? {
+                let column_oid: i64 = row_result?;
+                let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(conn, column_oid)?;
+
+                // Add to the list of columns
+                cols.push(column_metadata);
+            }
+            columns_by_schema.insert(table_oid, cols);
+            columns_by_schema.get(&table_oid).unwrap()
+        }
+    }
+}
+
+fn construct_row_object() -> Result<Value, Error> {
+    let mut map: Map = Map::new();
+
+    // Add the row's index, if requested
+    if let Some(index_column_name) = &index_column {
+        map.insert(index_column_name.clone(), Value::I64(row.get::<_, i64>("ROW_INDEX")?));
+    }
+
+    // Add the row's OID, if requested
+    if let Some(oid_column_name) = &oid_column {
+        map.insert(oid_column_name.clone(), match row.get::<_, Option<i64>>("OID")? {
+            Some(oid) => Value::I64(oid),
+            None => Value::Null
+        });
+    }
+
+    // Add each column to the map
+    for c in cols.iter() {
+        // Ensure the column name isn't duplicated
+        if map.contains_key(&c.name) {
+            return Err(Error::DuplicateColumnName { column_name: c.name });
+        }
+
+        // Insert the column into the map
+        map.insert(c.name.clone(), match &c.column_type {
+            &column_type::ColumnType::Primitive(prim) => {
+                let value_ord: String = format!("COLUMN{}_VALUE", c.oid);
+                match prim {
+                    column_type::Primitive::Integer => match row.get::<&str, Option<i64>>(&value_ord)? {
+                        Some(value) => Value::I64(value),
+                        None => Value::Null
+                    },
+                    column_type::Primitive::Number => match row.get::<&str, Option<f64>>(&value_ord)? {
+                        Some(value) => Value::F64(value),
+                        None => Value::Null
+                    },
+                    column_type::Primitive::Text => match row.get::<&str, Option<String>>(&value_ord)? {
+                        Some(value) => Value::String(value),
+                        None => Value::Null
+                    },
+                    column_type::Primitive::JSON => match row.get::<&str, Option<String>>(&value_ord)? {
+                        Some(value) => {
+                            // TODO parse the JSON
+                        },
+                        None => Value::Null
+                    },
+                    column_type::Primitive::File
+                    | column_type::Primitive::Image => match row.get::<&str, Option<i64>>(&value_ord)? {
+                        Some(value) => {
+                            // TODO get the file content as base64 string
+                        },
+                        None => Value::Null
+                    },
+                    column_type::Primitive::Checkbox => match row.get::<&str, Option<bool>>(&value_ord)? {
+                        Some(value) => Value::Bool(value),
+                        None => Value::Null
+                    },
+                    column_type::Primitive::Date
+                    | column_type::Primitive::Datetime => {
+                        let label_ord: String = format!("COLUMN{}_LABEL", c.oid);
+                        match row.get::<&str, Option<String>>(&label_ord)? {
+                            Some(value) => Value::I64(value),
+                            None => Value::Null
+                        }
+                    }
+                }
+            }
+            &column_type::ColumnType::Object { table_oid, .. } => {
+                let value_ord: String = format!("COLUMN{}_VALUE", c.oid);
+                match row.get::<&str, Option<i64>>(&value_ord)? {
+                    Some(row_oid) => {
+                        let obj_conn = db::open()?;
+                        export_object_row(&obj_conn, columns_by_schema, table_oid, row_oid)?
+                    }
+                    None => Value::Null
+                }
+            }
+            &column_type::ColumnType::Select { .. } => {
+                let value_ord: String = format!("COLUMN{}_VALUE", c.oid);
+                match row.get::<&str, Option<i64>>(&value_ord)? {
+                    Some(value) => Value::I64(value),
+                    None => Value::Null
+                }
+            }
+            &column_type::ColumnType::Multiselect { .. } => {
+                let value_ord: String = format!("COLUMN{}_VALUE", c.oid);
+                match row.get::<&str, Option<String>>(&value_ord)? {
+                    Some(value) => Value::Array(
+                        value.split(',').filter_map(|s| match i64::parse(s) {
+                            Ok(i) => Some(i),
+                            Err(_) => None
+                        }).collect()
+                    ),
+                    None => Value::Null
+                }
+            }
+            &column_type::ColumnType::Formula { .. } => {
+                let param_ord: String = format!("COLUMN{}_PARAM", c.oid);
+                match row.get::<&str, Option<String>>(&param_ord)? {
+                    Some(param) => {
+                        if param.starts_with("boolean") {
+                            let value_ord: String = format!("COLUMN{}_VALUE", c.oid);
+                            let value: String = row.get::<&str, String>(&value_ord)?;
+                            match i64::from_str(&value) {
+                                Ok(i) => Value::Bool(i != 0),
+                                Err(_) => {
+                                    return Err(Error::AdhocError("Expected a boolean value."));
+                                }
+                            }
+                        } else if param.starts_with("integer") {
+                            let value_ord: String = format!("COLUMN{}_VALUE", c.oid);
+                            let value: String = row.get::<&str, String>(&value_ord)?;
+                            match i64::from_str(&value) {
+                                Ok(i) => Value::I64(i),
+                                Err(_) => {
+                                    return Err(Error::AdhocError("Expected a boolean value."));
+                                }
+                            }
+                        }
+                    },
+                    None => Value::Null 
+                }
+            }
+            &column_type::ColumnType::Subreport { report_oid, .. } => {
+
+            }
+        });
+    }
+
+    // Add the object to the array of the schema rows
+    top_level_array.push(Value::Object(map));
+}
+
 /// Exports a row of a table, accounting for additional columns of tables inheriting from this one.
-fn export_object_row(conn: &Connection, table_oid: i64, row_oid: i64) -> Result<Value, Error> {
-    Err(Error::AdhocError(""))
+fn export_object_row(conn: &Connection, columns_by_schema: &mut HashMap<i64, Vec<column::FullMetadata>>, table_oid: i64, row_oid: i64) -> Result<Value, Error> {
+    let select_polymorphism_sql: String = format!("SELECT TABLE_OID, ROW_OID FROM TABLE{table_oid}_POLYMORPHISM_VIEW WHERE OID = ?1", table_oid);
+    Ok(if let Some((table_oid, row_oid)) = conn.query_one(&select_polymorphism_sql, params![row_oid], |row| Ok((row.get::<_, i64>("TABLE_OID")?, row.get::<_, i64>("ROW_OID")?))).optional()? {
+        // Get the columns of the table
+        let cols: &Vec<column::FullMetadata> = get_columns(&conn, columns_by_schema, table_oid)?;
+
+        // Query the row from the table
+
+    } else {
+        Value::Null 
+    })
 }
 
 /// Exports the rows of the schema individually, accounting for column/type polymorphism.
@@ -68,59 +229,23 @@ fn export_schema_individual(conn: &Connection, schema_oid: i64, index_column: Op
     Ok(Value::Array(top_level_array))
 }
 
-/*
-
 /// Exports the rows of the schema in a batch, not accounting for polymorphism.
-fn export_schema_batch(conn: &Connection, schema_oid: i64, index_column: Option<String>, oid_column: Option<String>) -> Result<Value, Error> {
+fn export_schema_batch(conn: &Connection, columns_by_schema: &mut HashMap<i64, Vec<column::FullMetadata>>, schema_oid: i64, index_column: Option<String>, oid_column: Option<String>) -> Result<Value, Error> {
+    // Query the columns of the schema
+    let cols: &Vec<column::FullMetadata> = get_columns(conn, columns_by_schema, schema_oid)?;
+
+    // Query for the rows of the schema
+    let select_sql: String = format!("SELECT * FROM SCHEMA{schema_oid}_VIEW ORDER BY ROW_INDEX");
+    let select_stmt = conn.prepare(&select_sql)?;
+    let select_rows = select_stmt.query([])?;
+
+    // Build the JSON array
     let mut top_level_array: Vec<Value> = Vec::new();
-    let mut current_row: Option<Map> = None;
-    
-    // Run the schema query
-    let mut column_mapping: HashMap<i64, column::FullMetadata> = HashMap::new();
-    cell::Cell::query_by_schema(
-        Sender::Callback(Box::new(
-            |column| {
-                column_mapping.insert(column.oid, column);
-                Ok(())
-            }
-        )),
-        Sender::Callback(Box::new(
-            |cell| {
-                match cell {
-                    cell::Cell::Row { row_identifier, index, .. } => {
-                        if let Some(current_row) = current_row {
-                            top_level_array.push(Value::Object(current_row));
-                        }
-
-                        let mut map: Map = Map::new();
-                        if let Some(index_column_name) = index_column {
-                            map.insert(index_column_name, Value::I64(index));
-                        }
-                        if let Some(oid_column_name) = oid_column {
-                            if let Some((row_schema_oid, row_oid)) = row_identifier {
-                                if row_schema_oid == schema_oid {
-                                    map.insert(oid_column_name, Value::I64(row_oid));
-                                } else {
-                                    map.insert(oid_column_name, Value::Null);
-                                }
-                            } else {
-                                map.insert(oid_column_name, Value::Null);
-                            }
-                        }
-                        current_row = Some(map);
-                    }
-                    cell::Cell::PrimitiveEntry { cell_oid, label, .. } => {
-
-                    }
-                }
-                Ok(())
-            }
-        )),
-        schema_oid,
-        Vec::new(),
-        cell::RetrievalLimit::None
-    )?;
-
+    loop {
+        // Start building the object for the next row of the schema
+        let Some(row) = select_rows.next() else { break; };
+        
+    }
     Ok(Value::Array(top_level_array))
 }
 
@@ -156,5 +281,3 @@ pub fn export(conn: &Connection, filepath: String, schemas: Vec<ExportSchema>) -
 
     // Serialize JSON and export to file
 }
-
-    */
