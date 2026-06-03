@@ -1744,7 +1744,6 @@ fn create_schema_view(trans: &Transaction, schema_oid: i64) -> Result<(), Error>
                         let root_datasource: Datasource = root_datasource.into_iter().next().unwrap();
                         format!(
                             ", {}.{}_OID AS OID", 
-                            root_datasource.get_schema_oid()?, 
                             root_datasource.seek_root().get_alias(), 
                             root_datasource.get_alias()
                         )
