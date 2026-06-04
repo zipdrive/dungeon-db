@@ -952,394 +952,6 @@ impl ParamCTE {
     }
 }
 
-/// Adds a CTE for params from a datasource.
-fn add_datasource_cte(param_cte: &mut HashMap<Datasource, ParamCTE>, datasource: &Datasource) {
-    if !param_cte.contains_key(&datasource) {
-        // Add the parent datasource
-        if let Some(parent_datasource) = datasource.get_parent() {
-            add_datasource_cte(param_cte, &parent_datasource);
-
-            // Link the datasource to its parent
-            if let Some(parent_datasource_cte) = param_cte.get_mut(&parent_datasource) {
-                parent_datasource_cte.child_datasources.insert(datasource.clone());
-            }
-        }
-
-        // Add a CTE for the datasource
-        param_cte.insert(datasource.clone(), ParamCTE {
-            datasource: datasource.clone(),
-            child_datasources: HashSet::new(),
-            columns: HashMap::new()
-        });
-    }
-}
-
-/// Adds a parameter to a datasource.
-fn add_param<'a>(param_cte: &'a mut HashMap<Datasource, ParamCTE>, datasource: Datasource, column: column::FullMetadata) -> Result<(Datasource, ParamCTEColumn), Error> {
-    // Ensure the CTE for the datasource exists
-    add_datasource_cte(param_cte, &datasource);
-
-    // Add the column to that CTE
-    let column_path: String = format!("{}_COLUMN{}", datasource.get_alias(), column.oid);
-    let param = if let Some(datasource_cte) = param_cte.get_mut(&datasource) {
-        if !datasource_cte.columns.contains_key(&column_path) {
-            datasource_cte.columns.insert(column_path.clone(), match column.column_type {
-                column_type::ColumnType::Primitive(prim) => {
-                    match prim {
-                        column_type::Primitive::Checkbox => ParamCTEColumn { 
-                            label_expr: format!("CAST(d.COLUMN{} AS TEXT)", column.oid), 
-                            label_ord: format!("{column_path}_LABEL"), 
-                            value_expr: format!("d.COLUMN{}", column.oid), 
-                            value_ord: format!("{column_path}_VALUE"), 
-                            arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()),  
-                            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Boolean),
-                            cell: Some(ParamCTEColumnCell {
-                                table_oid: column.schema.oid,
-                                column_oid: column.oid,
-                                row_ord: format!("{}.{}_OID", datasource.seek_root().get_alias(), datasource.get_alias())
-                            })
-                        },
-                        column_type::Primitive::Integer => ParamCTEColumn { 
-                            label_expr: format!("CAST(d.COLUMN{} AS TEXT)", column.oid), 
-                            label_ord: format!("{column_path}_LABEL"), 
-                            value_expr: format!("d.COLUMN{}", column.oid), 
-                            value_ord: format!("{column_path}_VALUE"), 
-                            arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()),  
-                            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
-                            cell: Some(ParamCTEColumnCell {
-                                table_oid: column.schema.oid,
-                                column_oid: column.oid,
-                                row_ord: format!("{}.{}_OID", datasource.seek_root().get_alias(), datasource.get_alias())
-                            })
-                        },
-                        column_type::Primitive::Number => ParamCTEColumn { 
-                            label_expr: format!("CAST(d.COLUMN{} AS TEXT)", column.oid), 
-                            label_ord: format!("{column_path}_LABEL"), 
-                            value_expr: format!("d.COLUMN{}", column.oid), 
-                            value_ord: format!("{column_path}_VALUE"), 
-                            arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()),  
-                            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number),
-                            cell: Some(ParamCTEColumnCell {
-                                table_oid: column.schema.oid,
-                                column_oid: column.oid,
-                                row_ord: format!("{}.{}_OID", datasource.seek_root().get_alias(), datasource.get_alias())
-                            })
-                        },
-                        column_type::Primitive::Text => ParamCTEColumn { 
-                            label_expr: format!("d.COLUMN{}", column.oid), 
-                            label_ord: format!("{column_path}_LABEL"), 
-                            value_expr: format!("d.COLUMN{}", column.oid), 
-                            value_ord: format!("{column_path}_VALUE"), 
-                            arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()),  
-                            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Text),
-                            cell: Some(ParamCTEColumnCell {
-                                table_oid: column.schema.oid,
-                                column_oid: column.oid,
-                                row_ord: format!("{}.{}_OID", datasource.seek_root().get_alias(), datasource.get_alias())
-                            })
-                        },
-                        column_type::Primitive::JSON => ParamCTEColumn { 
-                            label_expr: format!("d.COLUMN{}", column.oid), 
-                            label_ord: format!("{column_path}_LABEL"), 
-                            value_expr: format!("d.COLUMN{}", column.oid), 
-                            value_ord: format!("{column_path}_VALUE"),
-                            arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()), 
-                            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::JSON),
-                            cell: Some(ParamCTEColumnCell {
-                                table_oid: column.schema.oid,
-                                column_oid: column.oid,
-                                row_ord: format!("{}.{}_OID", datasource.seek_root().get_alias(), datasource.get_alias())
-                            })
-                        },
-                        column_type::Primitive::Date => ParamCTEColumn { 
-                            label_expr: format!("DATE(d.COLUMN{}, 'julianday')", column.oid), 
-                            label_ord: format!("{column_path}_LABEL"), 
-                            value_expr: format!("d.COLUMN{}", column.oid), 
-                            value_ord: format!("{column_path}_VALUE"), 
-                            arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()), 
-                            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Date),
-                            cell: Some(ParamCTEColumnCell {
-                                table_oid: column.schema.oid,
-                                column_oid: column.oid,
-                                row_ord: format!("{}.{}_OID", datasource.seek_root().get_alias(), datasource.get_alias())
-                            })
-                        },
-                        column_type::Primitive::Datetime => ParamCTEColumn { 
-                            label_expr: format!("STRFTIME('%FT%TZ', d.COLUMN{}, 'julianday')", column.oid), 
-                            label_ord: format!("{column_path}_LABEL"), 
-                            value_expr: format!("d.COLUMN{}", column.oid), 
-                            value_ord: format!("{column_path}_VALUE"), 
-                            arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()), 
-                            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Datetime),
-                            cell: Some(ParamCTEColumnCell {
-                                table_oid: column.schema.oid,
-                                column_oid: column.oid,
-                                row_ord: format!("{}.{}_OID", datasource.seek_root().get_alias(), datasource.get_alias())
-                            })
-                        },
-                        column_type::Primitive::File | column_type::Primitive::Image => ParamCTEColumn { 
-                            label_expr: format!("(SELECT f.LABEL FROM METADATA_FILE_VIEW f WHERE f.OID = d.COLUMN{})", column.oid), 
-                            label_ord: format!("{column_path}_LABEL"), 
-                            value_expr: format!("d.COLUMN{}", column.oid), 
-                            value_ord: format!("{column_path}_VALUE"), 
-                            arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()), 
-                            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::File),
-                            cell: Some(ParamCTEColumnCell {
-                                table_oid: column.schema.oid,
-                                column_oid: column.oid,
-                                row_ord: format!("{}.{}_OID", datasource.seek_root().get_alias(), datasource.get_alias())
-                            })
-                        }
-                    }
-                }
-                column_type::ColumnType::Object { table_oid, .. } => {
-                    if column.schema.oid == datasource.get_schema_oid()? {
-                        // Is normal
-                        ParamCTEColumn {
-                            label_expr: format!("(SELECT l.OBJECT_LABEL FROM TABLE{table_oid}_LABEL_VIEW l WHERE l.OID = d.COLUMN{})", column.oid),
-                            label_ord: format!("{column_path}_LABEL"),
-                            value_expr: format!("d.COLUMN{}", column.oid),
-                            value_ord: format!("{column_path}_VALUE"),
-                            arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()), 
-                            arg_type: ExpressionReturnType::new_record(table_oid),
-                            cell: Some(ParamCTEColumnCell {
-                                table_oid: column.schema.oid,
-                                column_oid: column.oid,
-                                row_ord: format!("{}.{}_OID", datasource.seek_root().get_alias(), datasource.get_alias())
-                            })
-                        }
-                    } else {
-                        // Is reversed
-                        ParamCTEColumn {
-                            label_expr: format!("
-                                (
-                                    SELECT 
-                                        '[' || COALESCE(GROUP_CONCAT(l.JSON_LABEL, ', '), '') || ']'
-                                    FROM TABLE{table_oid}_LABEL_VIEW l 
-                                    WHERE l.COLUMN{} = d.OID
-                                )
-                                ", 
-                                column.oid
-                            ),
-                            label_ord: format!("{column_path}_LABEL"),
-                            value_expr: format!("
-                                (
-                                    SELECT 
-                                        GROUP_CONCAT(CAST(s.OID AS TEXT), ',') 
-                                    FROM TABLE{} s
-                                    WHERE s.COLUMN{} = d.OID AND NOT s.TRASH
-                                )
-                                ", 
-                                column.schema.oid,
-                                column.oid
-                            ),
-                            value_ord: format!("{column_path}_VALUE"),
-                            arg_expr: format!("
-                                (
-                                    SELECT
-                                        s.OID
-                                    FROM TABLE{} s
-                                    WHERE s.COLUMN{} = {}.{}_OID AND NOT s.TRASH
-                                )
-                                ", 
-                                column.schema.oid, 
-                                column.oid,
-                                datasource.seek_root().get_alias(),
-                                datasource.get_alias()
-                            ), 
-                            arg_type: ExpressionReturnType::new_record(column.schema.oid),
-                            cell: Some(ParamCTEColumnCell {
-                                table_oid,
-                                column_oid: column.oid,
-                                row_ord: format!("{}.{}_OID", datasource.seek_root().get_alias(), datasource.get_alias())
-                            })
-                        }
-                    }
-                }
-                column_type::ColumnType::Select { table_oid, .. } => {
-                    if column.schema.oid == datasource.get_schema_oid()? {
-                        // Is normal
-                        ParamCTEColumn {
-                            label_expr: format!("(SELECT l.SELECT_LABEL FROM TABLE{table_oid}_LABEL_VIEW l WHERE l.OID = d.COLUMN{})", column.oid),
-                            label_ord: format!("{column_path}_LABEL"),
-                            value_expr: format!("d.COLUMN{}", column.oid),
-                            value_ord: format!("{column_path}_VALUE"),
-                            arg_expr: format!("{}.{column_path}_VALUE", datasource.seek_root().get_alias()), 
-                            arg_type: ExpressionReturnType::new_record(table_oid),
-                            cell: Some(ParamCTEColumnCell {
-                                table_oid: column.schema.oid,
-                                column_oid: column.oid,
-                                row_ord: format!("{}.{}_OID", datasource.seek_root().get_alias(), datasource.get_alias())
-                            })
-                        }
-                    } else {
-                        // Is reversed
-                        ParamCTEColumn {
-                            label_expr: format!("
-                                (
-                                    SELECT 
-                                        '[' || COALESCE(GROUP_CONCAT(l.JSON_LABEL, ', '), '') || ']'
-                                    FROM TABLE{table_oid}_LABEL_VIEW l 
-                                    WHERE l.COLUMN{} = d.OID
-                                )
-                                ", 
-                                column.oid
-                            ),
-                            label_ord: format!("{column_path}_LABEL"),
-                            value_expr: format!("
-                                (
-                                    SELECT 
-                                        GROUP_CONCAT(CAST(s.OID AS TEXT), ',') 
-                                    FROM TABLE{} s
-                                    WHERE s.COLUMN{} = d.OID AND NOT s.TRASH
-                                )
-                                ", 
-                                column.schema.oid,
-                                column.oid
-                            ),
-                            value_ord: format!("{column_path}_VALUE"),
-                            arg_expr: format!("
-                                (
-                                    SELECT
-                                        s.OID
-                                    FROM TABLE{} s
-                                    WHERE s.COLUMN{} = {}.{}_OID AND NOT s.TRASH
-                                )
-                                ", 
-                                column.schema.oid, 
-                                column.oid,
-                                datasource.seek_root().get_alias(),
-                                datasource.get_alias()
-                            ), 
-                            arg_type: ExpressionReturnType::new_record(column.schema.oid),
-                            cell: Some(ParamCTEColumnCell {
-                                table_oid,
-                                column_oid: column.oid,
-                                row_ord: format!("{}.{}_OID", datasource.seek_root().get_alias(), datasource.get_alias())
-                            })
-                        }
-                    }
-                }
-                column_type::ColumnType::Multiselect { table_oid, .. } => {
-                    if column.schema.oid == datasource.get_schema_oid()? {
-                        // Is normal
-                        ParamCTEColumn {
-                            label_expr: format!("
-                                (
-                                    SELECT 
-                                        '[' || COALESCE(GROUP_CONCAT(l.JSON_LABEL, ', '), '') || ']'
-                                    FROM MULTISELECT{} m 
-                                    INNER JOIN TABLE{table_oid}_LABEL_VIEW l ON l.OID = m.TABLE{table_oid}_OID 
-                                    WHERE m.TABLE{}_OID = d.OID
-                                )", 
-                                column.oid,
-                                column.schema.oid
-                            ),
-                            label_ord: format!("{column_path}_LABEL"),
-                            value_expr: format!("
-                                (
-                                    SELECT 
-                                        GROUP_CONCAT(CAST(t.OID AS TEXT), ',')
-                                    FROM MULTISELECT{} m 
-                                    INNER JOIN TABLE{table_oid} t ON t.OID = m.TABLE{table_oid}_OID 
-                                    WHERE m.TABLE{}_OID = d.OID AND NOT t.TRASH
-                                )", 
-                                column.oid,
-                                column.schema.oid
-                            ),
-                            value_ord: format!("{column_path}_VALUE"),
-                            arg_expr: format!("
-                                (
-                                    SELECT 
-                                        TABLE{table_oid}_OID
-                                    FROM MULTISELECT{}
-                                    WHERE TABLE{}_OID = {}.{}_OID AND TABLE{table_oid}_OID IN (SELECT OID FROM TABLE{table_oid} WHERE NOT TRASH)
-                                )", 
-                                column.oid,
-                                column.schema.oid,
-                                datasource.seek_root().get_alias(),
-                                datasource.get_alias()
-                            ),
-                            arg_type: ExpressionReturnType::new_record(table_oid),
-                            cell: Some(ParamCTEColumnCell {
-                                table_oid: column.schema.oid,
-                                column_oid: column.oid,
-                                row_ord: format!("{}.{}_OID", datasource.seek_root().get_alias(), datasource.get_alias())
-                            })
-                        }
-                    } else {
-                        // Is reversed
-                        ParamCTEColumn {
-                            label_expr: format!("
-                                (
-                                    SELECT 
-                                        '[' || COALESCE(GROUP_CONCAT(l.JSON_LABEL, ', '), '') || ']'
-                                    FROM MULTISELECT{} m 
-                                    INNER JOIN TABLE{}_LABEL_VIEW l ON l.OID = m.TABLE{}_OID 
-                                    WHERE m.TABLE{table_oid}_OID = d.OID
-                                )", 
-                                column.oid,
-                                column.schema.oid,
-                                column.schema.oid
-                            ),
-                            label_ord: format!("{column_path}_LABEL"),
-                            value_expr: format!("
-                                (
-                                    SELECT 
-                                        GROUP_CONCAT(CAST(t.OID AS TEXT), ',')
-                                    FROM MULTISELECT{} m 
-                                    INNER JOIN TABLE{} t ON t.OID = m.TABLE{}_OID 
-                                    WHERE m.TABLE{table_oid}_OID = d.OID AND NOT t.TRASH
-                                )", 
-                                column.oid,
-                                column.schema.oid,
-                                column.schema.oid 
-                            ),
-                            value_ord: format!("{column_path}_VALUE"),
-                            arg_expr: format!("
-                                (
-                                    SELECT 
-                                        t.OID
-                                    FROM MULTISELECT{} m 
-                                    INNER JOIN TABLE{} t ON t.OID = m.TABLE{}_OID 
-                                    WHERE m.TABLE{table_oid}_OID = d.OID AND NOT t.TRASH
-                                )", 
-                                column.oid,
-                                column.schema.oid,
-                                column.schema.oid 
-                            ),
-                            arg_type: ExpressionReturnType::new_record(column.schema.oid),
-                            cell: Some(ParamCTEColumnCell {
-                                table_oid,
-                                column_oid: column.oid,
-                                row_ord: format!("{}.{}_OID", datasource.seek_root().get_alias(), datasource.get_alias())
-                            })
-                        }
-                    }
-                }
-                _ => {
-                    // Column cannot be added as a parameter
-                    return Err(Error::InvalidParameter { 
-                        column_oid: column.oid, 
-                        column_name: column.name, 
-                        column_type: column.column_type.to_str() 
-                    });
-                }
-            });
-        }
-        
-        datasource_cte.columns[&column_path].clone()
-    } else {
-        return Err(Error::InvalidDatasource { 
-            datasource_alias: datasource.get_alias() 
-        });
-    };
-    Ok((datasource.seek_root(), param))
-}
-
-
-
-
 /// Represents an expression returning a scalar value.
 #[derive(PartialEq, Eq, Clone)]
 struct ScalarExpression {
@@ -1364,314 +976,177 @@ struct ScalarExpression {
     deterministic: bool 
 }
 
-/// Compile the formula into SQL.
-fn compile_formula<'a>(trans: &Transaction, param_cte: &'a mut HashMap<Datasource, ParamCTE>, formula: Box<Formula>) -> Result<ScalarExpression, Error> {
-    Ok(match *formula {
-        Formula::Null => ScalarExpression {
-            arg_expr: String::from("NULL"),
-            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Null),
-            value_expr: String::from("NULL"),
-            label_expr: String::from("NULL"),
-            param_expr: String::from("NULL"),
-            deterministic: true
-        },
-        Formula::LiteralBool(b) => {
-            let (value_expr, label_expr) = if b {
-                (String::from("TRUE"), String::from("'True'"))
-            } else {
-                (String::from("FALSE"), String::from("'False'"))
-            };
-            ScalarExpression {
-                arg_expr: value_expr.clone(),
-                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Boolean),
-                value_expr,
-                label_expr,
-                param_expr: String::from("'boolean'"),
-                deterministic: true
-            }
-        }
-        Formula::LiteralInt(num) => ScalarExpression {
-            arg_expr: format!("{num}"),
-            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
-            value_expr: format!("{num}"),
-            label_expr: format!("'{num}'"),
-            param_expr: String::from("'integer'"),
-            deterministic: true
-        },
-        Formula::LiteralFloat(num) => ScalarExpression {
-            arg_expr: format!("{num}"),
-            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number),
-            value_expr: format!("{num}"),
-            label_expr: format!("'{num}'"),
-            param_expr: String::from("'number'"),
-            deterministic: true
-        },
-        Formula::LiteralString(str) => {
-            let safe_str: String = format!("'{}'", str.replace("'", "''"));
-            ScalarExpression {
-                arg_expr: safe_str.clone(),
-                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Text),
-                value_expr: safe_str.clone(),
-                label_expr: safe_str.clone(),
-                param_expr: String::from("'text'"),
-                deterministic: true
-            }
-        }
-        Formula::RandomInt => ScalarExpression {
-            arg_expr: format!("RANDOM()"),
-            arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
-            value_expr: format!("RANDOM()"),
-            label_expr: format!("CAST(RANDOM() AS TEXT)"),
-            param_expr: String::from("'integer'"),
-            deterministic: false
-        },
-        Formula::Param { datasource_alias, column_oid } => {
-            let column_datasource: Datasource = Datasource::from_alias(datasource_alias.clone())?;
-            let column_metadata = column::FullMetadata::get_transact(trans, column_oid.clone())?;
-            match &column_metadata.column_type {
-                column_type::ColumnType::Primitive(_)
-                | column_type::ColumnType::Object { .. }
-                | column_type::ColumnType::Select { .. }
-                | column_type::ColumnType::Multiselect { .. } => {
-                    let (_, param) = add_param(param_cte, column_datasource, column_metadata)?;
-                    
-                    // Parameter expressions return a string in the form "{TABLE_OID}:{COLUMN_OID}:{ROW_OID}"
-                    let param_expr: String = if let Some(param_cell) = param.cell {
-                        format!("('param:{}:{}:' || CAST({} AS TEXT))", param_cell.table_oid, param_cell.column_oid, param_cell.row_ord)
-                    } else {
-                        String::from("NULL") // This case shouldn't happen?
-                    };
-
-                    // 
-                    ScalarExpression {
-                        arg_expr: param.arg_expr,
-                        arg_type: param.arg_type,
-                        value_expr: param.value_expr,
-                        label_expr: param.label_expr,
-                        param_expr,
-                        deterministic: true
-                    }
-                }
-                column_type::ColumnType::Formula { formula, .. } => {
-                    // Parse the formula
-                    let parsed_formula: Box<Formula> = Box::new(Formula::parse(formula.clone())?);
-
-                    // Compile the formula into a scalar expression
-                    compile_formula(trans, param_cte, parsed_formula)?
-                }
-                _ => {
-                    // Column type is not allowed to be used as a parameter in a formula
-                    return Err(Error::InvalidParameter { 
-                        column_oid, 
-                        column_name: column_metadata.name, 
-                        column_type: column_metadata.column_type.to_str() 
-                    });
-                }
-            }
-        }
-        Formula::Coalesce(items) => {
-            let mut items_compiled: Vec<ScalarExpression> = Vec::new();
-            for item in items {
-                let item_compiled: ScalarExpression = compile_formula(trans, param_cte, Box::new(item))?;
-                items_compiled.push(item_compiled);
-            }
-
-            let deterministic: bool = items_compiled.iter().all(|item_compiled| item_compiled.deterministic);
-            let arg_type: ExpressionReturnType = items_compiled.iter().fold(ExpressionReturnType::new_primitive(PrimitiveScalarType::Null), |acc, item_compiled| acc.generalize(&item_compiled.arg_type));
-            let (label_expr, param_expr) = if items_compiled.len() > 1 {
-                (
-                    format!("{} ELSE {} END",
-                        items_compiled.iter()
-                            .take(items_compiled.len() - 1)
-                            .fold(String::from("CASE"), |acc, item_compiled| format!("{acc} WHEN {} IS NOT NULL THEN {}", item_compiled.value_expr, item_compiled.label_expr)),
-                        items_compiled[items_compiled.len() - 1].label_expr
-                    ),
-                    format!("{} ELSE {} END",
-                        items_compiled.iter()
-                            .take(items_compiled.len() - 1)
-                            .fold(String::from("CASE"), |acc, item_compiled| format!("{acc} WHEN {} IS NOT NULL THEN {}", item_compiled.value_expr, item_compiled.param_expr)),
-                        items_compiled[items_compiled.len() - 1].param_expr
-                    )
-                )
-            } else if items_compiled.len() == 1 {
-                (items_compiled[0].label_expr.clone(), items_compiled[0].param_expr.clone())
-            } else {
-                (String::from("NULL"), String::from("NULL"))
-            };
-            let (value_expr, arg_expr) = match items_compiled.into_iter()
-                .map(|item_compiled| (item_compiled.value_expr, item_compiled.arg_expr))
-                .reduce(|(acc_value, acc_arg), (e_value, e_arg)| (format!("{acc_value}, {e_value}"), format!("{acc_arg}, {e_arg}"))) {
-                
-                Some((acc_value, acc_arg)) => (format!("COALESCE({acc_value})"), format!("COALESCE({acc_arg})")),
-                None => (String::from("NULL"), String::from("NULL"))
-            };
-
-            ScalarExpression {
-                arg_expr,
-                arg_type,
-                value_expr,
-                label_expr,
-                param_expr,
-                deterministic
-            }
-        }
-        Formula::Abs(inner) => {
-            let inner_name: String = inner.to_string();
-            let inner_compiled: ScalarExpression = compile_formula(trans, param_cte, inner)?;
-            if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
-                return Err(Error::FormulaTypeValidationError { 
-                    outer_name: "abs", 
-                    inner_name, 
-                    expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
-                    received_type: inner_compiled.arg_type.to_string(trans) 
-                });
-            }
-
-            let value_expr: String = format!("ABS({})", inner_compiled.arg_expr);
-            let label_expr: String = format!("CAST({value_expr} AS TEXT)");
-
-            ScalarExpression {
-                arg_expr: value_expr.clone(),
-                arg_type: inner_compiled.arg_type,
-                label_expr,
-                value_expr,
-                param_expr: inner_compiled.param_expr,
-                deterministic: inner_compiled.deterministic
-            }
-        }
-        Formula::Sign(inner) => {
-            let inner_name: String = inner.to_string();
-            let inner_compiled: ScalarExpression = compile_formula(trans, param_cte, inner)?;
-            if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
-                return Err(Error::FormulaTypeValidationError { 
-                    outer_name: "sign", 
-                    inner_name, 
-                    expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
-                    received_type: inner_compiled.arg_type.to_string(trans) 
-                });
-            }
-
-            let value_expr: String = format!("SIGN({})", inner_compiled.arg_expr);
-            let label_expr: String = format!("CAST({value_expr} AS TEXT)");
-
-            ScalarExpression {
-                arg_expr: value_expr.clone(),
-                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
-                label_expr,
-                value_expr,
-                param_expr: String::from("'integer'"),
-                deterministic: inner_compiled.deterministic
-            }
-        }
-        Formula::Floor(inner) => {
-            let inner_name: String = inner.to_string();
-            let inner_compiled: ScalarExpression = compile_formula(trans, param_cte, inner)?;
-            if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
-                return Err(Error::FormulaTypeValidationError { 
-                    outer_name: "floor", 
-                    inner_name, 
-                    expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
-                    received_type: inner_compiled.arg_type.to_string(trans) 
-                });
-            }
-
-            let value_expr: String = format!("FLOOR({})", inner_compiled.arg_expr);
-            let label_expr: String = format!("CAST({value_expr} AS TEXT)");
-
-            ScalarExpression {
-                arg_expr: value_expr.clone(),
-                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
-                label_expr,
-                value_expr,
-                param_expr: String::from("'integer'"),
-                deterministic: inner_compiled.deterministic
-            }
-        }
-        Formula::Ceiling(inner) => {
-            let inner_name: String = inner.to_string();
-            let inner_compiled: ScalarExpression = compile_formula(trans, param_cte, inner)?;
-            if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
-                return Err(Error::FormulaTypeValidationError { 
-                    outer_name: "ceil", 
-                    inner_name, 
-                    expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
-                    received_type: inner_compiled.arg_type.to_string(trans) 
-                });
-            }
-
-            let value_expr: String = format!("CEILING({})", inner_compiled.arg_expr);
-            let label_expr: String = format!("CAST({value_expr} AS TEXT)");
-
-            ScalarExpression {
-                arg_expr: value_expr.clone(),
-                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
-                label_expr,
-                value_expr,
-                param_expr: String::from("'integer'"),
-                deterministic: inner_compiled.deterministic
-            }
-        }
-        Formula::Round(inner) => {
-            let inner_name: String = inner.to_string();
-            let inner_compiled: ScalarExpression = compile_formula(trans, param_cte, inner)?;
-            if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
-                return Err(Error::FormulaTypeValidationError { 
-                    outer_name: "round", 
-                    inner_name, 
-                    expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
-                    received_type: inner_compiled.arg_type.to_string(trans) 
-                });
-            }
-
-            let value_expr: String = format!("ROUND({})", inner_compiled.arg_expr);
-            let label_expr: String = format!("CAST({value_expr} AS TEXT)");
-
-            ScalarExpression {
-                arg_expr: value_expr.clone(),
-                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
-                label_expr,
-                value_expr,
-                param_expr: String::from("'integer'"),
-                deterministic: inner_compiled.deterministic
-            }
-        },
-        _ => {
-            todo!("Function {} is not implemented yet!", formula.to_string());
-        }
-    })
+struct SchemaView {
+    param_cte: HashMap<Datasource, ParamCTE>,
+    columns: HashMap<i64, SchemaViewColumn>,
+    rand_count: usize
 }
 
+impl SchemaView {
+    /// Construct an empty schema view object.
+    fn new() -> Self {
+        Self {
+            param_cte: HashMap::new(),
+            columns: HashMap::new(),
+            rand_count: 0
+        }
+    }
 
+    fn compile(self) -> Result<String, Error> {
+        // Compile the CTEs and select only from root datasources
+        let (with_expr, star_expr, oid_expr, from_expr) = if self.param_cte.len() > 0 {
+            let mut with_expr: String = String::from("WITH");
+            let mut oid_expr: Vec<String> = Vec::new();
+            let mut filter_expr: String = String::from("");
+            let mut from_expr: String = String::from("FROM");
 
-/// Create a view for the table.
-fn create_schema_view(trans: &Transaction, schema_oid: i64) -> Result<(), Error> {
-    println!("Creating schema view SCHEMA{schema_oid}_VIEW...");
+            let mut root_datasource: HashSet<Datasource> = HashSet::new();
+            for (cte_datasource, cte) in param_cte.into_iter() {
+                let cte_root_datasource: Datasource = cte_datasource.seek_root();
+                root_datasource.insert(cte_datasource.seek_root());
 
-    // Get the root table datasource for the view
-    let mut param_cte: HashMap<Datasource, ParamCTE> = HashMap::new();
-    let root_datasource: Option<Datasource> = if let Some(root_datasource_oid) = trans.query_one("SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = ?1 LIMIT 1", params![schema_oid], |row| row.get("OID")).optional()? {
-        Some(Datasource::get_transact(trans, root_datasource_oid)?)
-    } else {
-        None 
-    };
+                let cte_datasource_alias: String = cte_datasource.get_alias();
+                let cte_root_datasource_alias: String = cte_root_datasource.get_alias();
+                
+                // Compile the CTE
+                with_expr = format!("{with_expr}{} {}", if with_expr == "WITH" { "" } else { "," }, cte.compile()?);
 
-    // Add each column that belongs to the schema
-    let mut view_columns: HashMap<i64, SchemaViewColumn> = HashMap::new();
-    for row_result in trans.prepare("SELECT DATASOURCE_PATH, COLUMN_OID FROM METADATA_SCHEMA_COLUMN_VIEW WHERE SCHEMA_OID = ?1 AND IS_REQUIRED")?.query_map(params![schema_oid], |row| Ok((row.get::<_, String>("DATASOURCE_PATH")?, row.get::<_, i64>("COLUMN_OID")?)))? {
-        let (datasource_path, column_oid) = row_result?;
-        let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid.clone())?;
+                // Select OID from the datasource
+                oid_expr.push(format!("{cte_datasource_alias}_OID"));
+                filter_expr = format!("{filter_expr}{}{}", if filter_expr == "" { "'" } else { " || '&" }, format!("{cte_datasource_alias}=' || CAST({cte_root_datasource_alias}.{cte_datasource_alias}_OID AS TEXT)"));
+
+                // If the datasource is a root, select from it
+                if let Datasource::Table { .. } = cte_datasource {
+                    from_expr = format!("{from_expr}{} {}", if from_expr == "FROM" { "" } else { " INNER JOIN" }, cte_datasource.get_alias());
+                }
+            }
+            (
+                with_expr, 
+                {
+                    let star_columns: Vec<String> = root_datasource.iter()
+                        .map(|root_datasource| format!("{}.*", root_datasource.get_alias())).collect();
+
+                    let mut k: usize = 1;
+                    while k <= self.rand_count {
+                        star_columns.push(format!("RANDOM() AS RANDOM{k}"));
+                        k += 1;
+                    }
+
+                    star_columns.into_iter().reduce(|acc, e| format!("{acc}, {e}")).unwrap()
+                },
+                oid_expr.into_iter().fold(
+                    format!(
+                        "{} AS QUERY_FILTER{}", 
+                        if filter_expr == "" { String::from("''") } else { filter_expr },
+                        if root_datasource.len() == 1 {
+                            let root_datasource: Datasource = root_datasource.into_iter().next().unwrap();
+                            format!(
+                                ", {}_OID AS OID",  
+                                root_datasource.get_alias()
+                            )
+                        } else {
+                            String::from(", NULL AS OID")
+                        }
+                    ), 
+                    |acc, e| format!("{acc}, {e}")
+                ), 
+                from_expr
+            )
+        } else {
+            (
+                String::from(""), 
+                String::from(""),
+                String::from("'' AS QUERY_FILTER, NULL AS OID"), 
+                String::from("")
+            )
+        };
+
+        // Compile the final CTE
+        // The purpose of an intermediary CTE before the top-level SELECT is to synchronize random values across value/label/arg/param expressions
+        // TODO: Can remove the intermediary CTE if no random values are required?
+        let with_expr: String = {
+            if with_expr == "" {
+                String::from("")
+            } else {
+                format!("{with_expr}, {}", format!("FINAL_CTE AS (SELECT {star_expr} {from_expr})"))
+            }
+        };
+
+        // Compile ordering columns
+        let mut index_ordering_expr: String = String::from("");
+        for row_result in trans.prepare("SELECT COLUMN_OID, SORT_ASCENDING FROM METADATA_SCHEMA_ORDERBY_VIEW WHERE SCHEMA_OID = ?1 ORDER BY ORDERING")?.query_map(params![schema_oid], |row| Ok((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, bool>("SORT_ASCENDING")?)))? {
+            let (column_oid, sort_ascending) = row_result?;
+
+            if let Some(c) = view_columns.get(&column_oid) {
+                if index_ordering_expr == "" {
+                    index_ordering_expr = format!("{} {}", c.compile()?, if sort_ascending { "ASC" } else { "DESC" });
+                } else {
+                    index_ordering_expr = format!("{index_ordering_expr}, {} {}", c.compile()?, if sort_ascending { "ASC" } else { "DESC" });
+                }
+            }
+        }
+
+        // Compile each column
+        let column_expr: String = {
+            let mut column_expr: Vec<String> = Vec::new();
+            for (_, c) in view_columns.into_iter() {
+                column_expr.push(c.compile()?);
+            }
+            column_expr.into_iter().fold(oid_expr, |acc, e| format!("{acc}, {e}"))
+        };
+
+        // Compile the SELECT
+        format!(
+            "
+            {with_expr}
+            SELECT 
+                ROW_NUMBER() OVER ({index_ordering_expr}) AS ROW_INDEX, {column_expr}
+            {}
+            ",
+            if with_expr == "" {
+                ""
+            } else {
+                "FROM FINAL_CTE"
+            }
+        );
+    }
+
+    /// Adds a CTE for params from a datasource.
+    fn add_datasource_cte(&mut self, datasource: &Datasource) {
+        if !self.param_cte.contains_key(&datasource) {
+            // Add the parent datasource
+            if let Some(parent_datasource) = datasource.get_parent() {
+                self.add_datasource_cte(&parent_datasource);
+
+                // Link the datasource to its parent
+                if let Some(parent_datasource_cte) = self.param_cte.get_mut(&parent_datasource) {
+                    parent_datasource_cte.child_datasources.insert(datasource.clone());
+                }
+            }
+
+            // Add a CTE for the datasource
+            self.param_cte.insert(datasource.clone(), ParamCTE {
+                datasource: datasource.clone(),
+                child_datasources: HashSet::new(),
+                columns: HashMap::new()
+            });
+        }
+    }
+
+    /// 
+    fn add_column(&mut self, root_datasource: &Datasource, datasource_path: String, column_metadata: column::FullMetadata) -> Result<(), Error> {
         match &column_metadata.column_type {
             column_type::ColumnType::Primitive(_) 
             | column_type::ColumnType::Object { .. } 
             | column_type::ColumnType::Select { .. } 
             | column_type::ColumnType::Multiselect { .. } => {
-                if let Some(root_datasource) = &root_datasource {
+                if let Some(root_datasource) = root_datasource {
                     // Add the primitive column as a param
                     let column_datasource: Datasource = root_datasource.append_path(datasource_path)?;
                     let (access_datasource, access_param) = add_param(&mut param_cte, column_datasource, column_metadata)?;
 
                     // Register the column to the query
-                    view_columns.insert(column_oid.clone(), SchemaViewColumn::TableData { 
+                    self.columns.insert(column_oid.clone(), SchemaViewColumn::TableData { 
                         label_expr: format!("{}.{}", access_datasource.get_alias(), access_param.label_ord), 
                         label_ord: format!("COLUMN{}_LABEL", column_oid), 
                         value_expr: format!("{}.{}", access_datasource.get_alias(), access_param.value_ord), 
@@ -1689,10 +1164,10 @@ fn create_schema_view(trans: &Transaction, schema_oid: i64) -> Result<(), Error>
                 let parsed_formula: Box<Formula> = Box::new(Formula::parse(formula.clone())?);
 
                 // Compile the formula into SQL
-                let scalar_expression: ScalarExpression = compile_formula(trans, &mut param_cte, parsed_formula)?;
+                let scalar_expression: ScalarExpression = self.compile_formula(trans, parsed_formula)?;
 
                 // Turn into a column
-                view_columns.insert(column_oid, SchemaViewColumn::Formula { 
+                self.columns.insert(column_oid, SchemaViewColumn::Formula { 
                     label_expr: scalar_expression.label_expr, 
                     label_ord: format!("COLUMN{}_LABEL", column_metadata.oid), 
                     value_expr: scalar_expression.value_expr, 
@@ -1707,95 +1182,694 @@ fn create_schema_view(trans: &Transaction, schema_oid: i64) -> Result<(), Error>
         }
     }
 
-    // Compile the CTEs and select only from root datasources
-    let (with_expr, oid_expr, from_expr) = if param_cte.len() > 0 {
-        let mut with_expr: String = String::from("WITH");
-        let mut oid_expr: Vec<String> = Vec::new();
-        let mut filter_expr: String = String::from("");
-        let mut from_expr: String = String::from("FROM");
+    /// Adds a data cell to a datasource.
+    fn add_param(&mut self, datasource: Datasource, column: column::FullMetadata) -> Result<(Datasource, ParamCTEColumn), Error> {
+        // Ensure the CTE for the datasource exists
+        self.add_datasource_cte(param_cte, &datasource);
 
-        let mut root_datasource: HashSet<Datasource> = HashSet::new();
-        for (cte_datasource, cte) in param_cte.into_iter() {
-            let cte_root_datasource: Datasource = cte_datasource.seek_root();
-            root_datasource.insert(cte_datasource.seek_root());
-
-            let cte_datasource_alias: String = cte_datasource.get_alias();
-            let cte_root_datasource_alias: String = cte_root_datasource.get_alias();
-            
-            // Compile the CTE
-            with_expr = format!("{with_expr}{} {}", if with_expr == "WITH" { "" } else { "," }, cte.compile()?);
-
-            // Select OID from the datasource
-            oid_expr.push(format!("{cte_root_datasource_alias}.{cte_datasource_alias}_OID"));
-            filter_expr = format!("{filter_expr}{}{}", if filter_expr == "" { "'" } else { " || '&" }, format!("{cte_datasource_alias}=' || CAST({cte_root_datasource_alias}.{cte_datasource_alias}_OID AS TEXT)"));
-
-            // If the datasource is a root, select from it
-            if let Datasource::Table { .. } = cte_datasource {
-                from_expr = format!("{from_expr}{} {}", if from_expr == "FROM" { "" } else { " INNER JOIN" }, cte_datasource.get_alias());
-            }
-        }
-        (
-            with_expr, 
-            oid_expr.into_iter().fold(
-                format!(
-                    "{} AS QUERY_FILTER{}", 
-                    if filter_expr == "" { String::from("''") } else { filter_expr },
-                    if root_datasource.len() == 1 {
-                        let root_datasource: Datasource = root_datasource.into_iter().next().unwrap();
-                        format!(
-                            ", {}.{}_OID AS OID", 
-                            root_datasource.seek_root().get_alias(), 
-                            root_datasource.get_alias()
-                        )
-                    } else {
-                        String::from(", NULL AS OID")
+        // Add the column to that CTE
+        let column_path: String = format!("{}_COLUMN{}", datasource.get_alias(), column.oid);
+        let param = if let Some(datasource_cte) = self.param_cte.get_mut(&datasource) {
+            if !datasource_cte.columns.contains_key(&column_path) {
+                datasource_cte.columns.insert(column_path.clone(), match column.column_type {
+                    column_type::ColumnType::Primitive(prim) => {
+                        match prim {
+                            column_type::Primitive::Checkbox => ParamCTEColumn { 
+                                label_expr: format!("CAST(d.COLUMN{} AS TEXT)", column.oid), 
+                                label_ord: format!("{column_path}_LABEL"), 
+                                value_expr: format!("d.COLUMN{}", column.oid), 
+                                value_ord: format!("{column_path}_VALUE"), 
+                                arg_expr: format!("{column_path}_VALUE"),  
+                                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Boolean),
+                                cell: Some(ParamCTEColumnCell {
+                                    table_oid: column.schema.oid,
+                                    column_oid: column.oid,
+                                    row_ord: format!("{}_OID", datasource.get_alias())
+                                })
+                            },
+                            column_type::Primitive::Integer => ParamCTEColumn { 
+                                label_expr: format!("CAST(d.COLUMN{} AS TEXT)", column.oid), 
+                                label_ord: format!("{column_path}_LABEL"), 
+                                value_expr: format!("d.COLUMN{}", column.oid), 
+                                value_ord: format!("{column_path}_VALUE"), 
+                                arg_expr: format!("{column_path}_VALUE"),  
+                                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
+                                cell: Some(ParamCTEColumnCell {
+                                    table_oid: column.schema.oid,
+                                    column_oid: column.oid,
+                                    row_ord: format!("{}_OID", datasource.get_alias())
+                                })
+                            },
+                            column_type::Primitive::Number => ParamCTEColumn { 
+                                label_expr: format!("CAST(d.COLUMN{} AS TEXT)", column.oid), 
+                                label_ord: format!("{column_path}_LABEL"), 
+                                value_expr: format!("d.COLUMN{}", column.oid), 
+                                value_ord: format!("{column_path}_VALUE"), 
+                                arg_expr: format!("{column_path}_VALUE"),  
+                                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number),
+                                cell: Some(ParamCTEColumnCell {
+                                    table_oid: column.schema.oid,
+                                    column_oid: column.oid,
+                                    row_ord: format!("{}_OID", datasource.get_alias())
+                                })
+                            },
+                            column_type::Primitive::Text => ParamCTEColumn { 
+                                label_expr: format!("d.COLUMN{}", column.oid), 
+                                label_ord: format!("{column_path}_LABEL"), 
+                                value_expr: format!("d.COLUMN{}", column.oid), 
+                                value_ord: format!("{column_path}_VALUE"), 
+                                arg_expr: format!("{column_path}_VALUE"),  
+                                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Text),
+                                cell: Some(ParamCTEColumnCell {
+                                    table_oid: column.schema.oid,
+                                    column_oid: column.oid,
+                                    row_ord: format!("{}_OID", datasource.get_alias())
+                                })
+                            },
+                            column_type::Primitive::JSON => ParamCTEColumn { 
+                                label_expr: format!("d.COLUMN{}", column.oid), 
+                                label_ord: format!("{column_path}_LABEL"), 
+                                value_expr: format!("d.COLUMN{}", column.oid), 
+                                value_ord: format!("{column_path}_VALUE"),
+                                arg_expr: format!("{column_path}_VALUE"), 
+                                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::JSON),
+                                cell: Some(ParamCTEColumnCell {
+                                    table_oid: column.schema.oid,
+                                    column_oid: column.oid,
+                                    row_ord: format!("{}_OID", datasource.get_alias())
+                                })
+                            },
+                            column_type::Primitive::Date => ParamCTEColumn { 
+                                label_expr: format!("DATE(d.COLUMN{}, 'julianday')", column.oid), 
+                                label_ord: format!("{column_path}_LABEL"), 
+                                value_expr: format!("d.COLUMN{}", column.oid), 
+                                value_ord: format!("{column_path}_VALUE"), 
+                                arg_expr: format!("{column_path}_VALUE"), 
+                                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Date),
+                                cell: Some(ParamCTEColumnCell {
+                                    table_oid: column.schema.oid,
+                                    column_oid: column.oid,
+                                    row_ord: format!("{}_OID", datasource.get_alias())
+                                })
+                            },
+                            column_type::Primitive::Datetime => ParamCTEColumn { 
+                                label_expr: format!("STRFTIME('%FT%TZ', d.COLUMN{}, 'julianday')", column.oid), 
+                                label_ord: format!("{column_path}_LABEL"), 
+                                value_expr: format!("d.COLUMN{}", column.oid), 
+                                value_ord: format!("{column_path}_VALUE"), 
+                                arg_expr: format!("{column_path}_VALUE"), 
+                                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Datetime),
+                                cell: Some(ParamCTEColumnCell {
+                                    table_oid: column.schema.oid,
+                                    column_oid: column.oid,
+                                    row_ord: format!("{}_OID", datasource.get_alias())
+                                })
+                            },
+                            column_type::Primitive::File | column_type::Primitive::Image => ParamCTEColumn { 
+                                label_expr: format!("(SELECT f.LABEL FROM METADATA_FILE_VIEW f WHERE f.OID = d.COLUMN{})", column.oid), 
+                                label_ord: format!("{column_path}_LABEL"), 
+                                value_expr: format!("d.COLUMN{}", column.oid), 
+                                value_ord: format!("{column_path}_VALUE"), 
+                                arg_expr: format!("{column_path}_VALUE"), 
+                                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::File),
+                                cell: Some(ParamCTEColumnCell {
+                                    table_oid: column.schema.oid,
+                                    column_oid: column.oid,
+                                    row_ord: format!("{}_OID", datasource.get_alias())
+                                })
+                            }
+                        }
                     }
-                ),
-                |acc, e| format!("{acc}, {e}")
-            ), 
-            from_expr
-        )
-    } else {
-        (
-            String::from(""), 
-            String::from("'' AS QUERY_FILTER, NULL AS TABLE_OID, NULL AS ROW_OID"), 
-            String::from("")
-        )
-    };
-
-    // Compile ordering columns
-    let mut index_ordering_expr: String = String::from("");
-    for row_result in trans.prepare("SELECT COLUMN_OID, SORT_ASCENDING FROM METADATA_SCHEMA_ORDERBY_VIEW WHERE SCHEMA_OID = ?1 ORDER BY ORDERING")?.query_map(params![schema_oid], |row| Ok((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, bool>("SORT_ASCENDING")?)))? {
-        let (column_oid, sort_ascending) = row_result?;
-
-        if let Some(c) = view_columns.get(&column_oid) {
-            if index_ordering_expr == "" {
-                index_ordering_expr = format!("{} {}", c.compile()?, if sort_ascending { "ASC" } else { "DESC" });
-            } else {
-                index_ordering_expr = format!("{index_ordering_expr}, {} {}", c.compile()?, if sort_ascending { "ASC" } else { "DESC" });
+                    column_type::ColumnType::Object { table_oid, .. } => {
+                        if column.schema.oid == datasource.get_schema_oid()? {
+                            // Is normal
+                            ParamCTEColumn {
+                                label_expr: format!("(SELECT l.OBJECT_LABEL FROM TABLE{table_oid}_LABEL_VIEW l WHERE l.OID = d.COLUMN{})", column.oid),
+                                label_ord: format!("{column_path}_LABEL"),
+                                value_expr: format!("d.COLUMN{}", column.oid),
+                                value_ord: format!("{column_path}_VALUE"),
+                                arg_expr: format!("{column_path}_VALUE"), 
+                                arg_type: ExpressionReturnType::new_record(table_oid),
+                                cell: Some(ParamCTEColumnCell {
+                                    table_oid: column.schema.oid,
+                                    column_oid: column.oid,
+                                    row_ord: format!("{}_OID", datasource.get_alias())
+                                })
+                            }
+                        } else {
+                            // Is reversed
+                            ParamCTEColumn {
+                                label_expr: format!("
+                                    (
+                                        SELECT 
+                                            '[' || COALESCE(GROUP_CONCAT(l.JSON_LABEL, ', '), '') || ']'
+                                        FROM TABLE{table_oid}_LABEL_VIEW l 
+                                        WHERE l.COLUMN{} = d.OID
+                                    )
+                                    ", 
+                                    column.oid
+                                ),
+                                label_ord: format!("{column_path}_LABEL"),
+                                value_expr: format!("
+                                    (
+                                        SELECT 
+                                            GROUP_CONCAT(CAST(s.OID AS TEXT), ',') 
+                                        FROM TABLE{} s
+                                        WHERE s.COLUMN{} = d.OID AND NOT s.TRASH
+                                    )
+                                    ", 
+                                    column.schema.oid,
+                                    column.oid
+                                ),
+                                value_ord: format!("{column_path}_VALUE"),
+                                arg_expr: format!("
+                                    (
+                                        SELECT
+                                            s.OID
+                                        FROM TABLE{} s
+                                        WHERE s.COLUMN{} = {}_OID AND NOT s.TRASH
+                                    )
+                                    ", 
+                                    column.schema.oid, 
+                                    column.oid,
+                                    datasource.get_alias()
+                                ), 
+                                arg_type: ExpressionReturnType::new_record(column.schema.oid),
+                                cell: Some(ParamCTEColumnCell {
+                                    table_oid,
+                                    column_oid: column.oid,
+                                    row_ord: format!("{}_OID", datasource.get_alias())
+                                })
+                            }
+                        }
+                    }
+                    column_type::ColumnType::Select { table_oid, .. } => {
+                        if column.schema.oid == datasource.get_schema_oid()? {
+                            // Is normal
+                            ParamCTEColumn {
+                                label_expr: format!("(SELECT l.SELECT_LABEL FROM TABLE{table_oid}_LABEL_VIEW l WHERE l.OID = d.COLUMN{})", column.oid),
+                                label_ord: format!("{column_path}_LABEL"),
+                                value_expr: format!("d.COLUMN{}", column.oid),
+                                value_ord: format!("{column_path}_VALUE"),
+                                arg_expr: format!("{column_path}_VALUE"), 
+                                arg_type: ExpressionReturnType::new_record(table_oid),
+                                cell: Some(ParamCTEColumnCell {
+                                    table_oid: column.schema.oid,
+                                    column_oid: column.oid,
+                                    row_ord: format!("{}_OID", datasource.get_alias())
+                                })
+                            }
+                        } else {
+                            // Is reversed
+                            ParamCTEColumn {
+                                label_expr: format!("
+                                    (
+                                        SELECT 
+                                            '[' || COALESCE(GROUP_CONCAT(l.JSON_LABEL, ', '), '') || ']'
+                                        FROM TABLE{table_oid}_LABEL_VIEW l 
+                                        WHERE l.COLUMN{} = d.OID
+                                    )
+                                    ", 
+                                    column.oid
+                                ),
+                                label_ord: format!("{column_path}_LABEL"),
+                                value_expr: format!("
+                                    (
+                                        SELECT 
+                                            GROUP_CONCAT(CAST(s.OID AS TEXT), ',') 
+                                        FROM TABLE{} s
+                                        WHERE s.COLUMN{} = d.OID AND NOT s.TRASH
+                                    )
+                                    ", 
+                                    column.schema.oid,
+                                    column.oid
+                                ),
+                                value_ord: format!("{column_path}_VALUE"),
+                                arg_expr: format!("
+                                    (
+                                        SELECT
+                                            s.OID
+                                        FROM TABLE{} s
+                                        WHERE s.COLUMN{} = {}_OID AND NOT s.TRASH
+                                    )
+                                    ", 
+                                    column.schema.oid, 
+                                    column.oid,
+                                    datasource.get_alias()
+                                ), 
+                                arg_type: ExpressionReturnType::new_record(column.schema.oid),
+                                cell: Some(ParamCTEColumnCell {
+                                    table_oid,
+                                    column_oid: column.oid,
+                                    row_ord: format!("{}_OID", datasource.get_alias())
+                                })
+                            }
+                        }
+                    }
+                    column_type::ColumnType::Multiselect { table_oid, .. } => {
+                        if column.schema.oid == datasource.get_schema_oid()? {
+                            // Is normal
+                            ParamCTEColumn {
+                                label_expr: format!("
+                                    (
+                                        SELECT 
+                                            '[' || COALESCE(GROUP_CONCAT(l.JSON_LABEL, ', '), '') || ']'
+                                        FROM MULTISELECT{} m 
+                                        INNER JOIN TABLE{table_oid}_LABEL_VIEW l ON l.OID = m.TABLE{table_oid}_OID 
+                                        WHERE m.TABLE{}_OID = d.OID
+                                    )", 
+                                    column.oid,
+                                    column.schema.oid
+                                ),
+                                label_ord: format!("{column_path}_LABEL"),
+                                value_expr: format!("
+                                    (
+                                        SELECT 
+                                            GROUP_CONCAT(CAST(t.OID AS TEXT), ',')
+                                        FROM MULTISELECT{} m 
+                                        INNER JOIN TABLE{table_oid} t ON t.OID = m.TABLE{table_oid}_OID 
+                                        WHERE m.TABLE{}_OID = d.OID AND NOT t.TRASH
+                                    )", 
+                                    column.oid,
+                                    column.schema.oid
+                                ),
+                                value_ord: format!("{column_path}_VALUE"),
+                                arg_expr: format!("
+                                    (
+                                        SELECT 
+                                            TABLE{table_oid}_OID
+                                        FROM MULTISELECT{}
+                                        WHERE TABLE{}_OID = {}_OID AND TABLE{table_oid}_OID IN (SELECT OID FROM TABLE{table_oid} WHERE NOT TRASH)
+                                    )", 
+                                    column.oid,
+                                    column.schema.oid,
+                                    datasource.get_alias()
+                                ),
+                                arg_type: ExpressionReturnType::new_record(table_oid),
+                                cell: Some(ParamCTEColumnCell {
+                                    table_oid: column.schema.oid,
+                                    column_oid: column.oid,
+                                    row_ord: format!("{}_OID", datasource.get_alias())
+                                })
+                            }
+                        } else {
+                            // Is reversed
+                            ParamCTEColumn {
+                                label_expr: format!("
+                                    (
+                                        SELECT 
+                                            '[' || COALESCE(GROUP_CONCAT(l.JSON_LABEL, ', '), '') || ']'
+                                        FROM MULTISELECT{} m 
+                                        INNER JOIN TABLE{}_LABEL_VIEW l ON l.OID = m.TABLE{}_OID 
+                                        WHERE m.TABLE{table_oid}_OID = d.OID
+                                    )", 
+                                    column.oid,
+                                    column.schema.oid,
+                                    column.schema.oid
+                                ),
+                                label_ord: format!("{column_path}_LABEL"),
+                                value_expr: format!("
+                                    (
+                                        SELECT 
+                                            GROUP_CONCAT(CAST(t.OID AS TEXT), ',')
+                                        FROM MULTISELECT{} m 
+                                        INNER JOIN TABLE{} t ON t.OID = m.TABLE{}_OID 
+                                        WHERE m.TABLE{table_oid}_OID = d.OID AND NOT t.TRASH
+                                    )", 
+                                    column.oid,
+                                    column.schema.oid,
+                                    column.schema.oid 
+                                ),
+                                value_ord: format!("{column_path}_VALUE"),
+                                arg_expr: format!("
+                                    (
+                                        SELECT 
+                                            t.OID
+                                        FROM MULTISELECT{} m 
+                                        INNER JOIN TABLE{} t ON t.OID = m.TABLE{}_OID 
+                                        WHERE m.TABLE{table_oid}_OID = d.OID AND NOT t.TRASH
+                                    )", 
+                                    column.oid,
+                                    column.schema.oid,
+                                    column.schema.oid 
+                                ),
+                                arg_type: ExpressionReturnType::new_record(column.schema.oid),
+                                cell: Some(ParamCTEColumnCell {
+                                    table_oid,
+                                    column_oid: column.oid,
+                                    row_ord: format!("{}_OID", datasource.get_alias())
+                                })
+                            }
+                        }
+                    }
+                    _ => {
+                        // Column cannot be added as a parameter
+                        return Err(Error::InvalidParameter { 
+                            column_oid: column.oid, 
+                            column_name: column.name, 
+                            column_type: column.column_type.to_str() 
+                        });
+                    }
+                });
             }
-        }
+            
+            datasource_cte.columns[&column_path].clone()
+        } else {
+            return Err(Error::InvalidDatasource { 
+                datasource_alias: datasource.get_alias() 
+            });
+        };
+        Ok((datasource.seek_root(), param))
     }
 
-    // Compile each column
-    let column_expr: String = {
-        let mut column_expr: Vec<String> = Vec::new();
-        for (_, c) in view_columns.into_iter() {
-            column_expr.push(c.compile()?);
-        }
-        column_expr.into_iter().fold(oid_expr, |acc, e| format!("{acc}, {e}"))
+    /// Compile the formula into SQL.
+    fn compile_formula(&mut self, trans: &Transaction, root_oid: i64, root_datasource: Datasource, formula: Box<Formula>) -> Result<ScalarExpression, Error> {
+        Ok(match *formula {
+            Formula::Null => ScalarExpression {
+                arg_expr: String::from("NULL"),
+                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Null),
+                value_expr: String::from("NULL"),
+                label_expr: String::from("NULL"),
+                param_expr: String::from("NULL"),
+                deterministic: true
+            },
+            Formula::LiteralBool(b) => {
+                let (value_expr, label_expr) = if b {
+                    (String::from("TRUE"), String::from("'True'"))
+                } else {
+                    (String::from("FALSE"), String::from("'False'"))
+                };
+                ScalarExpression {
+                    arg_expr: value_expr.clone(),
+                    arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Boolean),
+                    value_expr,
+                    label_expr,
+                    param_expr: String::from("'boolean'"),
+                    deterministic: true
+                }
+            }
+            Formula::LiteralInt(num) => ScalarExpression {
+                arg_expr: format!("{num}"),
+                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
+                value_expr: format!("{num}"),
+                label_expr: format!("'{num}'"),
+                param_expr: String::from("'integer'"),
+                deterministic: true
+            },
+            Formula::LiteralFloat(num) => ScalarExpression {
+                arg_expr: format!("{num}"),
+                arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number),
+                value_expr: format!("{num}"),
+                label_expr: format!("'{num}'"),
+                param_expr: String::from("'number'"),
+                deterministic: true
+            },
+            Formula::LiteralString(str) => {
+                let safe_str: String = format!("'{}'", str.replace("'", "''"));
+                ScalarExpression {
+                    arg_expr: safe_str.clone(),
+                    arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Text),
+                    value_expr: safe_str.clone(),
+                    label_expr: safe_str.clone(),
+                    param_expr: String::from("'textplain'"),
+                    deterministic: true
+                }
+            }
+            Formula::RandomInt => {
+                self.rand_count += 1;
+                ScalarExpression {
+                    arg_expr: format!("RANDOM{}", self.rand_count),
+                    arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
+                    value_expr: format!("RANDOM{}", self.rand_count),
+                    label_expr: format!("CAST(RANDOM{} AS TEXT)", self.rand_count),
+                    param_expr: String::from("'integer'"),
+                    deterministic: false
+                }
+            }
+            Formula::Param { datasource_alias, column_oid } => {
+                let column_datasource: Datasource = Datasource::from_alias(datasource_alias.clone())?.substitute_root(root_oid.clone(), root_datasource.clone());
+                let column_metadata = column::FullMetadata::get_transact(trans, column_oid.clone())?;
+                match &column_metadata.column_type {
+                    column_type::ColumnType::Primitive(_)
+                    | column_type::ColumnType::Object { .. }
+                    | column_type::ColumnType::Select { .. }
+                    | column_type::ColumnType::Multiselect { .. } => {
+                        let param_name: String = &column_metadata.column_type {
+                            column_type::ColumnType::Primitive(prim) => String::from(match prim {
+                                column_type::Primitive::Checkbox => "boolean",
+                                column_type::Primitive::Integer => "integer",
+                                column_type::Primitive::Number => "number",
+                                column_type::Primitive::Text => "textplain",
+                                column_type::Primitive::JSON => "textJSON",
+                                column_type::Primitive::File => "file",
+                                column_type::Primitive::Image => "image",
+                                column_type::Primitive::Date => "date",
+                                column_type::Primitive::Datetime => "datetime"
+                            }),
+                            column_type::ColumnType::Object { table_oid } => format!("object{table_oid}"),
+                            column_type::ColumnType::Select { table_oid } => format!("select{table_oid}"),
+                            column_type::ColumnType::Multiselect { table_oid } => format!("multiselect{table_oid}"),
+                            _ => String::from("N/A") // This case shouldn't happen
+                        };
+
+                        let (_, param) = self.add_param(column_datasource, column_metadata)?;
+                        
+                        // Parameter expressions return a string in the form "{TABLE_OID}:{COLUMN_OID}:{ROW_OID}"
+                        let param_expr: String = if let Some(param_cell) = param.cell {
+                            format!("('{param_name}:{}:{}:' || CAST({} AS TEXT))", param_cell.table_oid, param_cell.column_oid, param_cell.row_ord)
+                        } else {
+                            String::from("NULL") // This case shouldn't happen?
+                        };
+
+                        // Bubble up the expression to get the parameter
+                        ScalarExpression {
+                            arg_expr: param.arg_expr,
+                            arg_type: param.arg_type,
+                            value_expr: param.value_expr,
+                            label_expr: param.label_expr,
+                            param_expr,
+                            deterministic: true
+                        }
+                    }
+                    column_type::ColumnType::Formula { formula, .. } => {
+                        // Parse the formula
+                        let parsed_formula: Box<Formula> = Box::new(Formula::parse(formula.clone())?);
+
+                        // Compile the formula into a scalar expression
+                        let formula_root_oid: i64 = match Datasource::get_default_datasource_transact(column_datasource.get_schema_oid()?)? {
+                            Datasource::Table { oid, .. } => oid,
+                            _ => {
+                                // This case should not ever occur, but just in case...
+                                return Err(Error::AdhocError("get_default_datasource_transact() function did not return a Datasource::Table, which is not allowed."));
+                            }
+                        };
+                        self.compile_formula(trans, formula_root_oid, column_datasource, parsed_formula)?
+                    }
+                    _ => {
+                        // Column type is not allowed to be used as a parameter in a formula
+                        return Err(Error::InvalidParameter { 
+                            column_oid, 
+                            column_name: column_metadata.name, 
+                            column_type: column_metadata.column_type.to_str() 
+                        });
+                    }
+                }
+            }
+            Formula::Coalesce(items) => {
+                let mut items_compiled: Vec<ScalarExpression> = Vec::new();
+                for item in items {
+                    let item_compiled: ScalarExpression = self.compile_formula(trans, Box::new(item))?;
+                    items_compiled.push(item_compiled);
+                }
+
+                let deterministic: bool = items_compiled.iter().all(|item_compiled| item_compiled.deterministic);
+                let arg_type: ExpressionReturnType = items_compiled.iter().fold(ExpressionReturnType::new_primitive(PrimitiveScalarType::Null), |acc, item_compiled| acc.generalize(&item_compiled.arg_type));
+                let (label_expr, param_expr) = if items_compiled.len() > 1 {
+                    (
+                        format!("{} ELSE {} END",
+                            items_compiled.iter()
+                                .take(items_compiled.len() - 1)
+                                .fold(String::from("CASE"), |acc, item_compiled| format!("{acc} WHEN {} IS NOT NULL THEN {}", item_compiled.value_expr, item_compiled.label_expr)),
+                            items_compiled[items_compiled.len() - 1].label_expr
+                        ),
+                        format!("{} ELSE {} END",
+                            items_compiled.iter()
+                                .take(items_compiled.len() - 1)
+                                .fold(String::from("CASE"), |acc, item_compiled| format!("{acc} WHEN {} IS NOT NULL THEN {}", item_compiled.value_expr, item_compiled.param_expr)),
+                            items_compiled[items_compiled.len() - 1].param_expr
+                        )
+                    )
+                } else if items_compiled.len() == 1 {
+                    (items_compiled[0].label_expr.clone(), items_compiled[0].param_expr.clone())
+                } else {
+                    (String::from("NULL"), String::from("NULL"))
+                };
+                let (value_expr, arg_expr) = match items_compiled.into_iter()
+                    .map(|item_compiled| (item_compiled.value_expr, item_compiled.arg_expr))
+                    .reduce(|(acc_value, acc_arg), (e_value, e_arg)| (format!("{acc_value}, {e_value}"), format!("{acc_arg}, {e_arg}"))) {
+                    
+                    Some((acc_value, acc_arg)) => (format!("COALESCE({acc_value})"), format!("COALESCE({acc_arg})")),
+                    None => (String::from("NULL"), String::from("NULL"))
+                };
+
+                ScalarExpression {
+                    arg_expr,
+                    arg_type,
+                    value_expr,
+                    label_expr,
+                    param_expr,
+                    deterministic
+                }
+            }
+            Formula::Abs(inner) => {
+                let inner_name: String = inner.to_string();
+                let inner_compiled: ScalarExpression = self.compile_formula(trans, inner)?;
+                if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "abs", 
+                        inner_name, 
+                        expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
+                        received_type: inner_compiled.arg_type.to_string(trans) 
+                    });
+                }
+
+                let value_expr: String = format!("ABS({})", inner_compiled.arg_expr);
+                let label_expr: String = format!("CAST({value_expr} AS TEXT)");
+
+                ScalarExpression {
+                    arg_expr: value_expr.clone(),
+                    arg_type: inner_compiled.arg_type,
+                    label_expr,
+                    value_expr,
+                    param_expr: inner_compiled.param_expr,
+                    deterministic: inner_compiled.deterministic
+                }
+            }
+            Formula::Sign(inner) => {
+                let inner_name: String = inner.to_string();
+                let inner_compiled: ScalarExpression = self.compile_formula(trans, inner)?;
+                if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "sign", 
+                        inner_name, 
+                        expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
+                        received_type: inner_compiled.arg_type.to_string(trans) 
+                    });
+                }
+
+                let value_expr: String = format!("SIGN({})", inner_compiled.arg_expr);
+                let label_expr: String = format!("CAST({value_expr} AS TEXT)");
+
+                ScalarExpression {
+                    arg_expr: value_expr.clone(),
+                    arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
+                    label_expr,
+                    value_expr,
+                    param_expr: String::from("'integer'"),
+                    deterministic: inner_compiled.deterministic
+                }
+            }
+            Formula::Floor(inner) => {
+                let inner_name: String = inner.to_string();
+                let inner_compiled: ScalarExpression = self.compile_formula(trans, inner)?;
+                if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "floor", 
+                        inner_name, 
+                        expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
+                        received_type: inner_compiled.arg_type.to_string(trans) 
+                    });
+                }
+
+                let value_expr: String = format!("FLOOR({})", inner_compiled.arg_expr);
+                let label_expr: String = format!("CAST({value_expr} AS TEXT)");
+
+                ScalarExpression {
+                    arg_expr: value_expr.clone(),
+                    arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
+                    label_expr,
+                    value_expr,
+                    param_expr: String::from("'integer'"),
+                    deterministic: inner_compiled.deterministic
+                }
+            }
+            Formula::Ceiling(inner) => {
+                let inner_name: String = inner.to_string();
+                let inner_compiled: ScalarExpression = self.compile_formula(trans, inner)?;
+                if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "ceil", 
+                        inner_name, 
+                        expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
+                        received_type: inner_compiled.arg_type.to_string(trans) 
+                    });
+                }
+
+                let value_expr: String = format!("CEILING({})", inner_compiled.arg_expr);
+                let label_expr: String = format!("CAST({value_expr} AS TEXT)");
+
+                ScalarExpression {
+                    arg_expr: value_expr.clone(),
+                    arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
+                    label_expr,
+                    value_expr,
+                    param_expr: String::from("'integer'"),
+                    deterministic: inner_compiled.deterministic
+                }
+            }
+            Formula::Round(inner) => {
+                let inner_name: String = inner.to_string();
+                let inner_compiled: ScalarExpression = self.compile_formula(trans, inner)?;
+                if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "round", 
+                        inner_name, 
+                        expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
+                        received_type: inner_compiled.arg_type.to_string(trans) 
+                    });
+                }
+
+                let value_expr: String = format!("ROUND({})", inner_compiled.arg_expr);
+                let label_expr: String = format!("CAST({value_expr} AS TEXT)");
+
+                ScalarExpression {
+                    arg_expr: value_expr.clone(),
+                    arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Integer),
+                    label_expr,
+                    value_expr,
+                    param_expr: String::from("'integer'"),
+                    deterministic: inner_compiled.deterministic
+                }
+            },
+            _ => {
+                todo!("Function {} is not implemented yet!", formula.to_string());
+            }
+        })
+    }
+}
+
+
+/// Create a view for the table.
+fn create_schema_view(trans: &Transaction, schema_oid: i64) -> Result<(), Error> {
+    println!("Creating schema view SCHEMA{schema_oid}_VIEW...");
+
+    // Get the root table datasource for the view
+    let mut view: SchemaView = SchemaView::new();
+    let root_datasource: Option<Datasource> = if let Some(root_datasource_oid) = trans.query_one("SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = ?1 LIMIT 1", params![schema_oid], |row| row.get("OID")).optional()? {
+        Some(Datasource::get_transact(trans, root_datasource_oid)?)
+    } else {
+        None 
     };
 
-    // Compile the view
-    let create_sql: String = format!(
-        "
-        CREATE VIEW IF NOT EXISTS SCHEMA{schema_oid}_VIEW AS 
-            {with_expr}
-            SELECT 
-                ROW_NUMBER() OVER ({index_ordering_expr}) AS ROW_INDEX, {column_expr}
-            {from_expr}
-        "
-    );
+    // Add each column that belongs to the schema
+    let mut view_columns: HashMap<i64, SchemaViewColumn> = HashMap::new();
+    for row_result in trans.prepare("SELECT DATASOURCE_PATH, COLUMN_OID FROM METADATA_SCHEMA_COLUMN_VIEW WHERE SCHEMA_OID = ?1 AND IS_REQUIRED")?.query_map(params![schema_oid], |row| Ok((row.get::<_, String>("DATASOURCE_PATH")?, row.get::<_, i64>("COLUMN_OID")?)))? {
+        let (datasource_path, column_oid) = row_result?;
+        let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid.clone())?;
+        view.add_column(datasource_path, column_metadata)?;
+    }
+
+    let create_sql: String = format!("CREATE VIEW IF NOT EXISTS SCHEMA{schema_oid}_VIEW AS {}", view.compile()?);
     println!("{create_sql}");
     trans.execute(&create_sql, [])?;
     Ok(())
