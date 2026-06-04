@@ -1,5 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
-import { FullMetadata as ColumnFullMetadata, Primitive } from "./column";
+import { FullMetadata as ColumnFullMetadata, Primitive, ColumnType } from "./column";
 import { openDialogAsync } from "./dialog";
 import { executeAsync } from "./action";
 import { open, save, message, ask } from "@tauri-apps/plugin-dialog";
@@ -7,6 +7,16 @@ import { DropdownValue, getCellAsync, getFileBase64Async, queryAsync, SelectedHi
 import { fileTypeFromBuffer, FileTypeResult } from "file-type";
 import { Channel } from "@tauri-apps/api/core";
 import { Menu, MenuItem } from "@tauri-apps/api/menu";
+
+
+/**
+ * Clipboard data for cells.
+ */
+export type CellClipboardData = { rows: Cell[], columnType: ColumnType } 
+    | { rows: {[key: number]: Cell}[] };
+
+
+
 
 type ValidationFailures = {
     message: string
