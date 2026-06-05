@@ -1,13 +1,13 @@
 use base64::{Engine, prelude::{BASE64_STANDARD as base64standard}};
-use std::path::Path;
+use std::{collections::btree_map::Entry::Occupied, path::Path};
 use std::fs::{File as FilesystemFile};
 use std::io::{BufReader, Read, Write};
 use serde::{Deserialize, Serialize};
-use rusqlite::params;
+use rusqlite::{Connection, params};
 use crate::util::db;
 use crate::util::error::Error;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum File {
     Path {
@@ -23,7 +23,11 @@ impl File {
     /// Retrieve the file with the given OID.
     pub fn get(oid: i64) -> Result<Self, Error> {
         let conn = db::open()?;
+        Self::get_transact(&conn, oid) 
+    }
 
+    /// Retrieve the file with the given OID.
+    pub fn get_transact(conn: &Connection, oid: i64) -> Result<Self, Error> {
         let (oid, path) = conn.query_one(
             "
             SELECT
@@ -47,6 +51,43 @@ impl File {
             Some(path) => Self::Path { oid, path },
             None => Self::Blob { oid }
         })
+    }
+
+    /// Loads the file as a URI (e.g. for an img tag).
+    pub fn get_image_src(self) -> Result<String, Error> {
+        let conn = db::open()?;
+        self.get_image_src_transact(&conn)
+    }
+
+    /// Loads the file as a URI (e.g. for an img tag).
+    pub fn get_image_src_transact(self, conn: &Connection) -> Result<String, Error> {
+        // Load file content into buffer
+        match self {
+            Self::Path { path, .. } => {
+                return Ok(path.clone());
+            }
+            Self::Blob { oid } => {
+                let blob = conn.blob_open("main", "METADATA_FILE__BLOB", "CONTENT", oid, true)?;
+                
+                // Read the BLOB into a buffer
+                let mut buf: Vec<u8> = Vec::new();
+                let mut buf_reader = BufReader::new(blob);
+                match buf_reader.read_to_end(&mut buf) {
+                    Ok(_) => {},
+                    Err(_) => {
+                        return Err(Error::AdhocError("Unable to read stored file."));
+                    }
+                }
+                
+                // Read the MIME type to ensure that the file is an image 
+                let mime_type = mimetype_detector::detect(&buf);
+                if mimetype_detector::MimeKind::IMAGE == mime_type.kind() {
+                    return Ok(format!("data:{};base64,{}", mime_type.name(), base64standard.encode(&buf)));
+                } else {
+                    return Err(Error::AdhocError("File is not an image!"));
+                }
+            }
+        }
     }
 
     /// Loads the file as a base64 string.

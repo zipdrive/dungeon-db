@@ -156,9 +156,9 @@ impl Datasource {
     /// Substitutes another datasource for the root of this datasource, if the root's OID matches the given OID.
     /// Otherwise, leaves the root datasource alone.
     pub fn substitute_root(&self, root_oid: i64, root_substitution_datasource: Datasource) -> Self {
-        Ok(match self {
+        match self {
             Self::Table { oid, .. } => {
-                if oid == root_oid {
+                if *oid == root_oid {
                     root_substitution_datasource
                 } else {
                     // Root substitution is invalid, so leave alone
@@ -166,18 +166,18 @@ impl Datasource {
                 }
             },
             Self::MasterTable { parent_datasource, table_oid } => Self::MasterTable {
-                parent_datasource: Box::new(parent_datasource.substitute_root(root_substitution_datasource)),
+                parent_datasource: Box::new(parent_datasource.substitute_root(root_oid, root_substitution_datasource)),
                 table_oid: table_oid.clone()
             },
             Self::InheritorTable { parent_datasource, table_oid } => Self::InheritorTable {
-                parent_datasource: Box::new(parent_datasource.substitute_root(root_substitution_datasource)),
+                parent_datasource: Box::new(parent_datasource.substitute_root(root_oid, root_substitution_datasource)),
                 table_oid: table_oid.clone()
             },
             Self::Column { parent_datasource, column } => Self::Column {
-                parent_datasource: Box::new(parent_datasource.substitute_root(root_substitution_datasource)),
+                parent_datasource: Box::new(parent_datasource.substitute_root(root_oid, root_substitution_datasource)),
                 column: column.clone()
             }
-        })
+        }
     }
 
     /// Retrieve a root datasource by OID, as part of a transaction.

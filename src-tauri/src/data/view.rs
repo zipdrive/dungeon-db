@@ -992,7 +992,7 @@ impl SchemaView {
         }
     }
 
-    fn compile(self) -> Result<String, Error> {
+    fn compile(self, trans: &Transaction, schema_oid: i64) -> Result<String, Error> {
         // Compile the CTEs and select only from root datasources
         let (with_expr, star_expr, oid_expr, from_expr) = if self.param_cte.len() > 0 {
             let mut with_expr: String = String::from("WITH");
@@ -1001,7 +1001,7 @@ impl SchemaView {
             let mut from_expr: String = String::from("FROM");
 
             let mut root_datasource: HashSet<Datasource> = HashSet::new();
-            for (cte_datasource, cte) in param_cte.into_iter() {
+            for (cte_datasource, cte) in self.param_cte.into_iter() {
                 let cte_root_datasource: Datasource = cte_datasource.seek_root();
                 root_datasource.insert(cte_datasource.seek_root());
 
@@ -1023,7 +1023,7 @@ impl SchemaView {
             (
                 with_expr, 
                 {
-                    let star_columns: Vec<String> = root_datasource.iter()
+                    let mut star_columns: Vec<String> = root_datasource.iter()
                         .map(|root_datasource| format!("{}.*", root_datasource.get_alias())).collect();
 
                     let mut k: usize = 1;
@@ -1077,7 +1077,7 @@ impl SchemaView {
         for row_result in trans.prepare("SELECT COLUMN_OID, SORT_ASCENDING FROM METADATA_SCHEMA_ORDERBY_VIEW WHERE SCHEMA_OID = ?1 ORDER BY ORDERING")?.query_map(params![schema_oid], |row| Ok((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, bool>("SORT_ASCENDING")?)))? {
             let (column_oid, sort_ascending) = row_result?;
 
-            if let Some(c) = view_columns.get(&column_oid) {
+            if let Some(c) = self.columns.get(&column_oid) {
                 if index_ordering_expr == "" {
                     index_ordering_expr = format!("{} {}", c.compile()?, if sort_ascending { "ASC" } else { "DESC" });
                 } else {
@@ -1089,15 +1089,16 @@ impl SchemaView {
         // Compile each column
         let column_expr: String = {
             let mut column_expr: Vec<String> = Vec::new();
-            for (_, c) in view_columns.into_iter() {
+            for (_, c) in self.columns.into_iter() {
                 column_expr.push(c.compile()?);
             }
             column_expr.into_iter().fold(oid_expr, |acc, e| format!("{acc}, {e}"))
         };
 
         // Compile the SELECT
-        format!(
+        Ok(format!(
             "
+            CREATE VIEW IF NOT EXISTS SCHEMA{schema_oid}_VIEW AS 
             {with_expr}
             SELECT 
                 ROW_NUMBER() OVER ({index_ordering_expr}) AS ROW_INDEX, {column_expr}
@@ -1108,7 +1109,7 @@ impl SchemaView {
             } else {
                 "FROM FINAL_CTE"
             }
-        );
+        ))
     }
 
     /// Adds a CTE for params from a datasource.
@@ -1134,7 +1135,7 @@ impl SchemaView {
     }
 
     /// 
-    fn add_column(&mut self, root_datasource: &Datasource, datasource_path: String, column_metadata: column::FullMetadata) -> Result<(), Error> {
+    fn add_column(&mut self, trans: &Transaction, root_datasource: &Option<Datasource>, datasource_path: String, column_metadata: column::FullMetadata) -> Result<(), Error> {
         match &column_metadata.column_type {
             column_type::ColumnType::Primitive(_) 
             | column_type::ColumnType::Object { .. } 
@@ -1142,8 +1143,9 @@ impl SchemaView {
             | column_type::ColumnType::Multiselect { .. } => {
                 if let Some(root_datasource) = root_datasource {
                     // Add the primitive column as a param
+                    let column_oid: i64 = column_metadata.oid.clone();
                     let column_datasource: Datasource = root_datasource.append_path(datasource_path)?;
-                    let (access_datasource, access_param) = add_param(&mut param_cte, column_datasource, column_metadata)?;
+                    let (access_datasource, access_param) = self.add_param(column_datasource, column_metadata)?;
 
                     // Register the column to the query
                     self.columns.insert(column_oid.clone(), SchemaViewColumn::TableData { 
@@ -1164,10 +1166,18 @@ impl SchemaView {
                 let parsed_formula: Box<Formula> = Box::new(Formula::parse(formula.clone())?);
 
                 // Compile the formula into SQL
-                let scalar_expression: ScalarExpression = self.compile_formula(trans, parsed_formula)?;
+                let scalar_expression: ScalarExpression = self.compile_formula(
+                    trans, 
+                    column_metadata.schema.oid, 
+                    match root_datasource {
+                        Some(root_datasource) => root_datasource.append_path(datasource_path)?,
+                        None => Datasource::from_alias_transact(trans, datasource_path)?
+                    }, 
+                    parsed_formula
+                )?;
 
                 // Turn into a column
-                self.columns.insert(column_oid, SchemaViewColumn::Formula { 
+                self.columns.insert(column_metadata.oid.clone(), SchemaViewColumn::Formula { 
                     label_expr: scalar_expression.label_expr, 
                     label_ord: format!("COLUMN{}_LABEL", column_metadata.oid), 
                     value_expr: scalar_expression.value_expr, 
@@ -1180,12 +1190,13 @@ impl SchemaView {
                 // Ignore other virtual column types
             }
         }
+        Ok(())
     }
 
     /// Adds a data cell to a datasource.
     fn add_param(&mut self, datasource: Datasource, column: column::FullMetadata) -> Result<(Datasource, ParamCTEColumn), Error> {
         // Ensure the CTE for the datasource exists
-        self.add_datasource_cte(param_cte, &datasource);
+        self.add_datasource_cte(&datasource);
 
         // Add the column to that CTE
         let column_path: String = format!("{}_COLUMN{}", datasource.get_alias(), column.oid);
@@ -1614,7 +1625,7 @@ impl SchemaView {
                     | column_type::ColumnType::Object { .. }
                     | column_type::ColumnType::Select { .. }
                     | column_type::ColumnType::Multiselect { .. } => {
-                        let param_name: String = &column_metadata.column_type {
+                        let param_name: String = match &column_metadata.column_type {
                             column_type::ColumnType::Primitive(prim) => String::from(match prim {
                                 column_type::Primitive::Checkbox => "boolean",
                                 column_type::Primitive::Integer => "integer",
@@ -1626,9 +1637,9 @@ impl SchemaView {
                                 column_type::Primitive::Date => "date",
                                 column_type::Primitive::Datetime => "datetime"
                             }),
-                            column_type::ColumnType::Object { table_oid } => format!("object{table_oid}"),
-                            column_type::ColumnType::Select { table_oid } => format!("select{table_oid}"),
-                            column_type::ColumnType::Multiselect { table_oid } => format!("multiselect{table_oid}"),
+                            column_type::ColumnType::Object { table_oid, .. } => format!("object{table_oid}"),
+                            column_type::ColumnType::Select { table_oid, .. } => format!("select{table_oid}"),
+                            column_type::ColumnType::Multiselect { table_oid, .. } => format!("multiselect{table_oid}"),
                             _ => String::from("N/A") // This case shouldn't happen
                         };
 
@@ -1656,7 +1667,7 @@ impl SchemaView {
                         let parsed_formula: Box<Formula> = Box::new(Formula::parse(formula.clone())?);
 
                         // Compile the formula into a scalar expression
-                        let formula_root_oid: i64 = match Datasource::get_default_datasource_transact(column_datasource.get_schema_oid()?)? {
+                        let formula_root_oid: i64 = match Datasource::get_default_datasource_transact(trans, column_datasource.get_schema_oid()?)? {
                             Datasource::Table { oid, .. } => oid,
                             _ => {
                                 // This case should not ever occur, but just in case...
@@ -1678,7 +1689,7 @@ impl SchemaView {
             Formula::Coalesce(items) => {
                 let mut items_compiled: Vec<ScalarExpression> = Vec::new();
                 for item in items {
-                    let item_compiled: ScalarExpression = self.compile_formula(trans, Box::new(item))?;
+                    let item_compiled: ScalarExpression = self.compile_formula(trans, root_oid.clone(), root_datasource.clone(), Box::new(item))?;
                     items_compiled.push(item_compiled);
                 }
 
@@ -1723,7 +1734,7 @@ impl SchemaView {
             }
             Formula::Abs(inner) => {
                 let inner_name: String = inner.to_string();
-                let inner_compiled: ScalarExpression = self.compile_formula(trans, inner)?;
+                let inner_compiled: ScalarExpression = self.compile_formula(trans, root_oid, root_datasource, inner)?;
                 if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
                     return Err(Error::FormulaTypeValidationError { 
                         outer_name: "abs", 
@@ -1747,7 +1758,7 @@ impl SchemaView {
             }
             Formula::Sign(inner) => {
                 let inner_name: String = inner.to_string();
-                let inner_compiled: ScalarExpression = self.compile_formula(trans, inner)?;
+                let inner_compiled: ScalarExpression = self.compile_formula(trans, root_oid, root_datasource, inner)?;
                 if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
                     return Err(Error::FormulaTypeValidationError { 
                         outer_name: "sign", 
@@ -1771,7 +1782,7 @@ impl SchemaView {
             }
             Formula::Floor(inner) => {
                 let inner_name: String = inner.to_string();
-                let inner_compiled: ScalarExpression = self.compile_formula(trans, inner)?;
+                let inner_compiled: ScalarExpression = self.compile_formula(trans, root_oid, root_datasource, inner)?;
                 if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
                     return Err(Error::FormulaTypeValidationError { 
                         outer_name: "floor", 
@@ -1795,7 +1806,7 @@ impl SchemaView {
             }
             Formula::Ceiling(inner) => {
                 let inner_name: String = inner.to_string();
-                let inner_compiled: ScalarExpression = self.compile_formula(trans, inner)?;
+                let inner_compiled: ScalarExpression = self.compile_formula(trans, root_oid, root_datasource, inner)?;
                 if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
                     return Err(Error::FormulaTypeValidationError { 
                         outer_name: "ceil", 
@@ -1819,7 +1830,7 @@ impl SchemaView {
             }
             Formula::Round(inner) => {
                 let inner_name: String = inner.to_string();
-                let inner_compiled: ScalarExpression = self.compile_formula(trans, inner)?;
+                let inner_compiled: ScalarExpression = self.compile_formula(trans, root_oid, root_datasource, inner)?;
                 if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
                     return Err(Error::FormulaTypeValidationError { 
                         outer_name: "round", 
@@ -1862,14 +1873,13 @@ fn create_schema_view(trans: &Transaction, schema_oid: i64) -> Result<(), Error>
     };
 
     // Add each column that belongs to the schema
-    let mut view_columns: HashMap<i64, SchemaViewColumn> = HashMap::new();
     for row_result in trans.prepare("SELECT DATASOURCE_PATH, COLUMN_OID FROM METADATA_SCHEMA_COLUMN_VIEW WHERE SCHEMA_OID = ?1 AND IS_REQUIRED")?.query_map(params![schema_oid], |row| Ok((row.get::<_, String>("DATASOURCE_PATH")?, row.get::<_, i64>("COLUMN_OID")?)))? {
         let (datasource_path, column_oid) = row_result?;
         let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid.clone())?;
-        view.add_column(datasource_path, column_metadata)?;
+        view.add_column(trans, &root_datasource, datasource_path, column_metadata)?;
     }
 
-    let create_sql: String = format!("CREATE VIEW IF NOT EXISTS SCHEMA{schema_oid}_VIEW AS {}", view.compile()?);
+    let create_sql: String = view.compile(trans, schema_oid)?;
     println!("{create_sql}");
     trans.execute(&create_sql, [])?;
     Ok(())

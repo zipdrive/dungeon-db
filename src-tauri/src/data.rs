@@ -200,8 +200,8 @@ pub fn get_column(column_oid: i64) -> Result<column::FullMetadata, Error> {
 }
 
 #[tauri::command]
-pub fn get_cell(cell_oid: cell::CellOid) -> Result<cell::Cell, Error> {
-    cell::Cell::get(cell_oid)
+pub fn get_cell(cell_identifier: cell::CellIdentifier) -> cell::Cell {
+    cell::Cell::get(cell_identifier)
 }
 
 #[tauri::command]
@@ -244,9 +244,16 @@ pub enum Action {
         metadata: column::FullMetadata,
         new_column_ordering: Option<i64>
     },
-    TrashColumn(i64),
-    UntrashColumn(i64),
+    TrashColumn {
+        schema_oid: i64,
+        column_oid: i64 
+    },
+    UntrashColumn {
+        schema_oid: i64,
+        column_oid: i64
+    },
     RestoreColumn {
+        schema_oid: i64,
         trash_column_oid: i64,
         untrash_column_oid: i64
     },
@@ -275,7 +282,7 @@ pub enum Action {
         inheritor_table_oid: i64
     },
 
-    EditCellContents(cell::Cell)
+    EditCellContents(cell::DataCellEntry)
 }
 
 static REVERSE_STACK: Mutex<Vec<Action>> = Mutex::new(Vec::new());
@@ -369,7 +376,10 @@ impl Action {
             Self::CreateColumn(mut metadata) => {
                 // Create the column
                 metadata.create()?;
-                record_action(Self::TrashColumn(metadata.oid), is_forward);
+                record_action(Self::TrashColumn {
+                    schema_oid: metadata.schema.oid.clone(),
+                    column_oid: metadata.oid
+                }, is_forward);
 
                 // Send signal to update schema
                 schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
@@ -379,6 +389,7 @@ impl Action {
                 let old_column_oid: i64 = metadata.oid.clone();
                 metadata.set()?;
                 record_action(Self::RestoreColumn { 
+                    schema_oid: metadata.schema.oid.clone(),
                     trash_column_oid: metadata.oid, 
                     untrash_column_oid: old_column_oid
                 }, is_forward);
@@ -410,32 +421,39 @@ impl Action {
                 // Send signal to update schema
                 schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
-            Self::TrashColumn(column_oid) => {
+            Self::TrashColumn { schema_oid, column_oid} => {
                 // Flag the column for garbage collection
                 column::FullMetadata::trash(column_oid.clone())?;
-                record_action(Self::UntrashColumn(column_oid), is_forward);
+                record_action(Self::UntrashColumn {
+                    schema_oid: schema_oid.clone(),
+                    column_oid
+                }, is_forward);
 
                 // Send signal to update schema
-                // TODO
+                schema::FullMetadata::emit_affected_schema(app, vec![schema_oid])?;
             }
-            Self::UntrashColumn(column_oid) => {
+            Self::UntrashColumn { schema_oid, column_oid} => {
                 // Unflag the column for garbage collection
                 column::FullMetadata::untrash(column_oid.clone())?;
-                record_action(Self::TrashColumn(column_oid), is_forward);
+                record_action(Self::TrashColumn {
+                    schema_oid: schema_oid.clone(),
+                    column_oid
+                }, is_forward);
 
                 // Send signal to update schema
-                // TODO
+                schema::FullMetadata::emit_affected_schema(app, vec![schema_oid])?;
             }
-            Self::RestoreColumn { trash_column_oid, untrash_column_oid } => {
+            Self::RestoreColumn { schema_oid, trash_column_oid, untrash_column_oid } => {
                 // Unflag the old column for garbage collection, and flag the new column in its place
                 column::FullMetadata::trash_and_untrash(untrash_column_oid.clone(), trash_column_oid.clone())?;
                 record_action(Self::RestoreColumn { 
+                    schema_oid: schema_oid.clone(),
                     trash_column_oid: untrash_column_oid, 
                     untrash_column_oid: trash_column_oid 
                 }, is_forward);
 
                 // Send signal to update schema
-                // TODO
+                schema::FullMetadata::emit_affected_schema(app, vec![schema_oid])?;
             }
 
 
@@ -500,20 +518,10 @@ impl Action {
             Self::EditCellContents(cell) => {
                 let execution_result: Result<(), Error> = {
                     // Update the contents of the cell
-                    match cell.get_cell_oid() {
-                        Ok(cell_oid) => {
-                            match cell::Cell::get(cell_oid) {
-                                Ok(old_cell) => {
-                                    match cell.set() {
-                                        Ok(_) => {
-                                            record_action(Self::EditCellContents(old_cell), is_forward);
-                                            Ok(())
-                                        }
-                                        Err(e) => Err(e)
-                                    }
-                                }
-                                Err(e) => Err(e)
-                            }
+                    match cell.set() {
+                        Ok(old_cell) => {
+                            record_action(Self::EditCellContents(old_cell), is_forward);
+                            Ok(())
                         }
                         Err(e) => Err(e)
                     }
@@ -521,7 +529,7 @@ impl Action {
 
                 // Send signal to update that cell + any dependent cells
                 // Do this regardless of whether previous execution succeeded or failed
-                cell.get_value_oid()?.query_affected_cells(app)?;
+                app.emit("cell", cell)?;
                 
                 // Throw error if execution failed
                 if let Err(e) = execution_result {
