@@ -2,7 +2,7 @@ import { message } from "@tauri-apps/plugin-dialog";
 import { getReportMetadataAsync, getTableMetadataAsync, queryAsync, SelectedHierarchicalListItemMetadata, ToggledHierarchicalListItemMetadata } from "./util/query";
 import { Channel } from "@tauri-apps/api/core";
 import { FullMetadata as ColumnFullMetadata, createColumnHeaderHTML } from "./util/column";
-import { Cell, ValueOid, createCellAsync, runDropdownValueQueries, updateCell } from "./util/cell";
+import { CellContent, ValueOid, createCellAsync, runDropdownValueQueries, updateCell } from "./util/cell";
 import { listen } from "@tauri-apps/api/event";
 import { openDialogAsync } from "./util/dialog";
 import { executeAsync } from "./util/action";
@@ -100,7 +100,7 @@ if (urlParamSchemaOid) {
             });
 
             // Construct body
-            const cellChannel: Channel<Cell | { maxIndex: number }> = new Channel<Cell | { maxIndex: number }>((cell) => {
+            const cellChannel: Channel<CellContent | { maxIndex: number }> = new Channel<CellContent | { maxIndex: number }>((cell) => {
                 console.debug(`CELL: ${JSON.stringify(cell)}`);
                 if ('maxIndex' in cell) {
                     // Ignore

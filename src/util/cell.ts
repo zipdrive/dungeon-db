@@ -12,8 +12,8 @@ import { Menu, MenuItem } from "@tauri-apps/api/menu";
 /**
  * Clipboard data for cells.
  */
-export type CellClipboardData = { rows: Cell[], columnType: ColumnType } 
-    | { rows: {[key: number]: Cell}[] };
+export type CellClipboardData = { rows: CellContent[], columnType: ColumnType } 
+    | { rows: {[key: number]: CellContent}[] };
 
 
 
@@ -22,19 +22,21 @@ type ValidationFailures = {
     message: string
 }[];
 
-export type CellOid = {
-    schemaOid: number,
+type CellDependency = {
+    tableOid: number,
+    columnOid: number,
+    rowOid: number
+};
+
+export type CellIdentifier = {
+    tableOid: number,
     columnOid: number,
     rowOid: number
 } | {
     columnOid: number,
-    filters: [string, number][]
-};
-
-export type ValueOid = {
-    schemaOid: number,
-    columnOid: number,
-    rowOid: number
+    queryFilter: string,
+    isolatedCellDependencies: CellDependency[],
+    fullReloadCellDependencies: CellDependency[]
 };
 
 export type File = {
@@ -54,69 +56,291 @@ type RowCell = {
     fixedParentDatasource: [number, number, ColumnFullMetadata] | null,
     validationFailures: ValidationFailures
 };
-type ReadonlyCell = {
-    cellOid: CellOid,
-    label: string | null,
-    validationFailures: ValidationFailures
-};
-type SubreportCell = {
-    cellOid: CellOid,
-    label: string,
-    schemaQueryString: string,
-    validationFailures: ValidationFailures 
-};
-type PrimitiveEntryCell = {
-    cellOid: CellOid,
-    valueOid: ValueOid,
-    label: string | null,
-    primitiveType: Primitive,
-    validationFailures: ValidationFailures 
-};
-type FileEntryCell = {
-    cellOid: CellOid,
-    valueOid: ValueOid,
-    label: string | null,
-    fileOid: number | null,
-    validationFailures: ValidationFailures
-};
-type ObjectCell = {
-    cellOid: CellOid,
-    valueOid: ValueOid,
-    label: string | null,
-    objectSchemaOid: number,
-    objectQueryString: string | null,
-    validationFailures: ValidationFailures
-};
-type SelectEntryCell = {
-    cellOid: CellOid,
-    valueOid: ValueOid,
-    selectSchemaOid: number,
-    selectRowOid: number | null,
-    validationFailures: ValidationFailures
-};
-type MultiselectEntryCell = {
-    cellOid: CellOid,
-    valueOid: ValueOid,
-    label: string | null,
-    multiselectSchemaOid: number,
-    multiselectRowOid: number[],
-    validationFailures: ValidationFailures
-};
 type AddNewRowButtonCell = {
     tableOid: number,
     fixedParentDatasource: [number, number, ColumnFullMetadata] | null,
     columnSpan: number
 };
 
-export type Cell = { row: RowCell } 
-| { readonly: ReadonlyCell } 
-| { subreport: SubreportCell } 
-| { primitiveEntry: PrimitiveEntryCell } 
-| { fileEntry: FileEntryCell }
-| { object: ObjectCell } 
-| { selectEntry: SelectEntryCell } 
-| { multiselectEntry: MultiselectEntryCell }
+type ReadonlyCellContent = {
+    cellIdentifier: CellIdentifier,
+    label: string | null,
+    validationFailures: ValidationFailures
+};
+type TextEntryCellContent = {
+    cellIdentifier: CellIdentifier,
+    dataTableOid: number,
+    dataColumnOid: number,
+    dataRowOid: number,
+    label: string | null,
+    validationFailures: ValidationFailures 
+};
+type CheckboxEntryCellContent = {
+    cellIdentifier: CellIdentifier,
+    dataTableOid: number,
+    dataColumnOid: number,
+    dataRowOid: number,
+    isChecked: boolean | null,
+    validationFailures: ValidationFailures 
+};
+type FileEntryCellContent = {
+    cellIdentifier: CellIdentifier,
+    dataTableOid: number,
+    dataColumnOid: number,
+    dataRowOid: number,
+    label: string | null,
+    fileOid: number | null,
+    validationFailures: ValidationFailures
+};
+type ImageEntryCellContent = {
+    cellIdentifier: CellIdentifier,
+    dataTableOid: number,
+    dataColumnOid: number,
+    dataRowOid: number,
+    fileOid: number | null,
+    fileSrc: string | null,
+    validationFailures: ValidationFailures
+};
+type SchemaLinkCellContent = {
+    cellIdentifier: CellIdentifier,
+    label: string | null,
+    linkSchemaOid: number,
+    linkQueryFilter: string | null,
+    validationFailures: ValidationFailures
+};
+type ObjectLinkCellContent = {
+    cellIdentifier: CellIdentifier,
+    dataTableOid: number,
+    dataColumnOid: number,
+    dataRowOid: number,
+    label: string | null,
+    objectSchemaOid: number,
+    objectQueryString: string | null,
+    validationFailures: ValidationFailures
+};
+type SingleSelectDropdownCellContent = {
+    cellIdentifier: CellIdentifier,
+    dataTableOid: number,
+    dataColumnOid: number,
+    dataRowOid: number,
+    dropdownTableOid: number,
+    dropdownRowOid: number | null,
+    validationFailures: ValidationFailures
+};
+type MultiSelectDropdownCellContent = {
+    cellIdentifier: CellIdentifier,
+    dataTableOid: number,
+    dataColumnOid: number,
+    dataRowOid: number,
+    label: string | null,
+    dropdownTableOid: number,
+    dropdownRowOid: number[],
+    validationFailures: ValidationFailures
+};
+
+export type CellContent = { readonly: ReadonlyCellContent } 
+| { textEntry: TextEntryCellContent }
+| { checkboxEntry: CheckboxEntryCellContent } 
+| { fileEntry: FileEntryCellContent }
+| { imageEntry: ImageEntryCellContent }
+| { schemaLink: SchemaLinkCellContent }
+| { objectLink: ObjectLinkCellContent } 
+| { singleSelectDropdown: SingleSelectDropdownCellContent } 
+| { multiSelectDropdown: MultiSelectDropdownCellContent };
+export type CellStream = CellContent
+| { row: RowCell } 
 | { addNewRowButton: AddNewRowButtonCell };
+
+
+export type DataCellEntry = {
+    tableOid: number,
+    columnOid: number,
+    rowOid: number,
+    value: {
+        text: {
+            value: string | null 
+        }
+    } | {
+        integer: {
+            value: number | null 
+        }
+    } | {
+        number: {
+            value: number | null 
+        }
+    } | {
+        boolean: {
+            value: boolean | null 
+        }
+    } | {
+        date: {
+            value: number | null 
+        } 
+    } | {
+        datetime: {
+            value: number | null 
+        }
+    } | {
+        file: {
+            file: File | null 
+        }
+    } | {
+        object: {
+            linkedRowOid: number | null 
+        }
+    } | {
+        select: {
+            linkedRowOid: number | null 
+        }
+    } | {
+        multiselect: {
+            linkedRowOid: number | null
+        }
+    }
+};
+
+
+export class Cell {
+    elem: HTMLTableCellElement;
+    content: CellContent;
+
+    constructor(cwd: Document, content: CellContent) {
+        this.content = content;
+
+        // Construct the HTMLElement
+        if ('textEntry' in content) {
+            this.elem = this.#constructTextEntryCell(cwd, content.textEntry);
+        } else if ('checkboxEntry' in content) {
+            this.elem = this.#constructCheckboxEntryCell(cwd, content.checkboxEntry);
+        } else if ('fileEntry' in content) {
+            this.elem = this.#constructFileEntryCell(cwd, content.fileEntry);
+        } else if ('imageEntry' in content) {
+            this.elem = this.#constructImageEntryCell(cwd, content.imageEntry);
+        } else if ('schemaLink' in content) {
+            this.elem = this.#constructSchemaLinkCell(cwd, content.schemaLink);
+        } else if ('objectLink' in content) {
+            this.elem = this.#constructObjectLinkCell(cwd, content.objectLink);
+        } else if ('singleSelectDropdown' in content) {
+            this.elem = this.#constructSingleSelectDropdownCell(cwd, content.singleSelectDropdown);
+        } else if ('multiSelectDropdown' in content) {
+            this.elem = this.#constructMultiSelectDropdownCell(cwd, content.multiSelectDropdown);
+        } else {
+            this.elem = this.#constructReadonlyCell(cwd, content.readonly)
+        }
+
+        // Add listeners
+    }
+
+    /**
+     * Add a tooltip to an HTML element.
+     * @param elem The HTML element.
+     * @param tooltip The tooltip to append.
+     */
+    #addTooltip(elem: HTMLElement, tooltip: string) {
+        const existingTooltip: string | null = elem.getAttribute('tooltip');
+        elem.setAttribute('tooltip', existingTooltip ? `${existingTooltip} ${tooltip}` : tooltip);
+    }
+
+    #addValidationFailureTooltips(elem: HTMLElement, validationFailures: ValidationFailures) {
+        if (validationFailures.length > 0) {
+            elem.classList.add('cell-error');
+            this.#addTooltip(elem, validationFailures.map(f => f.message).reduce((acc, m) => `${acc} ${m}`));
+        }
+    }
+
+    #constructReadonlyCell(cwd: Document, content: ReadonlyCellContent): HTMLTableCellElement {
+        const elem: HTMLTableCellElement = cwd.createElement('td');
+        elem.classList.add('cell-readonly');
+        if (content.label == null)
+            elem.classList.add('cell-null');
+
+        elem.innerText = content.label ?? '';
+        this.#addValidationFailureTooltips(elem, content.validationFailures);
+        return elem;
+    }
+
+    #constructTextEntryCell(cwd: Document, content: TextEntryCellContent): HTMLTableCellElement {
+        const elem: HTMLTableCellElement = cwd.createElement('td');
+        if (content.label == null)
+            elem.classList.add('cell-null');
+    }
+
+    /**
+     * Construct a cell that contains a checkbox that toggles the boolean value of a cell.
+     * @param cwd 
+     * @param content 
+     * @returns 
+     */
+    #constructCheckboxEntryCell(cwd: Document, content: CheckboxEntryCellContent): HTMLTableCellElement {
+        const elem: HTMLTableCellElement = cwd.createElement('td');
+        if (content.isChecked == null)
+            elem.classList.add('cell-null');
+        
+        // Add a checkbox to the cell
+        let checkboxNode: HTMLInputElement = document.createElement('input');
+        checkboxNode.classList.add('content-checkbox');
+        checkboxNode.type = 'checkbox';
+        checkboxNode.checked = content.isChecked ?? false;
+        elem.appendChild(checkboxNode);
+
+        elem.addEventListener('click', (_) => {
+            checkboxNode.checked = !checkboxNode.checked;
+            checkboxNode.dispatchEvent(new Event('input'));
+        });
+        checkboxNode.addEventListener('click', (e) => {
+            // Prevent the checkbox from getting triggered twice in a row
+            e.stopPropagation();
+        });
+
+        // Add event listener to change the value in the database when the checkbox is toggled
+        checkboxNode.addEventListener('input', async (_) => {
+            await executeAsync({
+                editCellContents: {
+                    tableOid: content.dataTableOid,
+                    columnOid: content.dataColumnOid,
+                    rowOid: content.dataRowOid,
+                    value: {
+                        boolean: {
+                            value: checkboxNode.checked
+                        }
+                    }
+                }
+            })
+            .catch(async e => {
+                await message(e, {
+                title: "An error occurred while updating value.",
+                kind: 'error'
+                });
+            });
+        });
+
+        return elem;
+    }
+
+    #constructFileEntryCell(cwd: Document, content: FileEntryCellContent): HTMLTableCellElement {
+        
+    }
+
+    #constructImageEntryCell(cwd: Document, content: ImageEntryCellContent): HTMLTableCellElement {
+        
+    }
+
+    #constructSchemaLinkCell(cwd: Document, content: SchemaLinkCellContent): HTMLTableCellElement {
+        
+    }
+
+    #constructObjectLinkCell(cwd: Document, content: ObjectLinkCellContent): HTMLTableCellElement {
+        
+    }
+
+    #constructSingleSelectDropdownCell(cwd: Document, content: SingleSelectDropdownCellContent): HTMLTableCellElement {
+        
+    }
+
+    #constructMultiSelectDropdownCell(cwd: Document, content: MultiSelectDropdownCellContent): HTMLTableCellElement {
+        
+    }
+}
 
 
 
@@ -152,21 +376,10 @@ export function runDropdownValueQueries() {
 
 
 
-/**
- * Add a tooltip to an HTML element.
- * @param elem The HTML element.
- * @param tooltip The tooltip to append.
- */
-function addTooltip(elem: HTMLElement, tooltip: string) {
-    const existingTooltip: string | null = elem.getAttribute('tooltip');
-    elem.setAttribute('tooltip', existingTooltip ? `${existingTooltip} ${tooltip}` : tooltip);
-}
+
 
 function addValidationFailureTooltips(elem: HTMLElement, validationFailures: ValidationFailures) {
-    if (validationFailures.length > 0) {
-        elem.classList.add('cell-error');
-        validationFailures.forEach((validationFailure) => addTooltip(elem, validationFailure.message));
-    }
+    
 }
 
 
@@ -239,7 +452,7 @@ function updateRowIndexCell(cell: RowCell, elem: HTMLTableCellElement) {
     });
 }
 
-function updateReadonlyCell(cell: ReadonlyCell, elem: HTMLTableCellElement) {
+function updateReadonlyCell(cell: ReadonlyCellContent, elem: HTMLTableCellElement) {
     elem.classList.add('cell-readonly');
     if (cell.label == null)
         elem.classList.add('cell-null');
@@ -268,41 +481,7 @@ function updatePrimitiveEntryCell(cell: PrimitiveEntryCell, elem: HTMLTableCellE
         elem.classList.add('cell-null');
 
     if (cell.primitiveType == 'checkbox') {
-        // Add a checkbox
-        let checkboxNode: HTMLInputElement = document.createElement('input');
-        checkboxNode.type = 'checkbox';
-        checkboxNode.checked = cell.label == '1';
-        elem.appendChild(checkboxNode);
-
-        elem.addEventListener('click', (_) => {
-            checkboxNode.checked = !checkboxNode.checked;
-            checkboxNode.dispatchEvent(new Event('input'));
-        });
-        checkboxNode.addEventListener('click', (e) => {
-            // Prevent the checkbox from getting triggered twice in a row
-            e.stopPropagation();
-        });
-
-        // Add event listener to change the value in the database
-        checkboxNode.addEventListener('input', async (_) => {
-            await executeAsync({
-                editCellContents: {
-                    primitiveEntry: {
-                        cellOid: cell.cellOid,
-                        valueOid: cell.valueOid,
-                        label: checkboxNode.checked ? '1' : '0',
-                        primitiveType: cell.primitiveType,
-                        validationFailures: []
-                    }
-                }
-            })
-            .catch(async e => {
-                await message(e, {
-                title: "An error occurred while updating value.",
-                kind: 'error'
-                });
-            });
-        });
+        
 
     } else {
         if (isTable) { // Make contents of table cell editable
@@ -368,7 +547,7 @@ function updatePrimitiveEntryCell(cell: PrimitiveEntryCell, elem: HTMLTableCellE
     addValidationFailureTooltips(elem, cell.validationFailures);
 }
 
-function updateFileEntryCell(cell: FileEntryCell, elem: HTMLTableCellElement) {
+function updateFileEntryCell(cell: FileEntryCellContent, elem: HTMLTableCellElement) {
     /**
      * Uploads a file from the filesystem to the backend.
      */
@@ -524,7 +703,7 @@ function updateFileEntryCell(cell: FileEntryCell, elem: HTMLTableCellElement) {
     addValidationFailureTooltips(elem, cell.validationFailures);
 }
 
-function updateObjectCell(cell: ObjectCell, elem: HTMLTableCellElement) {
+function updateObjectCell(cell: ObjectLinkCellContent, elem: HTMLTableCellElement) {
     elem.classList.add('clickable-text');
     if (cell.objectQueryString == null)
         elem.classList.add('cell-null');
@@ -566,7 +745,7 @@ function updateObjectCell(cell: ObjectCell, elem: HTMLTableCellElement) {
     addValidationFailureTooltips(elem, cell.validationFailures);
 }
 
-function updateSelectEntryCell(cell: SelectEntryCell, elem: HTMLTableCellElement) {
+function updateSelectEntryCell(cell: SingleSelectDropdownCellContent, elem: HTMLTableCellElement) {
     if (!cell.selectRowOid)
         elem.classList.add('cell-null');
 
@@ -611,7 +790,7 @@ function updateSelectEntryCell(cell: SelectEntryCell, elem: HTMLTableCellElement
     addValidationFailureTooltips(elem, cell.validationFailures);
 }
 
-function updateMultiselectEntryCell(cell: MultiselectEntryCell, elem: HTMLTableCellElement) {
+function updateMultiselectEntryCell(cell: MultiSelectDropdownCellContent, elem: HTMLTableCellElement) {
     // Set the cell's label when unselected
     if (cell.label)
         elem.innerText = cell.label;
@@ -668,8 +847,8 @@ function updateMultiselectEntryCell(cell: MultiselectEntryCell, elem: HTMLTableC
     addValidationFailureTooltips(elem, cell.validationFailures);
 }
 
-export function createCellAsync(cell: Cell, isSchema: boolean): HTMLTableCellElement | HTMLTableRowElement | null {
-    function createCellElement(cellOid: CellOid, callbackFn: (e: HTMLTableCellElement) => void) {
+export function createCellAsync(cell: CellContent, isSchema: boolean): HTMLTableCellElement | HTMLTableRowElement | null {
+    function createCellElement(cellOid: CellIdentifier, callbackFn: (e: HTMLTableCellElement) => void) {
         const elem: HTMLTableCellElement = document.createElement('td');
         elem.dataset.cellOid = JSON.stringify(cellOid);
         elem.classList.add(`column${cellOid.columnOid}`);
@@ -787,7 +966,7 @@ export function createCellAsync(cell: Cell, isSchema: boolean): HTMLTableCellEle
     return null;
 }
 
-export function updateCell(cellOid: CellOid, isSchema: boolean) {
+export function updateCell(cellOid: CellIdentifier, isSchema: boolean) {
     const query: string = 'filters' in cellOid ? 
         `.column${cellOid.columnOid}${cellOid.filters.map(([datasourceAlias, datasourceRowOid]) => `.${datasourceAlias}__${datasourceRowOid}`).join('')}` :
         `#column${cellOid.columnOid}-row${cellOid.rowOid}`
@@ -809,7 +988,7 @@ export function updateCell(cellOid: CellOid, isSchema: boolean) {
         prevElem.replaceWith(elem);
 
         // Query for the cell
-        const cell: Cell = await getCellAsync(cellOid);
+        const cell: CellContent = await getCellAsync(cellOid);
         console.debug(`cell: ${JSON.stringify(cell)}`);
         if ('readonly' in cell) {
             updateReadonlyCell(cell.readonly, elem);

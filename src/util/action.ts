@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { FullMetadata as TableFullMetadata } from "./table";
 import { FullMetadata as ReportFullMetadata } from "./report";
 import { FullMetadata as ColumnFullMetadata } from "./column";
-import { Cell } from "./cell";
+import { CellContent, DataCellEntry } from "./cell";
 
 export type Action = {
     createTable: TableFullMetadata
@@ -29,7 +29,10 @@ export type Action = {
         newColumnOrdering: number | null
     }
 } | {
-    trashColumn: number
+    trashColumn: {
+        schemaOid: number,
+        columnOid: number
+    }
 } | {
     createRow: {
         tableOid: number,
@@ -54,7 +57,7 @@ export type Action = {
         inheritorTableOid: number
     }
 } | {
-    editCellContents: Cell
+    editCellContents: DataCellEntry
 };
 
 /**

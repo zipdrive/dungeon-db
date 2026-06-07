@@ -2,7 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { FullMetadata as TableFullMetadata } from "./table";
 import { FullMetadata as ReportFullMetadata } from "./report";
 import { FullMetadata as ColumnFullMetadata } from "./column";
-import { Cell, ValueOid, File, CellOid } from "./cell";
+import { CellContent, ValueOid, File, CellIdentifier } from "./cell";
 import { message } from "@tauri-apps/plugin-dialog";
 import { Datasource } from "./datasource";
 import { Schema } from "./schema";
@@ -99,7 +99,7 @@ export type Query = {
         filters: [string, number][],
         limit: Limit,
         columnChannel: Channel<ColumnFullMetadata>,
-        cellChannel: Channel<Cell & { maxIndex: number }>
+        cellChannel: Channel<CellContent & { maxIndex: number }>
     }
 };
 
@@ -129,7 +129,7 @@ export async function getColumnAsync(oid: number): Promise<ColumnFullMetadata> {
     return await invoke('get_column', { columnOid: oid });
 }
 
-export async function getCellAsync(cellOid: CellOid): Promise<Cell> {
+export async function getCellAsync(cellOid: CellIdentifier): Promise<CellContent> {
     return await invoke('get_cell', { cellOid: cellOid });
 }
 

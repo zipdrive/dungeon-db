@@ -1,4 +1,4 @@
-import { Cell, CellClipboardData } from "./cell";
+import { CellContent, CellClipboardData } from "./cell";
 import { FullMetadata as ColumnFullMetadata, ColumnType } from "./column";
 
 
@@ -11,9 +11,9 @@ class GridCell {
     /**
      * The content of the cell.
      */
-    content: Cell;
+    content: CellContent;
 
-    constructor(cwd: Document, content: Cell) {
+    constructor(cwd: Document, content: CellContent) {
         this.elem = cwd.createElement('td');
         this.content = content;
 
@@ -66,8 +66,8 @@ export class Grid {
      * A single item in the selectedCells array can be copied to clipboard.
      */
     #selectedCells: {
-        topRowIndex: number,
-        leftColumnOid: number,
+        rowIndex: number,
+        columnOid: number,
         rowSpan: number,
         columnSpan: number
     }[] = [];
@@ -150,11 +150,99 @@ export class Grid {
     }
 
 
+    #moveCursor(magnitude: { rowSpanShift?: number, columnSpanShift?: number }, shiftKey: boolean) {
+        const lastSelectedRegion = this.#selectedCells.pop();
+        if (lastSelectedRegion) {
+            if (shiftKey) {
+                // Move the span of the last selection region
+                if (magnitude.rowSpanShift) {
+                    lastSelectedRegion.rowSpan += Math.min(
+                        Math.max(magnitude.rowSpanShift, -(lastSelectedRegion.rowIndex + lastSelectedRegion.rowSpan)), 
+                        this.#rows.length - 1 - (lastSelectedRegion.rowIndex + lastSelectedRegion.rowSpan)
+                    );
+                }
+                if (magnitude.columnSpanShift) {
+                    const columns: ColumnFullMetadata[] = Object.values(this.#columns).sort(c => c.ordering);
+                    const columnIndex: number = Math.max(0, columns.findIndex(c => c.oid == lastSelectedRegion.columnOid));
+                    lastSelectedRegion.columnSpan += Math.min(
+                        Math.max(magnitude.columnSpanShift, -(columnIndex + lastSelectedRegion.columnSpan)), 
+                        columns.length - 1 - (columnIndex + lastSelectedRegion.columnSpan)
+                    );
+                }
+            } else {
+                // Move the last selection region's focal point
+                if (magnitude.rowSpanShift) {
+                    lastSelectedRegion.rowIndex = Math.min(
+                        Math.max(lastSelectedRegion.rowIndex + magnitude.rowSpanShift, 0),
+                        this.#rows.length - 1
+                    );
+                }
+                if (magnitude.columnSpanShift) {
+                    const columns: ColumnFullMetadata[] = Object.values(this.#columns).sort(c => c.ordering);
+                    const oldColumnIndex: number = Math.max(0, columns.findIndex(c => c.oid == lastSelectedRegion.columnOid));
+                    const newColumnIndex: number = Math.min(
+                        Math.max(oldColumnIndex + magnitude.columnSpanShift, 0),
+                        columns.length - 1
+                    );
+                    lastSelectedRegion.columnOid = columns[newColumnIndex].oid;
+                }
+
+                // Drop row span and column span
+                lastSelectedRegion.rowSpan = 0;
+                lastSelectedRegion.columnSpan = 0;
+            }
+
+            // Dump everything but the last selection region
+            this.#selectedCells = [lastSelectedRegion];
+        }
+
+        const curr = shiftSelectionEnd ? this._selectionEnd : this._selectionStart;
+        const nc = { x: curr.x + magnitude.x, y: curr.y + magnitude.y };
+        if (!this._fitBounds(nc)) return;
+        this.#stopEditing();
+        this._incrementToFit(nc);
+        this._changeSelectedCellsStyle(() => {
+            if (shiftSelectionEnd) {
+                this._selectionEnd = nc;
+            } else {
+                this._selectionStart = this._selectionEnd = this._focus = nc;
+            }
+        });
+        this._scrollIntoView(nc);
+    }
+
+    #tabCursor() {
+        
+    }
+
+
+    #startEditing() {
+
+    }
+
+    #revertEdit() {
+
+    }
+
+    #stopEditing() {
+
+    }
+
+    /**
+     * Clears the content of the cells that are currently selected.
+     */
+    #clearSelectedCells() {
+        this.#selectedCells.forEach((selectedCellRegion) => {
+
+        });
+    }
+
+
     /**
      * The event listeners for the grid.
      */
     #eventListeners: {[key: string]: (e: any) => void} = {
-        "paste": (e) => {
+        "paste": (e: ClipboardEvent) => {
             if (this.#mode == 'edit') return;
             e.preventDefault();
 
@@ -163,11 +251,11 @@ export class Grid {
             const pastedCells: CellClipboardData = JSON.parse(plaintextData);
 
             if ('columnType' in pastedCells) { // User is pasting a single column of data, which can be transposed
-                this.#selectedCells.forEach(({ topRowIndex, leftColumnOid }) => {
+                this.#selectedCells.forEach(({ rowIndex: topRowIndex, columnOid: leftColumnOid }) => {
                     
                 });
             } else { // User is pasting multiple columns of data
-                this.#selectedCells.forEach(({ topRowIndex }) => {
+                this.#selectedCells.forEach(({ rowIndex: topRowIndex }) => {
                     let k: number = 0;
                     while (k < pastedCells.rows.length) {
                         const rowIndex = topRowIndex + k;
@@ -216,7 +304,89 @@ export class Grid {
             });
         },
 
-        "mousedown": (e) => {
+        "keydown": (e: KeyboardEvent) => {
+            if ((e.ctrlKey && e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "ArrowLeft" && e.key !== "ArrowRight") || e.metaKey) return;
+
+            if (this.#selectedCells.length > 0) {
+                if (e.key === "Escape" && this.#mode == 'edit') {
+                    e.preventDefault();
+                    this.#revertEdit();
+                    this.#stopEditing();
+                }
+                if (e.key === "Enter") {
+                    e.preventDefault();
+                    this._tabCursorInSelection(false, e.shiftKey ? -1 : 1);
+                }
+
+                if (e.key === "Tab") {
+                    e.preventDefault();
+                    this._tabCursorInSelection(true, e.shiftKey ? -1 : 1);
+                }
+                if (this.#mode == 'select') {
+                    if (e.key === "F2") {
+                        e.preventDefault();
+                        this._startEditing(this._focus);
+                    }
+                    if (e.key === "Delete" || e.key === "Backspace") {
+                        e.preventDefault();
+                        this.#clearSelectedCells();
+                    }
+
+                    if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        if (e.ctrlKey) {
+                            // Move to the last row
+                            this.#moveCursor({ rowSpanShift: Number.MAX_SAFE_INTEGER }, e.shiftKey);
+                        } else {
+                            // Move down by a single row
+                            this.#moveCursor({ rowSpanShift: +1 }, e.shiftKey);
+                        }
+                    }
+                    if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        if (e.ctrlKey) {
+                            // Move to the first row
+                            this.#moveCursor({ rowSpanShift: Number.MIN_SAFE_INTEGER }, e.shiftKey);
+                        } else {
+                            // Move up by a single row
+                            this.#moveCursor({ rowSpanShift: -1 }, e.shiftKey);
+                        }
+                    }
+                    if (e.key === "ArrowLeft") {
+                        e.preventDefault();
+                        if (e.ctrlKey) {
+                            // Move to the first column
+                            this.#moveCursor({ columnSpanShift: Number.MIN_SAFE_INTEGER }, e.shiftKey);
+                        } else {
+                            // Move left by a single column
+                            this.#moveCursor({ columnSpanShift: -1 }, e.shiftKey);
+                        }
+                    }
+                    if (e.key === "ArrowRight") {
+                        e.preventDefault();
+                        if (e.ctrlKey) {
+                            // Move to the last column
+                            this.#moveCursor({ columnSpanShift: Number.MAX_SAFE_INTEGER }, e.shiftKey);
+                        } else {
+                            // Move right by a single column
+                            this.#moveCursor({ columnSpanShift: +1 }, e.shiftKey);
+                        }
+                    }
+                }
+
+                if (e.key.length === 1 && this.#mode != 'edit') {
+                    this._changeSelectedCellsStyle(() => {
+                        const { x, y } = this._focus;
+                        // We clear the value of the cell, and the keyup event will
+                        // happen with the cursor inside the cell and type the character there
+                        this._startEditing({ x, y });
+                        this._getCell(x, y).firstChild.value = "";
+                    });
+                }
+            }
+        }
+
+        "mousedown": (e: MouseEvent) => {
 
         }
     };
