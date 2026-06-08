@@ -50,24 +50,61 @@ export type File = {
     }
 };
 
-type RowCell = {
+type SchemaRow = {
     rowIdentifier: [number, number] | null,
     index: number,
     fixedParentDatasource: [number, number, ColumnFullMetadata] | null,
     validationFailures: ValidationFailures
 };
-type AddNewRowButtonCell = {
+type AddNewRowButton = {
     tableOid: number,
     fixedParentDatasource: [number, number, ColumnFullMetadata] | null,
     columnSpan: number
 };
 
+
+type CellContentTextFormat = 'plain' | 'jSON';
+
 type ReadonlyCellContent = {
     cellIdentifier: CellIdentifier,
     label: string | null,
+    format: CellContentTextFormat,
     validationFailures: ValidationFailures
 };
 type TextEntryCellContent = {
+    cellIdentifier: CellIdentifier,
+    dataTableOid: number,
+    dataColumnOid: number,
+    dataRowOid: number,
+    label: string | null,
+    format: CellContentTextFormat,
+    validationFailures: ValidationFailures 
+};
+type IntegerEntryCellContent = {
+    cellIdentifier: CellIdentifier,
+    dataTableOid: number,
+    dataColumnOid: number,
+    dataRowOid: number,
+    value: number | null,
+    validationFailures: ValidationFailures 
+};
+type NumberEntryCellContent = {
+    cellIdentifier: CellIdentifier,
+    dataTableOid: number,
+    dataColumnOid: number,
+    dataRowOid: number,
+    value: number | null,
+    validationFailures: ValidationFailures 
+};
+type DateEntryCellContent = {
+    cellIdentifier: CellIdentifier,
+    dataTableOid: number,
+    dataColumnOid: number,
+    dataRowOid: number,
+    label: string | null,
+    validationFailures: ValidationFailures 
+};
+type DatetimeEntryCellContent = {
     cellIdentifier: CellIdentifier,
     dataTableOid: number,
     dataColumnOid: number,
@@ -140,6 +177,10 @@ type MultiSelectDropdownCellContent = {
 
 export type CellContent = { readonly: ReadonlyCellContent } 
 | { textEntry: TextEntryCellContent }
+| { integerEntry: IntegerEntryCellContent }
+| { numberEntry: NumberEntryCellContent }
+| { dateEntry: DateEntryCellContent }
+| { datetimeEntry: DatetimeEntryCellContent }
 | { checkboxEntry: CheckboxEntryCellContent } 
 | { fileEntry: FileEntryCellContent }
 | { imageEntry: ImageEntryCellContent }
@@ -147,9 +188,9 @@ export type CellContent = { readonly: ReadonlyCellContent }
 | { objectLink: ObjectLinkCellContent } 
 | { singleSelectDropdown: SingleSelectDropdownCellContent } 
 | { multiSelectDropdown: MultiSelectDropdownCellContent };
-export type CellStream = CellContent
-| { row: RowCell } 
-| { addNewRowButton: AddNewRowButtonCell };
+export type CellStream = { cell: [CellContent] }
+| { row: SchemaRow } 
+| { addNewRowButton: AddNewRowButton };
 
 
 export type DataCellEntry = {
@@ -174,11 +215,11 @@ export type DataCellEntry = {
         }
     } | {
         date: {
-            value: number | null 
+            value: string | null 
         } 
     } | {
         datetime: {
-            value: number | null 
+            value: string | null 
         }
     } | {
         file: {
@@ -204,12 +245,31 @@ export class Cell {
     elem: HTMLTableCellElement;
     content: CellContent;
 
+    /**
+     * Begins editing the cell.
+     */
+    startEditingAsync: () => Promise<void> = async () => {};
+
+    /**
+     * Stops editing the cell.
+     * @returns The Cell that should replace this one.
+     */
+    stopEditingAsync: () => Promise<void> = async () => {};
+
     constructor(cwd: Document, content: CellContent) {
         this.content = content;
 
         // Construct the HTMLElement
         if ('textEntry' in content) {
             this.elem = this.#constructTextEntryCell(cwd, content.textEntry);
+        } else if ('integerEntry' in content) {
+            this.elem = this.#constructIntegerEntryCell(cwd, content.integerEntry);
+        } else if ('numberEntry' in content) {
+            this.elem = this.#constructNumberEntryCell(cwd, content.numberEntry);
+        } else if ('dateEntry' in content) {
+            this.elem = this.#constructDateEntryCell(cwd, content.dateEntry);
+        } else if ('datetimeEntry' in content) {
+            this.elem = this.#constructDatetimeEntryCell(cwd, content.datetimeEntry);
         } else if ('checkboxEntry' in content) {
             this.elem = this.#constructCheckboxEntryCell(cwd, content.checkboxEntry);
         } else if ('fileEntry' in content) {
@@ -227,8 +287,6 @@ export class Cell {
         } else {
             this.elem = this.#constructReadonlyCell(cwd, content.readonly)
         }
-
-        // Add listeners
     }
 
     /**
@@ -241,6 +299,11 @@ export class Cell {
         elem.setAttribute('tooltip', existingTooltip ? `${existingTooltip} ${tooltip}` : tooltip);
     }
 
+    /**
+     * Add tooltips to indicate that there has been a failure in one of the column's validation checks.
+     * @param elem The HTMLElement for the cell.
+     * @param validationFailures The column's failed validation checks.
+     */
     #addValidationFailureTooltips(elem: HTMLElement, validationFailures: ValidationFailures) {
         if (validationFailures.length > 0) {
             elem.classList.add('cell-error');
@@ -248,22 +311,253 @@ export class Cell {
         }
     }
 
-    #constructReadonlyCell(cwd: Document, content: ReadonlyCellContent): HTMLTableCellElement {
-        const elem: HTMLTableCellElement = cwd.createElement('td');
-        elem.classList.add('cell-readonly');
-        if (content.label == null)
-            elem.classList.add('cell-null');
 
-        elem.innerText = content.label ?? '';
-        this.#addValidationFailureTooltips(elem, content.validationFailures);
+
+    #constructReadonlyText(cwd: Document, div: HTMLDivElement, label: string, format: CellContentTextFormat) {
+        if (format == 'plain') {
+            div.innerText = label;
+        } else if (format == 'jSON') {
+            
+        }
+    }
+
+    /**
+     * Construct a cell for free-text entry.
+     * @param cwd 
+     * @param content The content of a text entry cell.
+     */
+    #constructTextEntryCell(cwd: Document, content: TextEntryCellContent): HTMLTableCellElement {
+        const elem: HTMLTableCellElement = cwd.createElement('td');
+        elem.setAttribute('label', content.label || '');
+
+        const readonly: HTMLDivElement = cwd.createElement('div');
+        readonly.innerText = content.label || '';
+        const input: HTMLInputElement = cwd.createElement('input');
+        input.type = 'text';
+        input.addEventListener('blur', this.stopEditingAsync);
+        input.addEventListener('keydown', async (e) => {
+            if (e.key == 'Enter' && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+                e.preventDefault();
+                await this.stopEditingAsync();
+            }
+        });
+
+        // When you start editing, swap the readonly DIV for an editable INPUT
+        this.startEditingAsync = async () => {
+            input.value = content.label || '';
+
+            // Remove the readonly text, insert the input
+            elem.classList.add('editing');
+            elem.removeChild(readonly);
+            elem.appendChild(input);
+        };
+
+        // When you stop editing, update the database and swap the editable INPUT for the readonly DIV
+        this.stopEditingAsync = async () => {
+            const label: string | null = input.value || null;
+            if (label !== content.label) {
+                // Update the cell contents in the database
+                await executeAsync({
+                    editCellContents: {
+                        tableOid: content.dataTableOid,
+                        columnOid: content.dataColumnOid,
+                        rowOid: content.dataRowOid,
+                        value: {
+                            text: {
+                                value: label
+                            }
+                        }
+                    }
+                }).catch(async (e) => {
+                    await message(e, {
+                        title: 'Unable to update cell contents.',
+                        kind: 'error'
+                    });
+                });
+            }
+
+            // Remove the input, restore the readonly text
+            elem.classList.remove('editing');
+            elem.removeChild(input);
+            elem.appendChild(readonly);
+        };
+
         return elem;
     }
 
-    #constructTextEntryCell(cwd: Document, content: TextEntryCellContent): HTMLTableCellElement {
+    /**
+     * Construct a cell for free-text integer entry.
+     * @param cwd 
+     * @param content The content of an integer entry cell.
+     */
+    #constructIntegerEntryCell(cwd: Document, content: IntegerEntryCellContent): HTMLTableCellElement {
+        const elem: HTMLTableCellElement = cwd.createElement('td');
+        elem.setAttribute('label', content.value?.toString() || '');
+
+        const readonly: HTMLDivElement = cwd.createElement('div');
+        readonly.innerText = content.value?.toString() || '';
+        const input: HTMLInputElement = cwd.createElement('input');
+        input.type = 'text';
+        input.addEventListener('blur', this.stopEditingAsync);
+        input.addEventListener('keydown', async (e) => {
+            if (e.key == 'Enter' && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+                e.preventDefault();
+                await this.stopEditingAsync();
+            }
+        });
+
+        // When you start editing, swap the readonly DIV for an editable INPUT
+        this.startEditingAsync = async () => {
+            input.value = content.value?.toString() || '';
+
+            // Remove the readonly text, insert the input
+            elem.classList.add('editing');
+            elem.removeChild(readonly);
+            elem.appendChild(input);
+        };
+
+        // When you stop editing, update the database and swap the editable INPUT for the readonly DIV
+        this.stopEditingAsync = async () => {
+            // Validate the entered value
+            const parsedValue: number = parseInt(input.value);
+            if (Number.isNaN(parsedValue) && input.value) {
+                await message(`Entered value is not an integer!`, {
+                    kind: 'warning'
+                });
+                return;
+            }
+
+            const value: number | null = Number.isNaN(parsedValue) ? null : parsedValue;
+            if (value !== content.value) {
+                // Update the cell contents in the database
+                await executeAsync({
+                    editCellContents: {
+                        tableOid: content.dataTableOid,
+                        columnOid: content.dataColumnOid,
+                        rowOid: content.dataRowOid,
+                        value: {
+                            integer: {
+                                value: value
+                            }
+                        }
+                    }
+                }).catch(async (e) => {
+                    await message(e, {
+                        title: 'Unable to update cell contents.',
+                        kind: 'error'
+                    });
+                });
+            }
+
+            // Remove the input, restore the readonly text
+            elem.classList.remove('editing');
+            elem.removeChild(input);
+            elem.appendChild(readonly);
+        };
+
+        return elem;
+    }
+
+    /**
+     * Construct a cell for free-text number entry.
+     * @param cwd 
+     * @param content The content of a number entry cell.
+     */
+    #constructNumberEntryCell(cwd: Document, content: NumberEntryCellContent): HTMLTableCellElement {
+        const elem: HTMLTableCellElement = cwd.createElement('td');
+        elem.setAttribute('label', content.value?.toString() || '');
+
+        const readonly: HTMLDivElement = cwd.createElement('div');
+        readonly.innerText = content.value?.toString() || '';
+        const input: HTMLInputElement = cwd.createElement('input');
+        input.type = 'text';
+        input.addEventListener('blur', this.stopEditingAsync);
+        input.addEventListener('keydown', async (e) => {
+            if (e.key == 'Enter' && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+                e.preventDefault();
+                await this.stopEditingAsync();
+            }
+        });
+
+        // When you start editing, swap the readonly DIV for an editable INPUT
+        this.startEditingAsync = async () => {
+            input.value = content.value?.toString() || '';
+
+            // Remove the readonly text, insert the input
+            elem.classList.add('editing');
+            elem.removeChild(readonly);
+            elem.appendChild(input);
+        };
+
+        // When you stop editing, update the database and swap the editable INPUT for the readonly DIV
+        this.stopEditingAsync = async () => {
+            // Validate the entered value
+            const parsedValue: number = parseFloat(input.value);
+            if (Number.isNaN(parsedValue) && input.value) {
+                await message(`Entered value is not a number!`, {
+                    kind: 'warning'
+                });
+                return;
+            }
+
+            const value: number | null = Number.isNaN(parsedValue) ? null : parsedValue;
+            if (value !== content.value) {
+                // Update the cell contents in the database
+                await executeAsync({
+                    editCellContents: {
+                        tableOid: content.dataTableOid,
+                        columnOid: content.dataColumnOid,
+                        rowOid: content.dataRowOid,
+                        value: {
+                            number: {
+                                value: value
+                            }
+                        }
+                    }
+                }).catch(async (e) => {
+                    await message(e, {
+                        title: 'Unable to update cell contents.',
+                        kind: 'error'
+                    });
+                });
+            }
+
+            // Remove the input, restore the readonly text
+            elem.classList.remove('editing');
+            elem.removeChild(input);
+            elem.appendChild(readonly);
+        };
+
+        return elem;
+    }
+
+
+
+    /**
+     * Construct a cell for date entry.
+     * @param cwd 
+     * @param content The content of a date entry cell.
+     */
+    #constructDateEntryCell(cwd: Document, content: DateEntryCellContent): HTMLTableCellElement {
         const elem: HTMLTableCellElement = cwd.createElement('td');
         if (content.label == null)
             elem.classList.add('cell-null');
+        return elem;
     }
+
+    /**
+     * Construct a cell for datetime entry.
+     * @param cwd 
+     * @param content The content of a datetime entry cell.
+     */
+    #constructDatetimeEntryCell(cwd: Document, content: DatetimeEntryCellContent): HTMLTableCellElement {
+        const elem: HTMLTableCellElement = cwd.createElement('td');
+        if (content.label == null)
+            elem.classList.add('cell-null');
+        return elem;
+    }
+
+
 
     /**
      * Construct a cell that contains a checkbox that toggles the boolean value of a cell.
@@ -340,6 +634,16 @@ export class Cell {
     #constructMultiSelectDropdownCell(cwd: Document, content: MultiSelectDropdownCellContent): HTMLTableCellElement {
         
     }
+
+    #constructReadonlyCell(cwd: Document, content: ReadonlyCellContent): HTMLTableCellElement {
+        const elem: HTMLTableCellElement = cwd.createElement('td');
+        elem.classList.add('readonly');
+        elem.setAttribute('label', content.label || '');
+
+        elem.innerText = content.label ?? '';
+        this.#addValidationFailureTooltips(elem, content.validationFailures);
+        return elem;
+    }
 }
 
 
@@ -384,7 +688,7 @@ function addValidationFailureTooltips(elem: HTMLElement, validationFailures: Val
 
 
 
-function updateRowIndexCell(cell: RowCell, elem: HTMLTableCellElement) {
+function updateRowIndexCell(cell: SchemaRow, elem: HTMLTableCellElement) {
     elem.innerText = `${cell.index}`;
 
     // Attach context menu

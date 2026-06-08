@@ -1,7 +1,17 @@
 import { CellContent, CellClipboardData } from "./cell";
 import { FullMetadata as ColumnFullMetadata, ColumnType } from "./column";
 
+/**
+ * The index for a cell in the grid.
+ */
+type GridCellIndex = {
+    rowIndex: number,
+    columnIndex: number
+};
 
+/**
+ * A cell in the grid.
+ */
 class GridCell {
     /**
      * The HTMLElement representing the cell in the grid.
@@ -21,18 +31,63 @@ class GridCell {
     }
 }
 
-type GridRow = {
+class GridRow {
     /**
-     * The index, listed at the start of the row.
+     * The row's index element, listed at the start of the row.
      */
-    index: HTMLTableCellElement,
+    index: HTMLTableCellElement;
 
     /**
      * The content of each column.
      */
-    cells: {[key: number]: GridCell}
+    cells: GridCell[] = [];
 };
 
+class GridColumn {
+    /**
+     * The column's header element, listed at the head of the column.
+     */
+    header: HTMLElement;
+
+    /**
+     * The column's metadata.
+     */
+    metadata: ColumnFullMetadata;
+
+    /**
+     * The stylesheet specific to this column.
+     */
+    stylesheet: HTMLStyleElement;
+
+    constructor(cwd: Document, metadata: ColumnFullMetadata) {
+        this.metadata = metadata;
+
+        // Construct the header element
+        this.header = cwd.createElement('th');
+        this.header.classList.add('header', `column${metadata.oid}`);
+
+        // Insert the stylesheet
+        this.stylesheet = cwd.createElement('style');
+        this.stylesheet.id = `column${metadata.oid}-stylesheet`;
+        cwd.head.appendChild(this.stylesheet);
+    }
+
+    /**
+     * Reloads the column.
+     */
+    reload() {
+        // Reload the column name
+        this.header.innerText = `${(this.metadata.isPrimaryKey ? '🔑 ' : '')}${this.metadata.name}`;
+
+        // Reload the stylesheet
+        this.stylesheet.innerText = `.column${this.metadata.oid} { ${this.metadata.style} }`;
+    }
+}
+
+
+export type GridOptions = {
+    transposed?: boolean
+};
 
 export class Grid {
     /**
@@ -54,12 +109,19 @@ export class Grid {
     /**
      * The columns of the grid.
      */
-    #columns: {[key: number]: ColumnFullMetadata} = {};
+    #columns: GridColumn[] = [];
 
     /**
      * The rows of the grid.
      */
     #rows: GridRow[] = [];
+
+    /**
+     * True if the columns go down vertically and the rows go right horizontally.
+     * False if the columns go right horizontally and the rows go down vertically.
+     */
+    #transposed: boolean;
+
 
     /**
      * The cells that are currently selected. More than one cell may be selected at a time.
@@ -75,10 +137,7 @@ export class Grid {
     /**
      * The cell that is currently focused. Only one cell can be focused at a time.
      */
-    #focusedCell: {
-        rowIndex: number,
-        columnOid: number
-    } | null = null;
+    #focusedCell: GridCellIndex | null = null;
 
     /**
      * The current mode.
@@ -91,12 +150,14 @@ export class Grid {
      * Code blatantly lifted (and slightly modified) from https://github.com/renanlecaro/importabular/blob/master/src/index.js
      * @param columns The columns of the grid.
      */
-    constructor(columns: {[key: number]: ColumnFullMetadata}) {
-        this.#columns = columns;
-
+    constructor(columns: ColumnFullMetadata[], options: GridOptions) {
+        const gridOptions = Object.assign({
+            transposed: false
+        }, options);
+        this.#transposed = gridOptions.transposed;
 
         /**
-         * First, set up the grid in the DOM.
+         * First, set up the DOM container.
          */
 
         // Create IFrame.
@@ -118,7 +179,18 @@ export class Grid {
         const body = cwd.createElement('body');
         html.appendChild(body);
 
-        // Start constructing the table
+
+        /**
+         * Construct the headers for the table
+         */
+
+        this.#columns = columns.map(c => new GridColumn(cwd, c));
+
+        
+        /**
+         * Start constructing the table
+         */ 
+
         const table = document.createElement("table");
         body.appendChild(table);
 
@@ -126,16 +198,6 @@ export class Grid {
         const thead = document.createElement("THEAD");
         const tr = document.createElement("TR");
         thead.appendChild(tr);
-        for (const columnOid in this.#columns) {
-            const column = this.#columns[columnOid];
-
-            const th = document.createElement("TH");
-            const div = document.createElement("div");
-            div.innerHTML = column.name;
-            th.appendChild(div);
-            tr.appendChild(th);
-
-        }
         table.appendChild(thead);
 
         // Construct the body of the table

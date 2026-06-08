@@ -86,33 +86,67 @@ pub enum CellIdentifier {
 }
 
 
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all="camelCase")]
+pub enum CellTextFormat {
+    Plain,
+    JSON
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum Cell {
-    MaxIndex(i64),
-    Row {
-        row_identifier: Option<(i64, i64)>,
-        index: i64,
-        fixed_parent_datasource: Option<(i64, i64, column::FullMetadata)>,
-        validation_failures: Vec<FailedValidation>
-    },
-
-    AddNewRowButton {
-        table_oid: i64,
-        fixed_parent_datasource: Option<(i64, i64, column::FullMetadata)>,
-        column_span: usize
-    },
-
     /// Virtual cell. Represented by a readonly label that cannot be edited.
     Readonly {
         cell_identifier: CellIdentifier,
         label: Option<String>,
+        format: CellTextFormat,
         validation_failures: Vec<FailedValidation>
     },
 
     /// Data cell. Represented by a text entry field.
     TextEntry {
+        cell_identifier: CellIdentifier,
+        data_table_oid: i64,
+        data_column_oid: i64,
+        data_row_oid: i64,
+        label: Option<String>,
+        format: CellTextFormat,
+        validation_failures: Vec<FailedValidation>
+    },
+
+    /// Data cell. Represented by a text entry field, where the entered value is restricted to an integer.
+    IntegerEntry {
+        cell_identifier: CellIdentifier,
+        data_table_oid: i64,
+        data_column_oid: i64,
+        data_row_oid: i64,
+        value: Option<i64>,
+        validation_failures: Vec<FailedValidation>
+    },
+
+    /// Data cell. Represented by a text entry field, where the entered value is restricted to a number.
+    NumberEntry {
+        cell_identifier: CellIdentifier,
+        data_table_oid: i64,
+        data_column_oid: i64,
+        data_row_oid: i64,
+        value: Option<f64>,
+        validation_failures: Vec<FailedValidation>
+    },
+
+    /// Data cell. Represented by a text entry field, where the entered value is restricted to a date.
+    DateEntry {
+        cell_identifier: CellIdentifier,
+        data_table_oid: i64,
+        data_column_oid: i64,
+        data_row_oid: i64,
+        label: Option<String>,
+        validation_failures: Vec<FailedValidation>
+    },
+
+    /// Data cell. Represented by a text entry field, where the entered value is restricted to a datetime.
+    DatetimeEntry {
         cell_identifier: CellIdentifier,
         data_table_oid: i64,
         data_column_oid: i64,
@@ -204,7 +238,6 @@ pub enum Cell {
 }
 
 
-
 impl Cell {
     /// Retrieve a particular cell.
     pub fn get(cell_identifier: CellIdentifier) -> Self {
@@ -268,12 +301,56 @@ impl Cell {
                                     }
                                 }
                             }
-                            column_type::Primitive::Integer
-                            | column_type::Primitive::Number
-                            | column_type::Primitive::Text
-                            | column_type::Primitive::JSON
-                            | column_type::Primitive::Date
-                            | column_type::Primitive::Datetime => {
+                            column_type::Primitive::Integer => {
+                                let value_sql: String = format!("SELECT COLUMN{column_oid}_VALUE AS VALUE FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
+                                let (value, value_e) = match conn.query_one(&value_sql, params![row_oid], |row| row.get::<_, Option<i64>>("VALUE")) {
+                                    Ok(value) => (value, None),
+                                    Err(e) => (None, Some(e))
+                                };
+
+                                Self::IntegerEntry  {
+                                    data_table_oid: table_oid.clone(),
+                                    data_column_oid: column_oid.clone(),
+                                    data_row_oid: row_oid.clone(),
+                                    value,
+                                    cell_identifier: CellIdentifier::DataCell { table_oid, column_oid, row_oid },
+                                    validation_failures: {
+                                        if let Some(value_e) = value_e {
+                                            vec![FailedValidation {
+                                                message: format!("{value_e}")
+                                            }]
+                                        } else {
+                                            Vec::new()
+                                        }
+                                    }
+                                }
+                            }
+                            column_type::Primitive::Number => {
+                                let value_sql: String = format!("SELECT COLUMN{column_oid}_VALUE AS VALUE FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
+                                let (value, value_e) = match conn.query_one(&value_sql, params![row_oid], |row| row.get::<_, Option<f64>>("VALUE")) {
+                                    Ok(value) => (value, None),
+                                    Err(e) => (None, Some(e))
+                                };
+
+                                Self::NumberEntry  {
+                                    data_table_oid: table_oid.clone(),
+                                    data_column_oid: column_oid.clone(),
+                                    data_row_oid: row_oid.clone(),
+                                    value,
+                                    cell_identifier: CellIdentifier::DataCell { table_oid, column_oid, row_oid },
+                                    validation_failures: {
+                                        if let Some(value_e) = value_e {
+                                            vec![FailedValidation {
+                                                message: format!("{value_e}")
+                                            }]
+                                        } else {
+                                            Vec::new()
+                                        }
+                                    }
+                                }
+                            }
+                            column_type::Primitive::Text
+                            | column_type::Primitive::JSON => {
                                 let label_sql: String = format!("SELECT COLUMN{column_oid}_LABEL AS LABEL FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
                                 let (label, label_e) = match conn.query_one(&label_sql, params![row_oid], |row| row.get::<_, Option<String>>("LABEL")) {
                                     Ok(label) => (label, None),
@@ -281,6 +358,54 @@ impl Cell {
                                 };
 
                                 Self::TextEntry  {
+                                    data_table_oid: table_oid.clone(),
+                                    data_column_oid: column_oid.clone(),
+                                    data_row_oid: row_oid.clone(),
+                                    label,
+                                    cell_identifier: CellIdentifier::DataCell { table_oid, column_oid, row_oid },
+                                    validation_failures: {
+                                        if let Some(label_e) = label_e {
+                                            vec![FailedValidation {
+                                                message: format!("{label_e}")
+                                            }]
+                                        } else {
+                                            Vec::new()
+                                        }
+                                    }
+                                }
+                            }
+                            column_type::Primitive::Date => {
+                                let label_sql: String = format!("SELECT COLUMN{column_oid}_LABEL AS LABEL FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
+                                let (label, label_e) = match conn.query_one(&label_sql, params![row_oid], |row| row.get::<_, Option<String>>("LABEL")) {
+                                    Ok(label) => (label, None),
+                                    Err(e) => (None, Some(e))
+                                };
+
+                                Self::DateEntry  {
+                                    data_table_oid: table_oid.clone(),
+                                    data_column_oid: column_oid.clone(),
+                                    data_row_oid: row_oid.clone(),
+                                    label,
+                                    cell_identifier: CellIdentifier::DataCell { table_oid, column_oid, row_oid },
+                                    validation_failures: {
+                                        if let Some(label_e) = label_e {
+                                            vec![FailedValidation {
+                                                message: format!("{label_e}")
+                                            }]
+                                        } else {
+                                            Vec::new()
+                                        }
+                                    }
+                                }
+                            }
+                            column_type::Primitive::Datetime => {
+                                let label_sql: String = format!("SELECT COLUMN{column_oid}_LABEL AS LABEL FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
+                                let (label, label_e) = match conn.query_one(&label_sql, params![row_oid], |row| row.get::<_, Option<String>>("LABEL")) {
+                                    Ok(label) => (label, None),
+                                    Err(e) => (None, Some(e))
+                                };
+
+                                Self::DatetimeEntry  {
                                     data_table_oid: table_oid.clone(),
                                     data_column_oid: column_oid.clone(),
                                     data_row_oid: row_oid.clone(),
@@ -814,7 +939,34 @@ impl Cell {
             }
         }
     }
+}
 
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all="camelCase", rename_all_fields="camelCase")]
+pub enum SchemaCellStream {
+    /// Indicates the total number of rows in the schema, for purposes of pagination.
+    MaxIndex(i64),
+    
+    /// Indicates the start of a new row in the schema.
+    Row {
+        row_identifier: Option<(i64, i64)>,
+        index: i64,
+        fixed_parent_datasource: Option<(i64, i64, column::FullMetadata)>,
+        validation_failures: Vec<FailedValidation>
+    },
+
+    /// A button to add a new row to the schema.
+    AddNewRowButton {
+        table_oid: i64,
+        fixed_parent_datasource: Option<(i64, i64, column::FullMetadata)>,
+        column_span: usize
+    },
+
+    /// A cell in the schema.
+    Cell(Cell)
+}
+
+impl SchemaCellStream {
     /// Sends all cells on a page in a schema.
     pub fn query_by_schema(mut column_sender: Sender<column::FullMetadata>, mut cell_sender: Sender<Self>, schema_oid: i64, filters: Vec<(String, i64)>, limit: RetrievalLimit) -> Result<(), Error> {
         let conn: Connection = db::open()?;
@@ -895,7 +1047,7 @@ impl Cell {
                 let value_ord: String = format!("COLUMN{}_VALUE", c.oid);
                 let label_ord: String = format!("COLUMN{}_LABEL", c.oid);
 
-                cell_sender.send(match &c.column_type {
+                cell_sender.send(Self::Cell(match &c.column_type {
                     column_type::ColumnType::Primitive(prim) => {
                         let data_table_oid: i64 = c.schema.oid.clone();
                         let data_column_oid: i64 = c.oid.clone();
@@ -923,7 +1075,7 @@ impl Cell {
                                     Err(e) => (None, Some(e))
                                 };
 
-                                Self::CheckboxEntry {
+                                Cell::CheckboxEntry {
                                     data_table_oid,
                                     data_column_oid,
                                     data_row_oid,
@@ -951,7 +1103,7 @@ impl Cell {
                                     Err(e) => (None, Some(e))
                                 };
 
-                                Self::TextEntry  {
+                                Cell::TextEntry  {
                                     data_table_oid,
                                     data_column_oid,
                                     data_row_oid,
@@ -978,7 +1130,7 @@ impl Cell {
                                     Err(e) => (None, Some(e))
                                 };
 
-                                Self::FileEntry {
+                                Cell::FileEntry {
                                     data_table_oid,
                                     data_column_oid,
                                     data_row_oid,
@@ -1019,7 +1171,7 @@ impl Cell {
                                     (None, None)
                                 };
 
-                                Self::ImageEntry {
+                                Cell::ImageEntry {
                                     data_table_oid,
                                     data_column_oid,
                                     data_row_oid,
@@ -1074,7 +1226,7 @@ impl Cell {
                             Err(e) => (None, Some(e))
                         };
 
-                        Self::ObjectLink {
+                        Cell::ObjectLink {
                             data_table_oid,
                             data_column_oid,
                             data_row_oid,
@@ -1127,7 +1279,7 @@ impl Cell {
                             Err(e) => (None, Some(e))
                         };
 
-                        Self::SingleSelectDropdown {
+                        Cell::SingleSelectDropdown {
                             data_table_oid,
                             data_column_oid,
                             data_row_oid,
@@ -1182,7 +1334,7 @@ impl Cell {
                             Vec::new()
                         };
 
-                        Self::MultiSelectDropdown {
+                        Cell::MultiSelectDropdown {
                             data_table_oid,
                             data_column_oid,
                             data_row_oid,
@@ -1283,7 +1435,7 @@ impl Cell {
                                                         (false, None)
                                                     };
 
-                                                    Self::CheckboxEntry {
+                                                    Cell::CheckboxEntry {
                                                         data_table_oid,
                                                         data_column_oid,
                                                         data_row_oid,
@@ -1305,7 +1457,7 @@ impl Cell {
                                                 | column_type::Primitive::JSON
                                                 | column_type::Primitive::Date
                                                 | column_type::Primitive::Datetime => {
-                                                    Self::TextEntry  {
+                                                    Cell::TextEntry  {
                                                         data_table_oid,
                                                         data_column_oid,
                                                         data_row_oid,
@@ -1324,7 +1476,7 @@ impl Cell {
                                                         (None, None)
                                                     };
 
-                                                    Self::FileEntry {
+                                                    Cell::FileEntry {
                                                         data_table_oid,
                                                         data_column_oid,
                                                         data_row_oid,
@@ -1363,7 +1515,7 @@ impl Cell {
                                                         (None, None)
                                                     };
 
-                                                    Self::ImageEntry {
+                                                    Cell::ImageEntry {
                                                         data_table_oid,
                                                         data_column_oid,
                                                         data_row_oid,
@@ -1397,7 +1549,7 @@ impl Cell {
                                                 (None, None)
                                             };
 
-                                            Self::ObjectLink {
+                                            Cell::ObjectLink {
                                                 data_table_oid,
                                                 data_column_oid,
                                                 data_row_oid,
@@ -1428,7 +1580,7 @@ impl Cell {
                                                 (None, None)
                                             };
 
-                                            Self::SingleSelectDropdown {
+                                            Cell::SingleSelectDropdown {
                                                 data_table_oid,
                                                 data_column_oid,
                                                 data_row_oid,
@@ -1455,7 +1607,7 @@ impl Cell {
                                                 Vec::new()
                                             };
 
-                                            Self::MultiSelectDropdown {
+                                            Cell::MultiSelectDropdown {
                                                 data_table_oid,
                                                 data_column_oid,
                                                 data_row_oid,
@@ -1467,7 +1619,7 @@ impl Cell {
                                             }
                                         }
                                         _ => {
-                                            Self::Readonly { 
+                                            Cell::Readonly { 
                                                 cell_identifier, 
                                                 label: None, 
                                                 validation_failures: {
@@ -1480,7 +1632,7 @@ impl Cell {
                                         }
                                     },
                                     Err(e) => {
-                                        Self::Readonly {  
+                                        Cell::Readonly {  
                                             label: None, 
                                             validation_failures: {
                                                 validation_failures.push(FailedValidation {
@@ -1493,14 +1645,14 @@ impl Cell {
                                     }
                                 }
                             } else {
-                                Self::Readonly {  
+                                Cell::Readonly {  
                                     label, 
                                     validation_failures: Vec::new(),
                                     cell_identifier
                                 }
                             }
                         } else {
-                            Self::Readonly {  
+                            Cell::Readonly {  
                                 label, 
                                 validation_failures: Vec::new(),
                                 cell_identifier
@@ -1515,7 +1667,7 @@ impl Cell {
                             full_reload_cell_dependencies: Vec::new() 
                         };
 
-                        Self::SchemaLink { 
+                        Cell::SchemaLink { 
                             label: Some(String::from("Subreport")), 
                             link_schema_oid: link_schema_oid.clone(), 
                             link_query_filter: query_filter.clone(), 
@@ -1523,7 +1675,7 @@ impl Cell {
                             cell_identifier
                         }
                     }
-                })?;
+                }))?;
             }
         }
 
@@ -1559,10 +1711,10 @@ pub enum DataCellValue {
         value: Option<f64>
     },
     Date {
-        value: Option<f64>
+        label: Option<String>
     },
     Datetime {
-        value: Option<f64>
+        label: Option<String>
     },
     Boolean {
         value: Option<bool>
@@ -1656,29 +1808,29 @@ impl DataCellEntry {
                 // Return the old value
                 DataCellValue::Number { value: old_value }
             }
-            DataCellValue::Date { value } => {
+            DataCellValue::Date { label } => {
                 // Store the old value
-                let sql_get: String = format!("SELECT COLUMN{} AS VALUE FROM TABLE{} WHERE OID = ?1", self.column_oid, self.table_oid);
-                let old_value: Option<f64> = trans.query_one(&sql_get, params![self.row_oid], |row| row.get("VALUE"))?;
+                let sql_get: String = format!("SELECT DATE(COLUMN{}, 'julianday') AS VALUE FROM TABLE{} WHERE OID = ?1", self.column_oid, self.table_oid);
+                let old_label: Option<String> = trans.query_one(&sql_get, params![self.row_oid], |row| row.get("VALUE"))?;
 
                 // Update with the new value
-                let sql_update: String = format!("UPDATE TABLE{} SET COLUMN{} = ?1 WHERE OID = ?2", self.table_oid, self.column_oid);
-                trans.execute(&sql_update, params![value, self.row_oid])?;
+                let sql_update: String = format!("UPDATE TABLE{} SET COLUMN{} = JULIANDAY(?1, 'start of day') WHERE OID = ?2", self.table_oid, self.column_oid);
+                trans.execute(&sql_update, params![label, self.row_oid])?;
 
                 // Return the old value
-                DataCellValue::Date { value: old_value }
+                DataCellValue::Date { label: old_label }
             }
-            DataCellValue::Datetime { value } => {
+            DataCellValue::Datetime { label } => {
                 // Store the old value
-                let sql_get: String = format!("SELECT COLUMN{} AS VALUE FROM TABLE{} WHERE OID = ?1", self.column_oid, self.table_oid);
-                let old_value: Option<f64> = trans.query_one(&sql_get, params![self.row_oid], |row| row.get("VALUE"))?;
+                let sql_get: String = format!("SELECT STRFTIME('%FT%TZ', COLUMN{}, 'julianday') AS VALUE FROM TABLE{} WHERE OID = ?1", self.column_oid, self.table_oid);
+                let old_label: Option<String> = trans.query_one(&sql_get, params![self.row_oid], |row| row.get("VALUE"))?;
 
                 // Update with the new value
-                let sql_update: String = format!("UPDATE TABLE{} SET COLUMN{} = ?1 WHERE OID = ?2", self.table_oid, self.column_oid);
-                trans.execute(&sql_update, params![value, self.row_oid])?;
+                let sql_update: String = format!("UPDATE TABLE{} SET COLUMN{} = JULIANDAY(?1) WHERE OID = ?2", self.table_oid, self.column_oid);
+                trans.execute(&sql_update, params![label, self.row_oid])?;
 
                 // Return the old value
-                DataCellValue::Datetime { value: old_value }
+                DataCellValue::Datetime { label: old_label }
             }
             DataCellValue::File { file } => {
                 // Store the old value
