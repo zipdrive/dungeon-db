@@ -3,7 +3,7 @@ import { FullMetadata as ColumnFullMetadata, Primitive, ColumnType } from "./col
 import { openDialogAsync } from "./dialog";
 import { executeAsync } from "./action";
 import { open, save, message, ask } from "@tauri-apps/plugin-dialog";
-import { DropdownValue, getCellAsync, getFileBase64Async, queryAsync, SelectedHierarchicalListItemMetadata } from "./query";
+import { DropdownValue, getCellAsync, getFileBase64Async, queryAsync, SelectedHierarchicalListItemMetadata, uploadFileAsync } from "./query";
 import { fileTypeFromBuffer, FileTypeResult } from "file-type";
 import { Channel } from "@tauri-apps/api/core";
 import { Menu, MenuItem } from "@tauri-apps/api/menu";
@@ -135,6 +135,7 @@ type ImageEntryCellContent = {
     dataColumnOid: number,
     dataRowOid: number,
     fileOid: number | null,
+    label: string | null,
     fileSrc: string | null,
     validationFailures: ValidationFailures
 };
@@ -151,8 +152,8 @@ type ObjectLinkCellContent = {
     dataColumnOid: number,
     dataRowOid: number,
     label: string | null,
-    objectSchemaOid: number,
-    objectQueryString: string | null,
+    linkSchemaOid: number,
+    linkQueryFilter: string | null,
     validationFailures: ValidationFailures
 };
 type SingleSelectDropdownCellContent = {
@@ -160,6 +161,7 @@ type SingleSelectDropdownCellContent = {
     dataTableOid: number,
     dataColumnOid: number,
     dataRowOid: number,
+    label: string | null,
     dropdownTableOid: number,
     dropdownRowOid: number | null,
     validationFailures: ValidationFailures
@@ -199,7 +201,7 @@ export type DataCellEntry = {
     rowOid: number,
     value: {
         text: {
-            value: string | null 
+            label: string | null 
         }
     } | {
         integer: {
@@ -215,15 +217,15 @@ export type DataCellEntry = {
         }
     } | {
         date: {
-            value: string | null 
+            label: string | null 
         } 
     } | {
         datetime: {
-            value: string | null 
+            label: string | null 
         }
     } | {
         file: {
-            file: File | null 
+            fileOid: number | null 
         }
     } | {
         object: {
@@ -248,16 +250,28 @@ export class Cell {
     /**
      * Begins editing the cell.
      */
-    startEditingAsync: () => Promise<void> = async () => {};
+    #startEditingAsync: () => Promise<void> = async () => {};
+
+    /**
+     * A callback function for when the user starts editing the cell.
+     */
+    #startEditingCallbackFn: (cell: Cell) => void;
 
     /**
      * Stops editing the cell.
      * @returns The Cell that should replace this one.
      */
-    stopEditingAsync: () => Promise<void> = async () => {};
+    #stopEditingAsync: () => Promise<void> = async () => {};
 
-    constructor(cwd: Document, content: CellContent) {
+    /**
+     * A callback function for when the user stops editing the cell.
+     */
+    #stopEditingCallbackFn: (cell: Cell) => void;
+
+    constructor(cwd: Document, content: CellContent, startEditingCallbackFn: (cell: Cell) => void, stopEditingCallbackFn: (cell: Cell) => void) {
         this.content = content;
+        this.#startEditingCallbackFn = startEditingCallbackFn;
+        this.#stopEditingCallbackFn = stopEditingCallbackFn;
 
         // Construct the HTMLElement
         if ('textEntry' in content) {
@@ -290,6 +304,26 @@ export class Cell {
     }
 
     /**
+     * The user starts editing the cell.
+     */
+    async startEditingAsync(): Promise<void> {
+        this.elem.classList.add('editing');
+        this.#startEditingCallbackFn(this);
+        await this.#startEditingAsync();
+    }
+
+    /**
+     * The user stops editing the cell.
+     */
+    async stopEditingAsync(): Promise<void> {
+        this.elem.classList.remove('editing');
+        this.#stopEditingCallbackFn(this);
+        await this.#stopEditingAsync();
+    }
+
+
+
+    /**
      * Add a tooltip to an HTML element.
      * @param elem The HTML element.
      * @param tooltip The tooltip to append.
@@ -306,20 +340,121 @@ export class Cell {
      */
     #addValidationFailureTooltips(elem: HTMLElement, validationFailures: ValidationFailures) {
         if (validationFailures.length > 0) {
-            elem.classList.add('cell-error');
+            elem.classList.add('error');
             this.#addTooltip(elem, validationFailures.map(f => f.message).reduce((acc, m) => `${acc} ${m}`));
         }
     }
 
 
 
-    #constructReadonlyText(cwd: Document, div: HTMLDivElement, label: string, format: CellContentTextFormat) {
+    /**
+     * Constructs a DIV to display readonly text.
+     * For JSON text, color-codes and beautifies the JSON.
+     * @param cwd 
+     * @param elem The parent HTMLElement.
+     * @param label The text to display.
+     * @param format The text format.
+     * @returns 
+     */
+    #constructLabel(cwd: Document, elem: HTMLElement, label: string, format: CellContentTextFormat): HTMLDivElement {
+        const div: HTMLDivElement = cwd.createElement('div');
+        div.classList.add('label');
+
         if (format == 'plain') {
+            elem.classList.add('plain');
             div.innerText = label;
         } else if (format == 'jSON') {
-            
+            elem.classList.add('json');
+            if (label) {
+                try {
+                    function constructSpan(parent: HTMLElement, obj: any, level: number) {
+                        const span: HTMLSpanElement = cwd.createElement('span');
+                        span.setAttribute('level', level.toString());
+                        if (Array.isArray(obj)) {
+                            span.classList.add('array');
+
+                            const openDelimiter: HTMLSpanElement = cwd.createElement('span');
+                            openDelimiter.classList.add('delimiter');
+                            openDelimiter.innerText = '[';
+                            span.appendChild(openDelimiter);
+
+                            const firstBreak = cwd.createTextNode('\n\t');
+                            span.appendChild(firstBreak);
+
+                            for (let k = 0; k < obj.length; ++k) {
+                                const value = obj[k];
+                                constructSpan(span, value, level + 1);
+
+                                if (k < obj.length - 1) {
+                                    const commaBreak = cwd.createTextNode(',\n\t');
+                                    span.appendChild(commaBreak);
+                                } else {
+                                    const noCommaBreak = cwd.createTextNode('\n');
+                                    span.appendChild(noCommaBreak);
+                                }
+                            }
+
+                            const closeDelimiter: HTMLSpanElement = cwd.createElement('span');
+                            closeDelimiter.classList.add('delimiter');
+                            closeDelimiter.innerText = ']';
+                            span.appendChild(closeDelimiter);
+                        } else if (typeof obj === 'string' || obj instanceof String) {
+                            span.classList.add('string');
+                            span.innerText = `"${obj.replace('\\', '\\\\').replace('"', '\\"')}"`;
+                        } else if (typeof obj === 'boolean') {
+                            span.classList.add('boolean');
+                            span.innerText = obj ? 'true' : 'false';
+                        } else if (typeof obj === 'number' || typeof obj === 'bigint') {
+                            span.classList.add('number');
+                            span.innerText = obj.toString();
+                        } else {
+                            span.classList.add('object');
+
+                            const openDelimiter: HTMLSpanElement = cwd.createElement('span');
+                            openDelimiter.classList.add('delimiter');
+                            openDelimiter.innerText = '{';
+                            span.appendChild(openDelimiter);
+
+                            const firstBreak = cwd.createTextNode('\n\t');
+                            span.appendChild(firstBreak);
+
+                            const entries = Object.entries(obj);
+                            for (let k = 0; k < entries.length; ++k) {
+                                const [key, value] = entries[k];
+                                constructSpan(span, key, level + 1);
+                                const colonBreak = cwd.createTextNode(': ');
+                                span.appendChild(colonBreak);
+                                constructSpan(span, value, level + 1);
+
+                                if (k < entries.length - 1) {
+                                    const commaBreak = cwd.createTextNode(',\n\t');
+                                    span.appendChild(commaBreak);
+                                } else {
+                                    const noCommaBreak = cwd.createTextNode('\n');
+                                    span.appendChild(noCommaBreak);
+                                }
+                            }
+
+                            const closeDelimiter: HTMLSpanElement = cwd.createElement('span');
+                            closeDelimiter.classList.add('delimiter');
+                            closeDelimiter.innerText = '}';
+                            span.appendChild(closeDelimiter);
+                        }
+                        parent.appendChild(span);
+                    }
+
+                    const parsedObj = JSON.parse(label);
+                    constructSpan(div, parsedObj, 1);
+                } catch (e) {
+                    div.innerText = label;
+                    this.#addValidationFailureTooltips(elem, [{ message: `${e}` }]);
+                }
+            }
         }
+        elem.appendChild(div);
+        return div;
     }
+
 
     /**
      * Construct a cell for free-text entry.
@@ -330,8 +465,7 @@ export class Cell {
         const elem: HTMLTableCellElement = cwd.createElement('td');
         elem.setAttribute('label', content.label || '');
 
-        const readonly: HTMLDivElement = cwd.createElement('div');
-        readonly.innerText = content.label || '';
+        const readonly: HTMLDivElement = this.#constructLabel(cwd, elem, content.label || '', content.format);
         const input: HTMLInputElement = cwd.createElement('input');
         input.type = 'text';
         input.addEventListener('blur', this.stopEditingAsync);
@@ -343,18 +477,29 @@ export class Cell {
         });
 
         // When you start editing, swap the readonly DIV for an editable INPUT
-        this.startEditingAsync = async () => {
+        this.#startEditingAsync = async () => {
             input.value = content.label || '';
 
             // Remove the readonly text, insert the input
-            elem.classList.add('editing');
             elem.removeChild(readonly);
             elem.appendChild(input);
         };
 
         // When you stop editing, update the database and swap the editable INPUT for the readonly DIV
-        this.stopEditingAsync = async () => {
-            const label: string | null = input.value || null;
+        this.#stopEditingAsync = async () => {
+            const rawLabel: string | null = input.value || null;
+            let label: string | null;
+            if (content.format == 'jSON' && rawLabel) {
+                // Automatically attempt to beautify the JSON
+                try {
+                    label = JSON.stringify(JSON.parse(rawLabel), null, '\t');
+                } catch (e) {
+                    label = rawLabel;
+                }
+            } else {
+                label = rawLabel;
+            }
+
             if (label !== content.label) {
                 // Update the cell contents in the database
                 await executeAsync({
@@ -364,7 +509,7 @@ export class Cell {
                         rowOid: content.dataRowOid,
                         value: {
                             text: {
-                                value: label
+                                label: label
                             }
                         }
                     }
@@ -377,7 +522,6 @@ export class Cell {
             }
 
             // Remove the input, restore the readonly text
-            elem.classList.remove('editing');
             elem.removeChild(input);
             elem.appendChild(readonly);
         };
@@ -394,10 +538,10 @@ export class Cell {
         const elem: HTMLTableCellElement = cwd.createElement('td');
         elem.setAttribute('label', content.value?.toString() || '');
 
-        const readonly: HTMLDivElement = cwd.createElement('div');
-        readonly.innerText = content.value?.toString() || '';
+        const readonly: HTMLDivElement = this.#constructLabel(cwd, elem, content.value?.toString() || '', 'plain');
         const input: HTMLInputElement = cwd.createElement('input');
-        input.type = 'text';
+        input.type = 'number';
+        input.step = '1';
         input.addEventListener('blur', this.stopEditingAsync);
         input.addEventListener('keydown', async (e) => {
             if (e.key == 'Enter' && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
@@ -407,17 +551,16 @@ export class Cell {
         });
 
         // When you start editing, swap the readonly DIV for an editable INPUT
-        this.startEditingAsync = async () => {
+        this.#startEditingAsync = async () => {
             input.value = content.value?.toString() || '';
 
             // Remove the readonly text, insert the input
-            elem.classList.add('editing');
             elem.removeChild(readonly);
             elem.appendChild(input);
         };
 
         // When you stop editing, update the database and swap the editable INPUT for the readonly DIV
-        this.stopEditingAsync = async () => {
+        this.#stopEditingAsync = async () => {
             // Validate the entered value
             const parsedValue: number = parseInt(input.value);
             if (Number.isNaN(parsedValue) && input.value) {
@@ -450,7 +593,6 @@ export class Cell {
             }
 
             // Remove the input, restore the readonly text
-            elem.classList.remove('editing');
             elem.removeChild(input);
             elem.appendChild(readonly);
         };
@@ -467,10 +609,9 @@ export class Cell {
         const elem: HTMLTableCellElement = cwd.createElement('td');
         elem.setAttribute('label', content.value?.toString() || '');
 
-        const readonly: HTMLDivElement = cwd.createElement('div');
-        readonly.innerText = content.value?.toString() || '';
+        const readonly: HTMLDivElement = this.#constructLabel(cwd, elem, content.value?.toString() || '', 'plain');
         const input: HTMLInputElement = cwd.createElement('input');
-        input.type = 'text';
+        input.type = 'number';
         input.addEventListener('blur', this.stopEditingAsync);
         input.addEventListener('keydown', async (e) => {
             if (e.key == 'Enter' && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
@@ -480,17 +621,16 @@ export class Cell {
         });
 
         // When you start editing, swap the readonly DIV for an editable INPUT
-        this.startEditingAsync = async () => {
+        this.#startEditingAsync = async () => {
             input.value = content.value?.toString() || '';
 
             // Remove the readonly text, insert the input
-            elem.classList.add('editing');
             elem.removeChild(readonly);
             elem.appendChild(input);
         };
 
         // When you stop editing, update the database and swap the editable INPUT for the readonly DIV
-        this.stopEditingAsync = async () => {
+        this.#stopEditingAsync = async () => {
             // Validate the entered value
             const parsedValue: number = parseFloat(input.value);
             if (Number.isNaN(parsedValue) && input.value) {
@@ -523,7 +663,6 @@ export class Cell {
             }
 
             // Remove the input, restore the readonly text
-            elem.classList.remove('editing');
             elem.removeChild(input);
             elem.appendChild(readonly);
         };
@@ -540,8 +679,57 @@ export class Cell {
      */
     #constructDateEntryCell(cwd: Document, content: DateEntryCellContent): HTMLTableCellElement {
         const elem: HTMLTableCellElement = cwd.createElement('td');
-        if (content.label == null)
-            elem.classList.add('cell-null');
+        elem.setAttribute('label', content.label || '');
+
+        const readonly: HTMLDivElement = this.#constructLabel(cwd, elem, content.label || '', 'plain');
+        const input: HTMLInputElement = cwd.createElement('input');
+        input.type = 'date';
+        input.addEventListener('blur', this.stopEditingAsync);
+        input.addEventListener('keydown', async (e) => {
+            if (e.key == 'Enter' && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+                e.preventDefault();
+                await this.stopEditingAsync();
+            }
+        });
+
+        // When you start editing, swap the readonly DIV for an editable INPUT
+        this.#startEditingAsync = async () => {
+            input.value = content.label || '';
+
+            // Remove the readonly text, insert the input
+            elem.removeChild(readonly);
+            elem.appendChild(input);
+        };
+
+        // When you stop editing, update the database and swap the editable INPUT for the readonly DIV
+        this.#stopEditingAsync = async () => {
+            const label: string | null = input.value || null;
+            if (label !== content.label) {
+                // Update the cell contents in the database
+                await executeAsync({
+                    editCellContents: {
+                        tableOid: content.dataTableOid,
+                        columnOid: content.dataColumnOid,
+                        rowOid: content.dataRowOid,
+                        value: {
+                            date: {
+                                label: label
+                            }
+                        }
+                    }
+                }).catch(async (e) => {
+                    await message(e, {
+                        title: 'Unable to update cell contents.',
+                        kind: 'error'
+                    });
+                });
+            }
+
+            // Remove the input, restore the readonly text
+            elem.removeChild(input);
+            elem.appendChild(readonly);
+        };
+
         return elem;
     }
 
@@ -552,8 +740,57 @@ export class Cell {
      */
     #constructDatetimeEntryCell(cwd: Document, content: DatetimeEntryCellContent): HTMLTableCellElement {
         const elem: HTMLTableCellElement = cwd.createElement('td');
-        if (content.label == null)
-            elem.classList.add('cell-null');
+        elem.setAttribute('label', content.label || '');
+
+        const readonly: HTMLDivElement = this.#constructLabel(cwd, elem, content.label || '', 'plain');
+        const input: HTMLInputElement = cwd.createElement('input');
+        input.type = 'datetime-local';
+        input.addEventListener('blur', this.stopEditingAsync);
+        input.addEventListener('keydown', async (e) => {
+            if (e.key == 'Enter' && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+                e.preventDefault();
+                await this.stopEditingAsync();
+            }
+        });
+
+        // When you start editing, swap the readonly DIV for an editable INPUT
+        this.#startEditingAsync = async () => {
+            input.value = content.label || '';
+
+            // Remove the readonly text, insert the input
+            elem.removeChild(readonly);
+            elem.appendChild(input);
+        };
+
+        // When you stop editing, update the database and swap the editable INPUT for the readonly DIV
+        this.#stopEditingAsync = async () => {
+            const label: string | null = input.value || null;
+            if (label !== content.label) {
+                // Update the cell contents in the database
+                await executeAsync({
+                    editCellContents: {
+                        tableOid: content.dataTableOid,
+                        columnOid: content.dataColumnOid,
+                        rowOid: content.dataRowOid,
+                        value: {
+                            date: {
+                                label: label
+                            }
+                        }
+                    }
+                }).catch(async (e) => {
+                    await message(e, {
+                        title: 'Unable to update cell contents.',
+                        kind: 'error'
+                    });
+                });
+            }
+
+            // Remove the input, restore the readonly text
+            elem.removeChild(input);
+            elem.appendChild(readonly);
+        };
+
         return elem;
     }
 
@@ -562,85 +799,492 @@ export class Cell {
     /**
      * Construct a cell that contains a checkbox that toggles the boolean value of a cell.
      * @param cwd 
-     * @param content 
+     * @param content The content of a checkbox entry cell.
      * @returns 
      */
     #constructCheckboxEntryCell(cwd: Document, content: CheckboxEntryCellContent): HTMLTableCellElement {
         const elem: HTMLTableCellElement = cwd.createElement('td');
         if (content.isChecked == null)
-            elem.classList.add('cell-null');
+            elem.setAttribute('label', '');
+        else if (content.isChecked) 
+            elem.setAttribute('label', 'True');
+        else 
+            elem.setAttribute('label', 'False');
         
         // Add a checkbox to the cell
-        let checkboxNode: HTMLInputElement = document.createElement('input');
-        checkboxNode.classList.add('content-checkbox');
-        checkboxNode.type = 'checkbox';
-        checkboxNode.checked = content.isChecked ?? false;
-        elem.appendChild(checkboxNode);
-
-        elem.addEventListener('click', (_) => {
-            checkboxNode.checked = !checkboxNode.checked;
-            checkboxNode.dispatchEvent(new Event('input'));
-        });
-        checkboxNode.addEventListener('click', (e) => {
-            // Prevent the checkbox from getting triggered twice in a row
+        let inputLabel: HTMLLabelElement = document.createElement('label');
+        let input: HTMLInputElement = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = content.isChecked ?? false;
+        input.addEventListener('click', (e) => {
+            // The checkbox can only get triggered by startEditing()
             e.stopPropagation();
         });
+        inputLabel.appendChild(input);
+        elem.appendChild(inputLabel);
 
-        // Add event listener to change the value in the database when the checkbox is toggled
-        checkboxNode.addEventListener('input', async (_) => {
+        // When you start editing, swap whether the checkbox is checked, then immediately stop editing
+        this.#startEditingAsync = async () => {
+            input.checked = !input.checked;
+            await this.stopEditingAsync();
+        };
+
+        // When you stop editing, update the database and swap the editable INPUT for the readonly DIV
+        this.#stopEditingAsync = async () => {
+            const isChecked: boolean = input.checked;
+            if (isChecked !== content.isChecked) {
+                // Update the cell contents in the database
+                await executeAsync({
+                    editCellContents: {
+                        tableOid: content.dataTableOid,
+                        columnOid: content.dataColumnOid,
+                        rowOid: content.dataRowOid,
+                        value: {
+                            boolean: {
+                                value: isChecked
+                            }
+                        }
+                    }
+                }).catch(async (e) => {
+                    await message(e, {
+                        title: 'Unable to update cell contents.',
+                        kind: 'error'
+                    });
+                });
+            }
+        };
+
+        this.#addValidationFailureTooltips(elem, content.validationFailures);
+        return elem;
+    }
+
+
+
+    /**
+     * Construct a DIV that allows the user to tab between uploading a reference to a file and uploading the file to the database as a BLOB.
+     * @param cwd 
+     * @param content The content of a file/image entry cell.
+     * @returns 
+     */
+    #constructFileInput(cwd: Document, content: FileEntryCellContent): { div: HTMLDivElement, getFileOidAsync: () => Promise<number | null> } {
+        let fileOid: number | null = content.fileOid;
+
+        // Set up the tabs
+        const input: HTMLDivElement = cwd.createElement('div');
+        input.style.display = 'grid';
+        input.style.gridTemplateColumns = '1fr 1fr';
+        
+
+        // Set up tab for relative/absolute path
+        const pathTab: HTMLLabelElement = cwd.createElement('label');
+        pathTab.innerText = "Path";
+        pathTab.classList.add('tab');
+        input.appendChild(pathTab);
+        const pathRadio: HTMLInputElement = cwd.createElement('input');
+        pathRadio.type = 'radio';
+        pathRadio.name = `${content.cellIdentifier}`;
+        pathRadio.style.visibility = 'hidden';
+        pathTab.appendChild(pathRadio);
+        const pathTabContent: HTMLDivElement = cwd.createElement('div');
+        pathTabContent.style.display = 'grid';
+        pathTabContent.style.gridTemplateColumns = '1fr auto';
+        input.appendChild(pathTabContent);
+
+        // Text input for a path
+        const pathInput: HTMLInputElement = cwd.createElement('input');
+        pathInput.innerText = (content.label && !content.label.endsWith(')')) ? content.label : '';
+        pathTabContent.appendChild(pathInput);
+        
+        // Button for selecting a path
+        const pathUploadButton: HTMLImageElement = document.createElement('img');
+        pathUploadButton.alt = 'Upload';
+        pathUploadButton.src = './src-tauri/icons/upload.png';
+        pathUploadButton.addEventListener('click', async () => {
+            const filepath = await open({
+                title: 'Reference File by Path'
+            });
+            if (filepath) {
+                pathInput.value = filepath;
+            }
+        });
+        pathTabContent.appendChild(pathUploadButton);
+
+
+        // Set up tab for blob upload/download
+        const fileTab: HTMLLabelElement = cwd.createElement('label');
+        fileTab.innerText = "File";
+        fileTab.classList.add('tab');
+        input.appendChild(fileTab);
+        const fileRadio: HTMLInputElement = cwd.createElement('input');
+        fileRadio.type = 'radio';
+        fileRadio.name = `${content.cellIdentifier}`;
+        fileRadio.style.visibility = 'hidden';
+        fileTab.appendChild(fileRadio);
+        const fileTabContent: HTMLDivElement = cwd.createElement('div');
+        fileTabContent.style.display = 'grid';
+        fileTabContent.style.gridTemplateColumns = '1fr auto auto';
+        input.appendChild(fileTabContent);
+
+        // Label for filename
+        const fileLabel: HTMLDivElement = document.createElement('div');
+        fileLabel.innerText = content.label?.endsWith(')') ? content.label : '';
+        fileTabContent.appendChild(fileLabel);
+
+        // Button for directly uploading a file to the database
+        const fileUploadButton: HTMLImageElement = document.createElement('img');
+        fileUploadButton.alt = 'Upload';
+        fileUploadButton.src = './src-tauri/icons/upload.png';
+        fileUploadButton.addEventListener('click', async () => {
+            const filepath = await open({
+                title: 'Upload File to DungeonDB'
+            });
+            if (filepath) {
+                let worker: Worker = new Worker('./workers/uploadFile.ts', { type: 'module' });
+                worker.onmessage = async function (event) {
+                    fileOid = event.data;
+                    fileLabel.innerText = filepath;
+                };
+                worker.onerror = async function (event) {
+                    await message(event.error, {
+                        title: 'An error occurred while uploading file.',
+                        kind: 'error'
+                    });
+                };
+                worker.postMessage({
+                    file: {
+                        blob: {
+                            oid: 0
+                        }
+                    },
+                    uploadFromPath: filepath
+                });
+            }
+        });
+        input.appendChild(fileUploadButton);
+
+        // Button for downloading the file that is stored or referenced
+        const fileDownloadButton: HTMLImageElement = document.createElement('img');
+        fileDownloadButton.classList.add('clickable-text');
+        fileDownloadButton.alt = 'Download';
+        fileDownloadButton.src = './src-tauri/icons/download.png';
+        fileDownloadButton.addEventListener('click', async () => {
+            const filepath = await save({
+                title: 'Download File from DungeonDB'
+            });
+            if (filepath) {
+                let worker: Worker = new Worker('./workers/downloadBlob.ts', { type: 'module' });
+                worker.onmessage = async function () {
+                    await message(`The file was successfully downloaded to "${filepath}".`, {
+                        title: 'Download completed successfully.',
+                        kind: 'info'
+                    });
+                };
+                worker.onerror = async function (event) {
+                    await message(event.error, {
+                        title: 'An error occurred while downloading file.',
+                        kind: 'error'
+                    });
+                }
+                worker.postMessage({ 
+                    fileOid: fileOid,
+                    downloadToPath: filepath
+                });
+            }
+        });
+        input.appendChild(fileDownloadButton);
+
+
+        // Choose which tab is selected by default, based on whether the label includes file size or not
+        if (content.label?.endsWith(')')) {
+            fileRadio.checked = true;
+        } else {
+            pathRadio.checked = true;
+        }
+
+        return {
+            div: input,
+            getFileOidAsync: async () => {
+                if (pathRadio.checked && pathInput.value !== content.label) {
+                    // If the file is a path and has been changed, upload the path to the database and get the resulting File OID
+                    return await uploadFileAsync({
+                        file: {
+                            path: {
+                                oid: 0,
+                                path: pathInput.value
+                            }
+                        },
+                        filepath: pathInput.value
+                    });
+                } else {
+                    return fileOid;
+                }
+            }
+        };
+    }
+
+    /**
+     * Construct a cell that allows the user to select a file.
+     * @param cwd 
+     * @param content The content of a file entry cell.
+     * @returns 
+     */
+    #constructFileEntryCell(cwd: Document, content: FileEntryCellContent): HTMLTableCellElement {
+        const elem: HTMLTableCellElement = cwd.createElement('td');
+        elem.setAttribute('label', content.label || '');
+
+        const readonly: HTMLDivElement = this.#constructLabel(cwd, elem, content.label || '', 'plain');
+        let { div: input, getFileOidAsync } = this.#constructFileInput(cwd, content);
+        input.addEventListener('blur', this.stopEditingAsync);
+        input.addEventListener('keydown', async (e) => {
+            if (e.key == 'Enter' && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+                e.preventDefault();
+                await this.stopEditingAsync();
+            }
+        });
+
+        this.#startEditingAsync = async () => {
+            // Remove the image, insert the input
+            elem.classList.add('editing');
+            elem.removeChild(readonly);
+            elem.appendChild(input);
+        };
+        this.#stopEditingAsync = async () => {
+            // Get the File OID
+            const fileOid: number | null = await getFileOidAsync();
+
+            // Update the cell contents in the database
             await executeAsync({
                 editCellContents: {
                     tableOid: content.dataTableOid,
                     columnOid: content.dataColumnOid,
                     rowOid: content.dataRowOid,
                     value: {
-                        boolean: {
-                            value: checkboxNode.checked
+                        file: {
+                            fileOid: fileOid
                         }
                     }
                 }
-            })
-            .catch(async e => {
+            }).catch(async (e) => {
                 await message(e, {
-                title: "An error occurred while updating value.",
-                kind: 'error'
+                    title: 'Unable to update cell contents.',
+                    kind: 'error'
                 });
             });
-        });
 
+            // Remove the input, restore the image
+            elem.classList.remove('editing');
+            elem.removeChild(input);
+            elem.appendChild(readonly);
+
+            // Refresh the input area
+            ({ div: input, getFileOidAsync } = this.#constructFileInput(cwd, content));
+        };
+
+        this.#addValidationFailureTooltips(elem, content.validationFailures);
         return elem;
     }
 
-    #constructFileEntryCell(cwd: Document, content: FileEntryCellContent): HTMLTableCellElement {
-        
-    }
-
+    /**
+     * Construct a cell that allows the user to select a file, and attempts to display the file as an image.
+     * @param cwd 
+     * @param content The content of an image entry cell.
+     * @returns 
+     */
     #constructImageEntryCell(cwd: Document, content: ImageEntryCellContent): HTMLTableCellElement {
-        
+        const elem: HTMLTableCellElement = cwd.createElement('td');
+        elem.setAttribute('label', content.label || '');
+
+        const img: HTMLImageElement = cwd.createElement('img');
+        if (content.fileSrc)
+            img.src = content.fileSrc;
+        img.alt = content.label || '';
+        elem.appendChild(img);
+        let { div: input, getFileOidAsync } = this.#constructFileInput(cwd, content);
+
+        this.#startEditingAsync = async () => {
+            // Remove the image, insert the input
+            elem.classList.add('editing');
+            elem.removeChild(img);
+            elem.appendChild(input);
+        };
+        this.#stopEditingAsync = async () => {
+            // Get the File OID
+            const fileOid: number | null = await getFileOidAsync();
+
+            // Update the cell contents in the database
+            await executeAsync({
+                editCellContents: {
+                    tableOid: content.dataTableOid,
+                    columnOid: content.dataColumnOid,
+                    rowOid: content.dataRowOid,
+                    value: {
+                        file: {
+                            fileOid: fileOid
+                        }
+                    }
+                }
+            }).catch(async (e) => {
+                await message(e, {
+                    title: 'Unable to update cell contents.',
+                    kind: 'error'
+                });
+            });
+
+            // Remove the input, restore the image
+            elem.classList.remove('editing');
+            elem.removeChild(input);
+            elem.appendChild(img);
+
+            // Refresh the input area
+            ({ div: input, getFileOidAsync } = this.#constructFileInput(cwd, content));
+        };
+
+        this.#addValidationFailureTooltips(elem, content.validationFailures);
+        return elem;
     }
 
-    #constructSchemaLinkCell(cwd: Document, content: SchemaLinkCellContent): HTMLTableCellElement {
-        
-    }
 
-    #constructObjectLinkCell(cwd: Document, content: ObjectLinkCellContent): HTMLTableCellElement {
-        
-    }
 
     #constructSingleSelectDropdownCell(cwd: Document, content: SingleSelectDropdownCellContent): HTMLTableCellElement {
-        
+        const elem: HTMLTableCellElement = cwd.createElement('td');
+        elem.setAttribute('label', content.label || '');
+
+        const readonly: HTMLDivElement = this.#constructLabel(cwd, elem, content.label || '', 'plain');
+
+        // When you start editing, swap the readonly DIV for an editable INPUT
+        this.#startEditingAsync = async () => {
+            // Load the dropdown values
+            
+
+            // Remove the readonly text
+            elem.removeChild(readonly);
+            elem.appendChild(input);
+        };
+
+        // When you stop editing, update the database and swap the editable INPUT for the readonly DIV
+        this.#stopEditingAsync = async () => {
+            const rawLabel: string | null = input.value || null;
+            let label: string | null;
+            if (content.format == 'jSON' && rawLabel) {
+                // Automatically attempt to beautify the JSON
+                try {
+                    label = JSON.stringify(JSON.parse(rawLabel), null, '\t');
+                } catch (e) {
+                    label = rawLabel;
+                }
+            } else {
+                label = rawLabel;
+            }
+
+            if (label !== content.label) {
+                // Update the cell contents in the database
+                await executeAsync({
+                    editCellContents: {
+                        tableOid: content.dataTableOid,
+                        columnOid: content.dataColumnOid,
+                        rowOid: content.dataRowOid,
+                        value: {
+                            text: {
+                                label: label
+                            }
+                        }
+                    }
+                }).catch(async (e) => {
+                    await message(e, {
+                        title: 'Unable to update cell contents.',
+                        kind: 'error'
+                    });
+                });
+            }
+
+            // Remove the input, restore the readonly text
+            elem.removeChild(input);
+            elem.appendChild(readonly);
+        };
+
+        return elem;
     }
 
     #constructMultiSelectDropdownCell(cwd: Document, content: MultiSelectDropdownCellContent): HTMLTableCellElement {
         
     }
 
+
+
+    /**
+     * Construct a cell that contains a readonly link to another schema.
+     * @param cwd 
+     * @param content The content of the link to another schema.
+     * @returns 
+     */
+    #constructSchemaLinkCell(cwd: Document, content: SchemaLinkCellContent): HTMLTableCellElement {
+        const elem: HTMLTableCellElement = cwd.createElement('td');
+        elem.setAttribute('label', content.label || '');
+        
+        const readonly: HTMLDivElement = this.#constructLabel(cwd, elem, content.label || '', 'plain');
+        readonly.classList.add('clickable');
+        readonly.addEventListener('click', async () => {
+            // Open schema using the provided query string
+            await openDialogAsync({
+                schema: {
+                    title: content.label || '',
+                    queryString: `schema_oid=${content.linkSchemaOid}&${content.linkQueryFilter}`
+                }
+            });
+        });
+
+        // Cell cannot be edited, so immediately stop editing
+        this.#startEditingAsync = async () => {
+            await this.stopEditingAsync();
+        }
+
+        this.#addValidationFailureTooltips(elem, content.validationFailures);
+        return elem;
+    }
+
+    /**
+     * Construct a cell that contains a readonly link to an object.
+     * @param cwd 
+     * @param content The content of the link to an object.
+     * @returns 
+     */
+    #constructObjectLinkCell(cwd: Document, content: ObjectLinkCellContent): HTMLTableCellElement {
+        const elem: HTMLTableCellElement = cwd.createElement('td');
+        elem.setAttribute('label', content.label || '');
+        
+        const readonly: HTMLDivElement = this.#constructLabel(cwd, elem, content.label || '', 'plain');
+        readonly.classList.add('clickable');
+        readonly.addEventListener('click', async () => {
+            // Open schema using the provided query string
+            await openDialogAsync({
+                object: {
+                    title: content.label || '',
+                    queryString: `schema_oid=${content.linkSchemaOid}&${content.linkQueryFilter}`
+                }
+            });
+        });
+
+        // Cell cannot be edited, so immediately stop editing
+        this.#startEditingAsync = async () => {
+            await this.stopEditingAsync();
+        }
+
+        this.#addValidationFailureTooltips(elem, content.validationFailures);
+        return elem;
+    }
+
+    /**
+     * Construct a cell with a readonly label.
+     * @param cwd 
+     * @param content The content of the readonly cell.
+     * @returns 
+     */
     #constructReadonlyCell(cwd: Document, content: ReadonlyCellContent): HTMLTableCellElement {
         const elem: HTMLTableCellElement = cwd.createElement('td');
         elem.classList.add('readonly');
         elem.setAttribute('label', content.label || '');
 
-        elem.innerText = content.label ?? '';
+        const readonly: HTMLDivElement = this.#constructLabel(cwd, elem, content.label || '', content.format);
         this.#addValidationFailureTooltips(elem, content.validationFailures);
         return elem;
     }

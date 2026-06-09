@@ -182,6 +182,7 @@ pub enum Cell {
         data_table_oid: i64,
         data_column_oid: i64,
         data_row_oid: i64,
+        label: Option<String>,
 
         /// The OID of the file in the database.
         file_oid: Option<i64>,
@@ -219,6 +220,7 @@ pub enum Cell {
         data_table_oid: i64,
         data_column_oid: i64,
         data_row_oid: i64,
+        label: Option<String>,
         dropdown_table_oid: i64,
         dropdown_row_oid: Option<i64>,
         validation_failures: Vec<FailedValidation>
@@ -521,9 +523,9 @@ impl Cell {
                         }
                     }
                     column_type::ColumnType::Select { table_oid: dropdown_table_oid, .. } => {
-                        let label_sql: String = format!("SELECT COLUMN{column_oid}_VALUE AS VALUE FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
-                        let (dropdown_row_oid, dropdown_row_oid_e) = match conn.query_one(&label_sql, params![row_oid], |row| row.get::<_, Option<i64>>("VALUE")) {
-                            Ok(dropdown_row_oid) => (dropdown_row_oid, None),
+                        let label_sql: String = format!("SELECT COLUMN{column_oid}_VALUE AS VALUE, COLUMN{column_oid}_LABEL AS LABEL FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
+                        let (label, dropdown_row_oid, dropdown_row_oid_e) = match conn.query_one(&label_sql, params![row_oid], |row| Ok(row.get::<_, Option<i64>>("LABEL")?, row.get::<_, Option<i64>>("VALUE")?)) {
+                            Ok((label, dropdown_row_oid)) => (label, dropdown_row_oid, None),
                             Err(e) => (None, Some(e))
                         };
 
@@ -531,6 +533,7 @@ impl Cell {
                             data_table_oid: table_oid.clone(),
                             data_column_oid: column_oid.clone(),
                             data_row_oid: row_oid.clone(),
+                            label,
                             dropdown_table_oid,
                             dropdown_row_oid,
                             cell_identifier: CellIdentifier::DataCell { table_oid, column_oid, row_oid },
@@ -547,7 +550,7 @@ impl Cell {
                     }
                     column_type::ColumnType::Multiselect { table_oid: dropdown_table_oid, .. } => {
                         let value_sql: String = format!("SELECT COLUMN{column_oid}_VALUE AS VALUE, COLUMN{column_oid}_LABEL AS LABEL FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
-                        let (value, label, label_e) = match conn.query_one(&value_sql, params![row_oid], |row| Ok((row.get::<_, Option<String>>("QUERY_FILTER")?, row.get::<_, Option<String>>("LABEL")?))) {
+                        let (value, label, label_e) = match conn.query_one(&value_sql, params![row_oid], |row| Ok((row.get::<_, Option<String>>("VALUE")?, row.get::<_, Option<String>>("LABEL")?))) {
                             Ok((value, label)) => (value, label, None),
                             Err(e) => (None, None, Some(e))
                         };
@@ -854,6 +857,7 @@ impl Cell {
                                             data_table_oid,
                                             data_column_oid,
                                             data_row_oid,
+                                            label,
                                             dropdown_table_oid,
                                             dropdown_row_oid,
                                             cell_identifier: CellIdentifier::VirtualCell { column_oid, query_filter, isolated_cell_dependencies, full_reload_cell_dependencies },
@@ -1278,22 +1282,33 @@ impl SchemaCellStream {
                             Ok(dropdown_row_oid) => (dropdown_row_oid, None),
                             Err(e) => (None, Some(e))
                         };
+                        let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
+                            Ok(label) => (label, None),
+                            Err(e) => (None, Some(e))
+                        };
 
                         Cell::SingleSelectDropdown {
                             data_table_oid,
                             data_column_oid,
                             data_row_oid,
+                            label,
                             dropdown_table_oid: dropdown_table_oid.clone(),
                             dropdown_row_oid,
                             cell_identifier,
                             validation_failures: {
-                                if let Some(label_e) = dropdown_row_oid_e {
+                                let mut failures: Vec<FailedValidation> = if let Some(label_e) = label_e {
                                     vec![FailedValidation {
                                         message: format!("{label_e}")
                                     }]
                                 } else {
                                     Vec::new()
+                                };
+                                if let Some(value_e) = dropdown_row_oid_e {
+                                    failures.push(FailedValidation {
+                                        message: format!("{value_e}")
+                                    })
                                 }
+                                failures
                             }
                         }
                     }
@@ -1584,6 +1599,7 @@ impl SchemaCellStream {
                                                 data_table_oid,
                                                 data_column_oid,
                                                 data_row_oid,
+                                                label,
                                                 dropdown_table_oid,
                                                 dropdown_row_oid,
                                                 cell_identifier,
@@ -1720,7 +1736,7 @@ pub enum DataCellValue {
         value: Option<bool>
     },
     File {
-        file: Option<file::File>
+        file_oid: Option<i64>
     },
     Object {
         linked_row_oid: Option<i64>
@@ -1832,28 +1848,16 @@ impl DataCellEntry {
                 // Return the old value
                 DataCellValue::Datetime { label: old_label }
             }
-            DataCellValue::File { file } => {
+            DataCellValue::File { file_oid } => {
                 // Store the old value
                 let sql_get: String = format!("SELECT COLUMN{} AS VALUE FROM TABLE{} WHERE OID = ?1", self.column_oid, self.table_oid);
-                let old_value: Option<file::File> = match trans.query_one(&sql_get, params![self.row_oid], |row| row.get::<_, Option<i64>>("VALUE"))? {
-                    Some(file_oid) => Some(file::File::get_transact(&trans, file_oid)?),
-                    None => None
-                };
+                let old_value: Option<i64> = trans.query_one(&sql_get, params![self.row_oid], |row| row.get::<_, Option<i64>>("VALUE"))?;
 
                 let sql_update: String = format!("UPDATE TABLE{} SET COLUMN{} = ?1 WHERE OID = ?2", self.table_oid, self.column_oid);
-                trans.execute(&sql_update, params![
-                    match file {
-                        Some(file) => match file {
-                            file::File::Path { oid, .. } 
-                            | file::File::Blob { oid } => Some(oid)
-                        },
-                        None => None
-                    }, 
-                    self.row_oid
-                ])?;
+                trans.execute(&sql_update, params![file_oid, self.row_oid])?;
 
                 // Return the old value
-                DataCellValue::File { file: old_value }
+                DataCellValue::File { file_oid: old_value }
             }
             DataCellValue::Object { linked_row_oid: value } => {
                 // Store the old value
