@@ -29,7 +29,7 @@
   user-select: none;
 
   color: var(--text-color-neutral);
-  background-color: var(--background-A);
+  background-color: var(--main-color-neutral);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -113,8 +113,8 @@
 
 
 .clickable-text {
-  font-weight: 500;
   color: var(--text-color-link);
+  text-align: center;
   text-decoration: inherit;
   cursor: pointer;
   text-overflow: ellipsis;

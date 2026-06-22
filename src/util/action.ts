@@ -66,5 +66,7 @@ export type Action = {
  * @returns May return the OID of the object created. Usually returns void.
  */
 export async function executeAsync(action: Action): Promise<void> {
+    console.debug(action);
+    console.trace();
     return await invoke('execute', { action: action });
 }

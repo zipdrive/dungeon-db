@@ -1,7 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use crate::{
+    data::{column, column_type, datasource::Datasource, schema, table},
+    util::{error::Error, formula::Formula},
+};
 use bitflags::bitflags;
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use crate::{data::{column, column_type, datasource::Datasource, schema, table}, util::{error::Error, formula::Formula}};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use std::collections::{HashMap, HashSet};
 
 struct ViewsToCreate {
     /// The OID of the schema to create views for.
@@ -11,20 +14,26 @@ struct ViewsToCreate {
     create_label_view: bool,
 
     /// True if the polymorphism view needs to be created. False otherwise.
-    create_polymorphism_view: bool
+    create_polymorphism_view: bool,
 }
 
-
 /// Drop the views associated with a schema.
-fn drop_all_views(trans: &Transaction, schema_oid: i64, create_schema_oid_seq: &mut Vec<ViewsToCreate>) -> Result<(), Error> {
-    if create_schema_oid_seq.iter().any(|view_to_create| view_to_create.schema_oid == schema_oid) {
+fn drop_all_views(
+    trans: &Transaction,
+    schema_oid: i64,
+    create_schema_oid_seq: &mut Vec<ViewsToCreate>,
+) -> Result<(), Error> {
+    if create_schema_oid_seq
+        .iter()
+        .any(|view_to_create| view_to_create.schema_oid == schema_oid)
+    {
         // Prevent possible infinite recursions
         return Ok(());
     }
-    create_schema_oid_seq.push(ViewsToCreate { 
-        schema_oid, 
-        create_label_view: true, 
-        create_polymorphism_view: true
+    create_schema_oid_seq.push(ViewsToCreate {
+        schema_oid,
+        create_label_view: true,
+        create_polymorphism_view: true,
     });
 
     // Drop the views associated with any master schema
@@ -42,7 +51,9 @@ fn drop_all_views(trans: &Transaction, schema_oid: i64, create_schema_oid_seq: &
     }
 
     // Drop the views that use the label
-    for row_result in trans.prepare("
+    for row_result in trans
+        .prepare(
+            "
         SELECT 
             c.SCHEMA_OID, 
             c.IS_PRIMARY_KEY 
@@ -67,32 +78,54 @@ fn drop_all_views(trans: &Transaction, schema_oid: i64, create_schema_oid_seq: &
         FROM METADATA_COLUMN c 
         INNER JOIN METADATA_COLUMN_TYPE__MULTISELECT s ON s.OID = c.TYPE_OID
         WHERE s.TABLE_OID = ?1
-        ")?.query_map(params![schema_oid], |row| Ok((row.get::<_, i64>("SCHEMA_OID")?, row.get::<_, bool>("IS_PRIMARY_KEY")?)))? {
-        
+        ",
+        )?
+        .query_map(params![schema_oid], |row| {
+            Ok((
+                row.get::<_, i64>("SCHEMA_OID")?,
+                row.get::<_, bool>("IS_PRIMARY_KEY")?,
+            ))
+        })?
+    {
         let (referencing_schema_oid, referenced_in_label) = row_result?;
-        drop_views_associated_with_label(trans, referencing_schema_oid, referenced_in_label, create_schema_oid_seq)?;
+        drop_views_associated_with_label(
+            trans,
+            referencing_schema_oid,
+            referenced_in_label,
+            create_schema_oid_seq,
+        )?;
     }
 
     // Drop the associated views
-    let drop_sql: String = format!("
+    let drop_sql: String = format!(
+        "
         DROP VIEW IF EXISTS SCHEMA{schema_oid}_VIEW;
         DROP VIEW IF EXISTS TABLE{schema_oid}_LABEL_VIEW;
         DROP VIEW IF EXISTS TABLE{schema_oid}_POLYMORPHISM_VIEW;
-    ");
+    "
+    );
     trans.execute_batch(&drop_sql)?;
     Ok(())
 }
 
 /// Drop the views that reference the label of another schema.
-fn drop_views_associated_with_label(trans: &Transaction, schema_oid: i64, drop_label_view: bool, create_schema_oid_seq: &mut Vec<ViewsToCreate>) -> Result<(), Error> {
-    if create_schema_oid_seq.iter().any(|view_to_create| view_to_create.schema_oid == schema_oid) {
+fn drop_views_associated_with_label(
+    trans: &Transaction,
+    schema_oid: i64,
+    drop_label_view: bool,
+    create_schema_oid_seq: &mut Vec<ViewsToCreate>,
+) -> Result<(), Error> {
+    if create_schema_oid_seq
+        .iter()
+        .any(|view_to_create| view_to_create.schema_oid == schema_oid)
+    {
         // Prevent possible infinite recursions
         return Ok(());
     }
-    create_schema_oid_seq.push(ViewsToCreate { 
-        schema_oid, 
-        create_label_view: drop_label_view.clone(), 
-        create_polymorphism_view: false 
+    create_schema_oid_seq.push(ViewsToCreate {
+        schema_oid,
+        create_label_view: drop_label_view.clone(),
+        create_polymorphism_view: false,
     });
 
     // Drop the primary schema view
@@ -108,7 +141,9 @@ fn drop_views_associated_with_label(trans: &Transaction, schema_oid: i64, drop_l
         }
 
         // Drop all views that require that label view
-        for row_result in trans.prepare("
+        for row_result in trans
+            .prepare(
+                "
             SELECT 
                 c.SCHEMA_OID, 
                 c.IS_PRIMARY_KEY 
@@ -133,28 +168,43 @@ fn drop_views_associated_with_label(trans: &Transaction, schema_oid: i64, drop_l
             FROM METADATA_COLUMN c 
             INNER JOIN METADATA_COLUMN_TYPE__MULTISELECT s ON s.OID = c.TYPE_OID
             WHERE s.TABLE_OID = ?1
-            ")?.query_map(params![schema_oid], |row| Ok((row.get::<_, i64>("SCHEMA_OID")?, row.get::<_, bool>("IS_PRIMARY_KEY")?)))? {
-            
+            ",
+            )?
+            .query_map(params![schema_oid], |row| {
+                Ok((
+                    row.get::<_, i64>("SCHEMA_OID")?,
+                    row.get::<_, bool>("IS_PRIMARY_KEY")?,
+                ))
+            })?
+        {
             let (referencing_schema_oid, referenced_in_label) = row_result?;
-            drop_views_associated_with_label(trans, referencing_schema_oid, referenced_in_label, create_schema_oid_seq)?;
+            drop_views_associated_with_label(
+                trans,
+                referencing_schema_oid,
+                referenced_in_label,
+                create_schema_oid_seq,
+            )?;
         }
 
         // Drop the label view
-        let drop_label_view_sql: String = format!("DROP VIEW IF EXISTS TABLE{schema_oid}_LABEL_VIEW");
+        let drop_label_view_sql: String =
+            format!("DROP VIEW IF EXISTS TABLE{schema_oid}_LABEL_VIEW");
         trans.execute(&drop_label_view_sql, [])?;
     }
     Ok(())
 }
 
-
-
 /// Compiles a CTE to determine the lowest-level inheritor table that is associated with a particular row in the master table.
-fn compile_polymorphism_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mut HashMap<String, String>) -> Result<(), Error> {
+fn compile_polymorphism_cte(
+    trans: &Transaction,
+    table_oid: i64,
+    compiled_cte: &mut HashMap<String, String>,
+) -> Result<(), Error> {
     let cte_name: String = format!("TABLE{table_oid}_POLYMORPHISM_CTE");
     if compiled_cte.contains_key(&cte_name) {
         return Ok(()); // Prevent infinite recursion, just in case
     }
-    
+
     // The components of the query will be combined with UNION
     let mut polymorphism_cte_components: Vec<String> = Vec::new();
 
@@ -178,7 +228,8 @@ fn compile_polymorphism_cte(trans: &Transaction, table_oid: i64, compiled_cte: &
     }
 
     // Compile the final CTE
-    compiled_cte.insert(cte_name, 
+    compiled_cte.insert(
+        cte_name,
         if polymorphism_cte_components.len() > 0 {
             format!(
                 "
@@ -190,7 +241,10 @@ fn compile_polymorphism_cte(trans: &Transaction, table_oid: i64, compiled_cte: &
                 LEFT JOIN ({}) u ON u.OID = t.OID
                 WHERE NOT t.TRASH
                 ",
-                polymorphism_cte_components.into_iter().reduce(|acc, e| format!("{acc} UNION {e}")).unwrap()
+                polymorphism_cte_components
+                    .into_iter()
+                    .reduce(|acc, e| format!("{acc} UNION {e}"))
+                    .unwrap()
             )
         } else {
             format!(
@@ -203,7 +257,7 @@ fn compile_polymorphism_cte(trans: &Transaction, table_oid: i64, compiled_cte: &
                 WHERE NOT t.TRASH
                 "
             )
-        }
+        },
     );
     Ok(())
 }
@@ -228,8 +282,10 @@ fn create_table_polymorphism_view(trans: &Transaction, table_oid: i64) -> Result
             {final_cte}
             ",
             if compiled_cte.len() > 0 {
-                format!("WITH {}",
-                    compiled_cte.into_iter()
+                format!(
+                    "WITH {}",
+                    compiled_cte
+                        .into_iter()
                         .map(|(cte_name, cte_sql)| format!("{cte_name} AS ({cte_sql})"))
                         .reduce(|acc, e| format!("{acc}, {e}"))
                         .unwrap()
@@ -244,10 +300,12 @@ fn create_table_polymorphism_view(trans: &Transaction, table_oid: i64) -> Result
     Ok(())
 }
 
-
-
 /// Compiles a CTE to get the primary key columns for a particular row in a table.
-fn compile_keycolumn_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mut HashMap<String, String>) -> Result<bool, Error> {
+fn compile_keycolumn_cte(
+    trans: &Transaction,
+    table_oid: i64,
+    compiled_cte: &mut HashMap<String, String>,
+) -> Result<bool, Error> {
     // Prevent duplication
     let cte_name: String = format!("TABLE{table_oid}_KEYCOLUMNS_CTE");
     if compiled_cte.contains_key(&cte_name) {
@@ -440,19 +498,24 @@ fn compile_keycolumn_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mut
     }
 
     // Compile the final CTE
-    match column_cte_components.into_iter().reduce(|acc, e| format!("{acc} UNION {e}")) {
+    match column_cte_components
+        .into_iter()
+        .reduce(|acc, e| format!("{acc} UNION {e}"))
+    {
         Some(compiled_column_cte) => {
             compiled_cte.insert(cte_name, compiled_column_cte);
             Ok(true)
         }
-        None => {
-            Ok(false)
-        }
-    } 
+        None => Ok(false),
+    }
 }
 
 /// Compiles a CTE to get the label for a particular row in a table.
-fn compile_label_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mut HashMap<String, String>) -> Result<bool, Error> {
+fn compile_label_cte(
+    trans: &Transaction,
+    table_oid: i64,
+    compiled_cte: &mut HashMap<String, String>,
+) -> Result<bool, Error> {
     let cte_name: String = format!("TABLE{table_oid}_LABEL_CTE");
     if compiled_cte.contains_key(&cte_name) {
         return Ok(compiled_cte[&cte_name] == "...");
@@ -479,7 +542,7 @@ fn compile_label_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mut Has
                 "
                 SELECT
                     i.MASTER{table_oid}_OID AS OID,
-                    lbl.SCHEMA_OID,
+                    lbl.TABLE_OID,
                     lbl.ROW_OID,
                     lbl.PLAIN_LABEL,
                     lbl.JSON_LABEL
@@ -491,11 +554,13 @@ fn compile_label_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mut Has
     }
 
     if label_cte_components.len() > 0 {
-        compiled_cte.insert(cte_name, format!(
-            "
+        compiled_cte.insert(
+            cte_name,
+            format!(
+                "
             SELECT
                 p.OID,
-                p.SCHEMA_OID,
+                p.TABLE_OID,
                 p.ROW_OID,
                 COALESCE(u.PLAIN_LABEL,
                     (
@@ -520,16 +585,22 @@ fn compile_label_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mut Has
                     )
                 ) AS JSON_LABEL
             FROM TABLE{table_oid}_POLYMORPHISM_CTE p
-            LEFT JOIN ({}) u ON u.SCHEMA_OID = p.SCHEMA_OID AND u.ROW_OID = p.ROW_OID
+            LEFT JOIN ({}) u ON u.TABLE_OID = p.TABLE_OID AND u.ROW_OID = p.ROW_OID
             ",
-            label_cte_components.into_iter().reduce(|acc, e| format!("{acc} UNION {e}")).unwrap()
-        ));
+                label_cte_components
+                    .into_iter()
+                    .reduce(|acc, e| format!("{acc} UNION {e}"))
+                    .unwrap()
+            ),
+        );
     } else {
-        compiled_cte.insert(cte_name, format!(
-            "
+        compiled_cte.insert(
+            cte_name,
+            format!(
+                "
             SELECT
                 p.OID,
-                p.SCHEMA_OID,
+                p.TABLE_OID,
                 p.ROW_OID,
                 CASE
                     WHEN COUNT(k.JSON_LABEL) = 0 THEN '— NO PRIMARY KEY —'
@@ -541,10 +612,11 @@ fn compile_label_cte(trans: &Transaction, table_oid: i64, compiled_cte: &mut Has
             INNER JOIN TABLE{table_oid}_KEYCOLUMNS_CTE k ON k.OID = p.OID
             GROUP BY
                 p.OID,
-                p.SCHEMA_OID,
+                p.TABLE_OID,
                 p.ROW_OID
             "
-        ));
+            ),
+        );
     }
     Ok(true)
 }
@@ -561,19 +633,19 @@ fn create_table_label_view(trans: &Transaction, table_oid: i64) -> Result<(), Er
             WITH {} 
             SELECT
                 lbl.OID,
-                lbl.SCHEMA_OID,
+                lbl.TABLE_OID,
                 lbl.ROW_OID,
                 COALESCE(lbl.PLAIN_LABEL, lbl.JSON_LABEL) AS SELECT_LABEL,
                 lbl.JSON_LABEL,
                 '{{\"' || REPLACE(REPLACE(s.NAME, '\\', '\\\\'), '\"', '\\\"') || '\": ' || lbl.JSON_LABEL || '}}' AS OBJECT_LABEL
             FROM TABLE{table_oid}_LABEL_CTE lbl
-            INNER JOIN METADATA_SCHEMA s ON s.OID = lbl.SCHEMA_OID
+            INNER JOIN METADATA_SCHEMA s ON s.OID = lbl.TABLE_OID
             ",
             compiled_cte.into_iter().map(|(cte_name, cte_definition)| format!("{cte_name} AS ({cte_definition})")).reduce(|acc, e| format!("{acc}, {e}")).unwrap_or(format!("
                 TABLE{table_oid}_LABEL_CTE AS (
                     SELECT
                         OID,
-                        SCHEMA_OID,
+                        TABLE_OID,
                         ROW_OID,
                         '...' AS SELECT_LABEL,
                         '{{ ... }}' AS JSON_LABEL
@@ -587,14 +659,14 @@ fn create_table_label_view(trans: &Transaction, table_oid: i64) -> Result<(), Er
             "
             CREATE VIEW IF NOT EXISTS TABLE{table_oid}_LABEL_VIEW AS 
             SELECT
-                OID,
-                SCHEMA_OID,
-                ROW_OID,
+                p.OID,
+                p.TABLE_OID,
+                p.ROW_OID,
                 '...' AS SELECT_LABEL,
                 '{{ ... }}' AS JSON_LABEL,
                 '{{\"' || REPLACE(REPLACE(s.NAME, '\\', '\\\\'), '\"', '\\\"') || '\": {{ ... }}}}' AS OBJECT_LABEL
             FROM TABLE{table_oid}_POLYMORPHISM_VIEW p 
-            INNER JOIN METADATA_SCHEMA s ON s.OID = p.SCHEMA_OID
+            INNER JOIN METADATA_SCHEMA s ON s.OID = p.TABLE_OID
             "
         )
     };
@@ -603,14 +675,12 @@ fn create_table_label_view(trans: &Transaction, table_oid: i64) -> Result<(), Er
     Ok(())
 }
 
-
-
 enum SchemaViewColumn {
     TableData {
         label_expr: String,
         label_ord: String,
         value_expr: String,
-        value_ord: String
+        value_ord: String,
     },
     Formula {
         label_expr: String,
@@ -618,17 +688,28 @@ enum SchemaViewColumn {
         value_expr: String,
         value_ord: String,
         param_expr: String,
-        param_ord: String
-    }
+        param_ord: String,
+    },
 }
 
 impl SchemaViewColumn {
     /// Compiles the column.
     pub fn compile(&self) -> Result<String, Error> {
         Ok(match self {
-            Self::TableData { label_expr, label_ord, value_expr, value_ord } =>
-                format!("{label_expr} AS {label_ord}, {value_expr} AS {value_ord}"),
-            Self::Formula { label_expr, label_ord, value_expr, value_ord, param_expr, param_ord } => {
+            Self::TableData {
+                label_expr,
+                label_ord,
+                value_expr,
+                value_ord,
+            } => format!("{label_expr} AS {label_ord}, {value_expr} AS {value_ord}"),
+            Self::Formula {
+                label_expr,
+                label_ord,
+                value_expr,
+                value_ord,
+                param_expr,
+                param_ord,
+            } => {
                 format!("{label_expr} AS {label_ord}, {value_expr} AS {value_ord}, {param_expr} AS {param_ord}")
             }
         })
@@ -677,19 +758,23 @@ impl PrimitiveScalarType {
             k += 1;
         }
         // Concatenate different types together
-        flags.into_iter().map(|flag| match flag {
-            Self::Null => String::from("null"),
-            Self::AnyPrimitive => String::from("primitive"),
-            Self::Boolean => String::from("boolean"),
-            Self::Integer => String::from("integer"),
-            Self::Number => String::from("number"),
-            Self::Date => String::from("date"),
-            Self::Datetime => String::from("timestamp"),
-            Self::Text => String::from("text"),
-            Self::JSON => String::from("JSON"),
-            Self::File => String::from("file"),
-            _ => String::from("unknown") // This case shouldn't ever happen; if it does, something has gone wrong
-        }).reduce(|acc, e| format!("{acc} | {e}")).unwrap_or(String::from("null"))
+        flags
+            .into_iter()
+            .map(|flag| match flag {
+                Self::Null => String::from("null"),
+                Self::AnyPrimitive => String::from("primitive"),
+                Self::Boolean => String::from("boolean"),
+                Self::Integer => String::from("integer"),
+                Self::Number => String::from("number"),
+                Self::Date => String::from("date"),
+                Self::Datetime => String::from("timestamp"),
+                Self::Text => String::from("text"),
+                Self::JSON => String::from("JSON"),
+                Self::File => String::from("file"),
+                _ => String::from("unknown"), // This case shouldn't ever happen; if it does, something has gone wrong
+            })
+            .reduce(|acc, e| format!("{acc} | {e}"))
+            .unwrap_or(String::from("null"))
     }
 }
 
@@ -704,14 +789,17 @@ enum ExpressionReturnType {
         primitive: PrimitiveScalarType,
 
         // The type can take on a reference to a record in one of the indicated tables.
-        record_in_table_oid: HashSet<i64>
-    }
+        record_in_table_oid: HashSet<i64>,
+    },
 }
 
 impl ExpressionReturnType {
     /// Construct a new type representing a primitive value.
-    pub fn new_primitive(primitive: PrimitiveScalarType) -> Self { 
-        Self::Selected { primitive, record_in_table_oid: HashSet::new() }
+    pub fn new_primitive(primitive: PrimitiveScalarType) -> Self {
+        Self::Selected {
+            primitive,
+            record_in_table_oid: HashSet::new(),
+        }
     }
 
     /// Construct a new type representing a reference to a record in the table with the provided OID.
@@ -720,7 +808,7 @@ impl ExpressionReturnType {
         record_in_table_oid.insert(table_oid);
         Self::Selected {
             primitive: PrimitiveScalarType::Null,
-            record_in_table_oid
+            record_in_table_oid,
         }
     }
 
@@ -729,12 +817,19 @@ impl ExpressionReturnType {
     pub fn accepts_arg(&self, other: &ExpressionReturnType) -> bool {
         match self {
             Self::Any => true,
-            Self::Selected { primitive: self_primitive, record_in_table_oid: self_table_oid } => match other {
+            Self::Selected {
+                primitive: self_primitive,
+                record_in_table_oid: self_table_oid,
+            } => match other {
                 Self::Any => false,
-                Self::Selected { primitive: other_primitive, record_in_table_oid: other_table_oid } => {
-                    self_primitive.contains(other_primitive.clone()) && self_table_oid.is_superset(other_table_oid)
+                Self::Selected {
+                    primitive: other_primitive,
+                    record_in_table_oid: other_table_oid,
+                } => {
+                    self_primitive.contains(other_primitive.clone())
+                        && self_table_oid.is_superset(other_table_oid)
                 }
-            }
+            },
         }
     }
 
@@ -742,13 +837,22 @@ impl ExpressionReturnType {
     pub fn generalize(&self, other: &ExpressionReturnType) -> Self {
         match self {
             Self::Any => Self::Any,
-            Self::Selected { primitive: self_primitive, record_in_table_oid: self_table_oid } => match other {
+            Self::Selected {
+                primitive: self_primitive,
+                record_in_table_oid: self_table_oid,
+            } => match other {
                 Self::Any => Self::Any,
-                Self::Selected { primitive: other_primitive, record_in_table_oid: other_table_oid } => Self::Selected {
+                Self::Selected {
+                    primitive: other_primitive,
+                    record_in_table_oid: other_table_oid,
+                } => Self::Selected {
                     primitive: self_primitive.clone() | other_primitive.clone(),
-                    record_in_table_oid: self_table_oid.union(other_table_oid).map(|ir| ir.clone()).collect()
-                }
-            }
+                    record_in_table_oid: self_table_oid
+                        .union(other_table_oid)
+                        .map(|ir| ir.clone())
+                        .collect(),
+                },
+            },
         }
     }
 
@@ -756,29 +860,42 @@ impl ExpressionReturnType {
     pub fn specialize(&self, other: &ExpressionReturnType) -> Self {
         match self {
             Self::Any => other.clone(),
-            Self::Selected { primitive: self_primitive, record_in_table_oid: self_table_oid } => match other {
+            Self::Selected {
+                primitive: self_primitive,
+                record_in_table_oid: self_table_oid,
+            } => match other {
                 Self::Any => Self::Selected {
                     primitive: self_primitive.clone(),
-                    record_in_table_oid: self_table_oid.clone()
+                    record_in_table_oid: self_table_oid.clone(),
                 },
-                Self::Selected { primitive: other_primitive, record_in_table_oid: other_table_oid } => Self::Selected {
+                Self::Selected {
+                    primitive: other_primitive,
+                    record_in_table_oid: other_table_oid,
+                } => Self::Selected {
                     primitive: self_primitive.clone() & other_primitive.clone(),
-                    record_in_table_oid: self_table_oid.intersection(other_table_oid).map(|ir| ir.clone()).collect()
-                }
-            }
+                    record_in_table_oid: self_table_oid
+                        .intersection(other_table_oid)
+                        .map(|ir| ir.clone())
+                        .collect(),
+                },
+            },
         }
     }
-
 
     /// Converts the expression return type to a string.
     pub fn to_string(&self, conn: &Connection) -> String {
         match self {
             Self::Any => format!("any"),
-            Self::Selected { primitive, record_in_table_oid } => {
+            Self::Selected {
+                primitive,
+                record_in_table_oid,
+            } => {
                 let mut record_types: Vec<String> = Vec::new();
                 if record_in_table_oid.len() > 0 {
                     for table_oid in record_in_table_oid {
-                        if let Ok(schema_metadata) = schema::FullMetadata::get(conn, table_oid.clone()) {
+                        if let Ok(schema_metadata) =
+                            schema::FullMetadata::get(conn, table_oid.clone())
+                        {
                             record_types.push(format!("record [{}]", schema_metadata.name));
                         } else {
                             record_types.push(String::from("record [-ERROR-]"));
@@ -786,19 +903,22 @@ impl ExpressionReturnType {
                     }
 
                     if primitive == &PrimitiveScalarType::Null {
-                        record_types.into_iter().reduce(|acc, e| format!("{acc} | {e}")).unwrap_or(String::from("null"))
+                        record_types
+                            .into_iter()
+                            .reduce(|acc, e| format!("{acc} | {e}"))
+                            .unwrap_or(String::from("null"))
                     } else {
-                        record_types.into_iter().fold(primitive.to_string(), |acc, e| format!("{acc} | {e}"))
+                        record_types
+                            .into_iter()
+                            .fold(primitive.to_string(), |acc, e| format!("{acc} | {e}"))
                     }
                 } else {
                     primitive.to_string()
                 }
             }
         }
-    } 
+    }
 }
-
-
 
 #[derive(Clone)]
 struct ParamCTEColumnCell {
@@ -809,7 +929,7 @@ struct ParamCTEColumnCell {
     column_oid: i64,
 
     /// The ordinal of the row OID.
-    row_ord: String
+    row_ord: String,
 }
 
 #[derive(Clone)]
@@ -836,13 +956,13 @@ struct ParamCTEColumn {
     arg_type: ExpressionReturnType,
 
     /// The identifier for the column and row.
-    cell: Option<ParamCTEColumnCell>
+    cell: Option<ParamCTEColumnCell>,
 }
 
 struct ParamCTE {
     datasource: Datasource,
     child_datasources: HashSet<Datasource>,
-    columns: HashMap<String, ParamCTEColumn>
+    columns: HashMap<String, ParamCTEColumn>,
 }
 
 impl ParamCTE {
@@ -854,7 +974,12 @@ impl ParamCTE {
         // If datasource is an Object or Select column with a reversed relationship, make sure that column is included in the CTE
         // If datasource is an inheritor table, make sure the OID of the master table is included in the CTE
         let key: String = match &self.datasource {
-            Datasource::InheritorTable { parent_datasource, .. } => format!(", d.MASTER{}_OID AS {datasource_alias}_KEY", parent_datasource.get_schema_oid()?),
+            Datasource::InheritorTable {
+                parent_datasource, ..
+            } => format!(
+                ", d.MASTER{}_OID AS {datasource_alias}_KEY",
+                parent_datasource.get_schema_oid()?
+            ),
             Datasource::Column { column, .. } => {
                 match column.column_type {
                     column_type::ColumnType::Object { table_oid, .. }
@@ -866,10 +991,10 @@ impl ParamCTE {
                             String::from("")
                         }
                     }
-                    _ => String::from("")
+                    _ => String::from(""),
                 }
             }
-            _ => String::from("")
+            _ => String::from(""),
         };
 
         // Select the columns for OIDs/parameters from child datasources and the FROM/JOIN tables/CTEs
@@ -930,14 +1055,23 @@ impl ParamCTE {
         }
         let (oid_columns, datasources) = oid_columns_and_datasources_raw.into_iter().fold(
             (
-                format!("d.OID AS {datasource_alias}_OID{key}"), 
-                format!("FROM TABLE{datasource_schema_oid} d")
-            ), 
-            |(acc1, acc2), (e1, e2)| (format!("{acc1}, {e1}"), format!("{acc2} {e2}"))
+                format!("d.OID AS {datasource_alias}_OID{key}"),
+                format!("FROM TABLE{datasource_schema_oid} d"),
+            ),
+            |(acc1, acc2), (e1, e2)| (format!("{acc1}, {e1}"), format!("{acc2} {e2}")),
         );
 
         // Compile all columns
-        let all_columns: String = self.columns.into_iter().map(|(_, column)| format!("{} AS {}, {} AS {}", column.label_expr, column.label_ord, column.value_expr, column.value_ord)).fold(oid_columns, |acc, e| format!("{acc}, {e}"));
+        let all_columns: String = self
+            .columns
+            .into_iter()
+            .map(|(_, column)| {
+                format!(
+                    "{} AS {}, {} AS {}",
+                    column.label_expr, column.label_ord, column.value_expr, column.value_ord
+                )
+            })
+            .fold(oid_columns, |acc, e| format!("{acc}, {e}"));
 
         Ok(format!(
             "
@@ -962,7 +1096,7 @@ struct ScalarExpression {
     arg_type: ExpressionReturnType,
 
     /// The SQL expression resulting in a scalar value representing the true value of the parameter.
-    /// This will typically be the same as arg_expr, with the exception that Select/Multiselect/Object columns will have their primary keys 
+    /// This will typically be the same as arg_expr, with the exception that Select/Multiselect/Object columns will have their primary keys
     /// returned by arg_expr and their referenced row OIDs returned by value_expr.
     value_expr: String,
 
@@ -973,13 +1107,13 @@ struct ScalarExpression {
     param_expr: String,
 
     /// True if the expressions are deterministic. False if RANDOM() is invoked.
-    deterministic: bool 
+    deterministic: bool,
 }
 
 struct SchemaView {
     param_cte: HashMap<Datasource, ParamCTE>,
     columns: HashMap<i64, SchemaViewColumn>,
-    rand_count: usize
+    rand_count: usize,
 }
 
 impl SchemaView {
@@ -988,7 +1122,7 @@ impl SchemaView {
         Self {
             param_cte: HashMap::new(),
             columns: HashMap::new(),
-            rand_count: 0
+            rand_count: 0,
         }
     }
 
@@ -1006,25 +1140,42 @@ impl SchemaView {
                 root_datasource.insert(cte_datasource.seek_root());
 
                 let cte_datasource_alias: String = cte_datasource.get_alias();
-                let cte_root_datasource_alias: String = cte_root_datasource.get_alias();
-                
+
                 // Compile the CTE
-                with_expr = format!("{with_expr}{} {}", if with_expr == "WITH" { "" } else { "," }, cte.compile()?);
+                with_expr = format!(
+                    "{with_expr}{} {}",
+                    if with_expr == "WITH" { "" } else { "," },
+                    cte.compile()?
+                );
 
                 // Select OID from the datasource
                 oid_expr.push(format!("{cte_datasource_alias}_OID"));
-                filter_expr = format!("{filter_expr}{}{}", if filter_expr == "" { "'" } else { " || '&" }, format!("{cte_datasource_alias}=' || CAST({cte_root_datasource_alias}.{cte_datasource_alias}_OID AS TEXT)"));
+                filter_expr = format!(
+                    "{filter_expr}{}{}",
+                    if filter_expr == "" { "'" } else { " || '&" },
+                    format!("{cte_datasource_alias}=' || CAST({cte_datasource_alias}_OID AS TEXT)")
+                );
 
                 // If the datasource is a root, select from it
                 if let Datasource::Table { .. } = cte_datasource {
-                    from_expr = format!("{from_expr}{} {}", if from_expr == "FROM" { "" } else { " INNER JOIN" }, cte_datasource.get_alias());
+                    from_expr = format!(
+                        "{from_expr}{} {}",
+                        if from_expr == "FROM" {
+                            ""
+                        } else {
+                            " INNER JOIN"
+                        },
+                        cte_datasource.get_alias()
+                    );
                 }
             }
             (
-                with_expr, 
+                with_expr,
                 {
-                    let mut star_columns: Vec<String> = root_datasource.iter()
-                        .map(|root_datasource| format!("{}.*", root_datasource.get_alias())).collect();
+                    let mut star_columns: Vec<String> = root_datasource
+                        .iter()
+                        .map(|root_datasource| format!("{}.*", root_datasource.get_alias()))
+                        .collect();
 
                     let mut k: usize = 1;
                     while k <= self.rand_count {
@@ -1032,32 +1183,37 @@ impl SchemaView {
                         k += 1;
                     }
 
-                    star_columns.into_iter().reduce(|acc, e| format!("{acc}, {e}")).unwrap()
+                    star_columns
+                        .into_iter()
+                        .reduce(|acc, e| format!("{acc}, {e}"))
+                        .unwrap()
                 },
                 oid_expr.into_iter().fold(
                     format!(
-                        "{} AS QUERY_FILTER{}", 
-                        if filter_expr == "" { String::from("''") } else { filter_expr },
+                        "{} AS QUERY_FILTER{}",
+                        if filter_expr == "" {
+                            String::from("''")
+                        } else {
+                            filter_expr
+                        },
                         if root_datasource.len() == 1 {
-                            let root_datasource: Datasource = root_datasource.into_iter().next().unwrap();
-                            format!(
-                                ", {}_OID AS OID",  
-                                root_datasource.get_alias()
-                            )
+                            let root_datasource: Datasource =
+                                root_datasource.into_iter().next().unwrap();
+                            format!(", {}_OID AS OID", root_datasource.get_alias())
                         } else {
                             String::from(", NULL AS OID")
                         }
-                    ), 
-                    |acc, e| format!("{acc}, {e}")
-                ), 
-                from_expr
+                    ),
+                    |acc, e| format!("{acc}, {e}"),
+                ),
+                from_expr,
             )
         } else {
             (
-                String::from(""), 
                 String::from(""),
-                String::from("'' AS QUERY_FILTER, NULL AS OID"), 
-                String::from("")
+                String::from(""),
+                String::from("'' AS QUERY_FILTER, NULL AS OID"),
+                String::from(""),
             )
         };
 
@@ -1068,7 +1224,10 @@ impl SchemaView {
             if with_expr == "" {
                 String::from("")
             } else {
-                format!("{with_expr}, {}", format!("FINAL_CTE AS (SELECT {star_expr} {from_expr})"))
+                format!(
+                    "{with_expr}, {}",
+                    format!("FINAL_CTE AS (SELECT {star_expr} {from_expr})")
+                )
             }
         };
 
@@ -1092,7 +1251,9 @@ impl SchemaView {
             for (_, c) in self.columns.into_iter() {
                 column_expr.push(c.compile()?);
             }
-            column_expr.into_iter().fold(oid_expr, |acc, e| format!("{acc}, {e}"))
+            column_expr
+                .into_iter()
+                .fold(oid_expr, |acc, e| format!("{acc}, {e}"))
         };
 
         // Compile the SELECT
@@ -1121,43 +1282,58 @@ impl SchemaView {
 
                 // Link the datasource to its parent
                 if let Some(parent_datasource_cte) = self.param_cte.get_mut(&parent_datasource) {
-                    parent_datasource_cte.child_datasources.insert(datasource.clone());
+                    parent_datasource_cte
+                        .child_datasources
+                        .insert(datasource.clone());
                 }
             }
 
             // Add a CTE for the datasource
-            self.param_cte.insert(datasource.clone(), ParamCTE {
-                datasource: datasource.clone(),
-                child_datasources: HashSet::new(),
-                columns: HashMap::new()
-            });
+            self.param_cte.insert(
+                datasource.clone(),
+                ParamCTE {
+                    datasource: datasource.clone(),
+                    child_datasources: HashSet::new(),
+                    columns: HashMap::new(),
+                },
+            );
         }
     }
 
-    /// 
-    fn add_column(&mut self, trans: &Transaction, root_datasource: &Option<Datasource>, datasource_path: String, column_metadata: column::FullMetadata) -> Result<(), Error> {
+    ///
+    fn add_column(
+        &mut self,
+        trans: &Transaction,
+        root_datasource: &Option<Datasource>,
+        datasource_path: String,
+        column_metadata: column::FullMetadata,
+    ) -> Result<(), Error> {
         match &column_metadata.column_type {
-            column_type::ColumnType::Primitive(_) 
-            | column_type::ColumnType::Object { .. } 
-            | column_type::ColumnType::Select { .. } 
+            column_type::ColumnType::Primitive(_)
+            | column_type::ColumnType::Object { .. }
+            | column_type::ColumnType::Select { .. }
             | column_type::ColumnType::Multiselect { .. } => {
                 if let Some(root_datasource) = root_datasource {
                     // Add the primitive column as a param
                     let column_oid: i64 = column_metadata.oid.clone();
-                    let column_datasource: Datasource = root_datasource.append_path(datasource_path)?;
-                    let (access_datasource, access_param) = self.add_param(column_datasource, column_metadata)?;
+                    let column_datasource: Datasource =
+                        root_datasource.append_path(datasource_path)?;
+                    let (_, access_param) = self.add_param(column_datasource, column_metadata)?;
 
                     // Register the column to the query
-                    self.columns.insert(column_oid.clone(), SchemaViewColumn::TableData { 
-                        label_expr: format!("{}.{}", access_datasource.get_alias(), access_param.label_ord), 
-                        label_ord: format!("COLUMN{}_LABEL", column_oid), 
-                        value_expr: format!("{}.{}", access_datasource.get_alias(), access_param.value_ord), 
-                        value_ord: format!("COLUMN{}_VALUE", column_oid)
-                    });
+                    self.columns.insert(
+                        column_oid.clone(),
+                        SchemaViewColumn::TableData {
+                            label_expr: format!("{}", access_param.label_ord),
+                            label_ord: format!("COLUMN{}_LABEL", column_oid),
+                            value_expr: format!("{}", access_param.value_ord),
+                            value_ord: format!("COLUMN{}_VALUE", column_oid),
+                        },
+                    );
                 } else {
-                    return Err(Error::OrphanedDataColumn { 
-                        column_oid: column_metadata.oid, 
-                        column_name: column_metadata.name 
+                    return Err(Error::OrphanedDataColumn {
+                        column_oid: column_metadata.oid,
+                        column_name: column_metadata.name,
                     });
                 };
             }
@@ -1167,24 +1343,27 @@ impl SchemaView {
 
                 // Compile the formula into SQL
                 let scalar_expression: ScalarExpression = self.compile_formula(
-                    trans, 
-                    column_metadata.schema.oid, 
+                    trans,
+                    column_metadata.schema.oid,
                     match root_datasource {
                         Some(root_datasource) => root_datasource.append_path(datasource_path)?,
-                        None => Datasource::from_alias_transact(trans, datasource_path)?
-                    }, 
-                    parsed_formula
+                        None => Datasource::from_alias_transact(trans, datasource_path)?,
+                    },
+                    parsed_formula,
                 )?;
 
                 // Turn into a column
-                self.columns.insert(column_metadata.oid.clone(), SchemaViewColumn::Formula { 
-                    label_expr: scalar_expression.label_expr, 
-                    label_ord: format!("COLUMN{}_LABEL", column_metadata.oid), 
-                    value_expr: scalar_expression.value_expr, 
-                    value_ord: format!("COLUMN{}_VALUE", column_metadata.oid), 
-                    param_expr: scalar_expression.param_expr, 
-                    param_ord: format!("COLUMN{}_PARAM", column_metadata.oid) 
-                });
+                self.columns.insert(
+                    column_metadata.oid.clone(),
+                    SchemaViewColumn::Formula {
+                        label_expr: scalar_expression.label_expr,
+                        label_ord: format!("COLUMN{}_LABEL", column_metadata.oid),
+                        value_expr: scalar_expression.value_expr,
+                        value_ord: format!("COLUMN{}_VALUE", column_metadata.oid),
+                        param_expr: scalar_expression.param_expr,
+                        param_ord: format!("COLUMN{}_PARAM", column_metadata.oid),
+                    },
+                );
             }
             _ => {
                 // Ignore other virtual column types
@@ -1194,7 +1373,11 @@ impl SchemaView {
     }
 
     /// Adds a data cell to a datasource.
-    fn add_param(&mut self, datasource: Datasource, column: column::FullMetadata) -> Result<(Datasource, ParamCTEColumn), Error> {
+    fn add_param(
+        &mut self,
+        datasource: Datasource,
+        column: column::FullMetadata,
+    ) -> Result<(Datasource, ParamCTEColumn), Error> {
         // Ensure the CTE for the datasource exists
         self.add_datasource_cte(&datasource);
 
@@ -1444,7 +1627,7 @@ impl SchemaView {
                                 label_expr: format!("
                                     (
                                         SELECT 
-                                            '[' || COALESCE(GROUP_CONCAT(l.JSON_LABEL, ', '), '') || ']'
+                                            '[' || GROUP_CONCAT(l.JSON_LABEL, ', ') || ']'
                                         FROM MULTISELECT{} m 
                                         INNER JOIN TABLE{table_oid}_LABEL_VIEW l ON l.OID = m.TABLE{table_oid}_OID 
                                         WHERE m.TABLE{}_OID = d.OID
@@ -1489,7 +1672,7 @@ impl SchemaView {
                                 label_expr: format!("
                                     (
                                         SELECT 
-                                            '[' || COALESCE(GROUP_CONCAT(l.JSON_LABEL, ', '), '') || ']'
+                                            '[' || GROUP_CONCAT(l.JSON_LABEL, ', ') || ']'
                                         FROM MULTISELECT{} m 
                                         INNER JOIN TABLE{}_LABEL_VIEW l ON l.OID = m.TABLE{}_OID 
                                         WHERE m.TABLE{table_oid}_OID = d.OID
@@ -1543,18 +1726,24 @@ impl SchemaView {
                     }
                 });
             }
-            
+
             datasource_cte.columns[&column_path].clone()
         } else {
-            return Err(Error::InvalidDatasource { 
-                datasource_alias: datasource.get_alias() 
+            return Err(Error::InvalidDatasource {
+                datasource_alias: datasource.get_alias(),
             });
         };
         Ok((datasource.seek_root(), param))
     }
 
     /// Compile the formula into SQL.
-    fn compile_formula(&mut self, trans: &Transaction, root_oid: i64, root_datasource: Datasource, formula: Box<Formula>) -> Result<ScalarExpression, Error> {
+    fn compile_formula(
+        &mut self,
+        trans: &Transaction,
+        root_oid: i64,
+        root_datasource: Datasource,
+        formula: Box<Formula>,
+    ) -> Result<ScalarExpression, Error> {
         Ok(match *formula {
             Formula::Null => ScalarExpression {
                 arg_expr: String::from("NULL"),
@@ -1562,7 +1751,7 @@ impl SchemaView {
                 value_expr: String::from("NULL"),
                 label_expr: String::from("NULL"),
                 param_expr: String::from("NULL"),
-                deterministic: true
+                deterministic: true,
             },
             Formula::LiteralBool(b) => {
                 let (value_expr, label_expr) = if b {
@@ -1576,7 +1765,7 @@ impl SchemaView {
                     value_expr,
                     label_expr,
                     param_expr: String::from("'boolean'"),
-                    deterministic: true
+                    deterministic: true,
                 }
             }
             Formula::LiteralInt(num) => ScalarExpression {
@@ -1585,7 +1774,7 @@ impl SchemaView {
                 value_expr: format!("{num}"),
                 label_expr: format!("'{num}'"),
                 param_expr: String::from("'integer'"),
-                deterministic: true
+                deterministic: true,
             },
             Formula::LiteralFloat(num) => ScalarExpression {
                 arg_expr: format!("{num}"),
@@ -1593,7 +1782,7 @@ impl SchemaView {
                 value_expr: format!("{num}"),
                 label_expr: format!("'{num}'"),
                 param_expr: String::from("'number'"),
-                deterministic: true
+                deterministic: true,
             },
             Formula::LiteralString(str) => {
                 let safe_str: String = format!("'{}'", str.replace("'", "''"));
@@ -1603,7 +1792,7 @@ impl SchemaView {
                     value_expr: safe_str.clone(),
                     label_expr: safe_str.clone(),
                     param_expr: String::from("'textplain'"),
-                    deterministic: true
+                    deterministic: true,
                 }
             }
             Formula::RandomInt => {
@@ -1614,12 +1803,18 @@ impl SchemaView {
                     value_expr: format!("RANDOM{}", self.rand_count),
                     label_expr: format!("CAST(RANDOM{} AS TEXT)", self.rand_count),
                     param_expr: String::from("'integer'"),
-                    deterministic: false
+                    deterministic: false,
                 }
             }
-            Formula::Param { datasource_alias, column_oid } => {
-                let column_datasource: Datasource = Datasource::from_alias(datasource_alias.clone())?.substitute_root(root_oid.clone(), root_datasource.clone());
-                let column_metadata = column::FullMetadata::get_transact(trans, column_oid.clone())?;
+            Formula::Param {
+                datasource_alias,
+                column_oid,
+            } => {
+                let column_datasource: Datasource =
+                    Datasource::from_alias(datasource_alias.clone())?
+                        .substitute_root(root_oid.clone(), root_datasource.clone());
+                let column_metadata =
+                    column::FullMetadata::get_transact(trans, column_oid.clone())?;
                 match &column_metadata.column_type {
                     column_type::ColumnType::Primitive(_)
                     | column_type::ColumnType::Object { .. }
@@ -1630,24 +1825,33 @@ impl SchemaView {
                                 column_type::Primitive::Checkbox => "boolean",
                                 column_type::Primitive::Integer => "integer",
                                 column_type::Primitive::Number => "number",
-                                column_type::Primitive::Text => "textplain",
-                                column_type::Primitive::JSON => "textJSON",
-                                column_type::Primitive::File => "file",
-                                column_type::Primitive::Image => "image",
-                                column_type::Primitive::Date => "date",
-                                column_type::Primitive::Datetime => "datetime"
+                                column_type::Primitive::Text => "text/plain",
+                                column_type::Primitive::JSON => "text/JSON",
+                                column_type::Primitive::File => "file/any",
+                                column_type::Primitive::Image => "file/image",
+                                column_type::Primitive::Date => "dateonly",
+                                column_type::Primitive::Datetime => "datetime",
                             }),
-                            column_type::ColumnType::Object { table_oid, .. } => format!("object{table_oid}"),
-                            column_type::ColumnType::Select { table_oid, .. } => format!("select{table_oid}"),
-                            column_type::ColumnType::Multiselect { table_oid, .. } => format!("multiselect{table_oid}"),
-                            _ => String::from("N/A") // This case shouldn't happen
+                            column_type::ColumnType::Object { table_oid, .. } => {
+                                format!("object{table_oid}")
+                            }
+                            column_type::ColumnType::Select { table_oid, .. } => {
+                                format!("select{table_oid}")
+                            }
+                            column_type::ColumnType::Multiselect { table_oid, .. } => {
+                                format!("multiselect{table_oid}")
+                            }
+                            _ => String::from("N/A"), // This case shouldn't happen
                         };
 
                         let (_, param) = self.add_param(column_datasource, column_metadata)?;
-                        
+
                         // Parameter expressions return a string in the form "{TABLE_OID}:{COLUMN_OID}:{ROW_OID}"
                         let param_expr: String = if let Some(param_cell) = param.cell {
-                            format!("('{param_name}:{}:{}:' || CAST({} AS TEXT))", param_cell.table_oid, param_cell.column_oid, param_cell.row_ord)
+                            format!(
+                                "('{param_name}:{}:{}:' || CAST({} AS TEXT))",
+                                param_cell.table_oid, param_cell.column_oid, param_cell.row_ord
+                            )
                         } else {
                             String::from("NULL") // This case shouldn't happen?
                         };
@@ -1659,29 +1863,39 @@ impl SchemaView {
                             value_expr: param.value_expr,
                             label_expr: param.label_expr,
                             param_expr,
-                            deterministic: true
+                            deterministic: true,
                         }
                     }
                     column_type::ColumnType::Formula { formula, .. } => {
                         // Parse the formula
-                        let parsed_formula: Box<Formula> = Box::new(Formula::parse(formula.clone())?);
+                        let parsed_formula: Box<Formula> =
+                            Box::new(Formula::parse(formula.clone())?);
 
                         // Compile the formula into a scalar expression
-                        let formula_root_oid: i64 = match Datasource::get_default_datasource_transact(trans, column_datasource.get_schema_oid()?)? {
-                            Datasource::Table { oid, .. } => oid,
-                            _ => {
-                                // This case should not ever occur, but just in case...
-                                return Err(Error::AdhocError("get_default_datasource_transact() function did not return a Datasource::Table, which is not allowed."));
-                            }
-                        };
-                        self.compile_formula(trans, formula_root_oid, column_datasource, parsed_formula)?
+                        let formula_root_oid: i64 =
+                            match Datasource::get_default_datasource_transact(
+                                trans,
+                                column_datasource.get_schema_oid()?,
+                            )? {
+                                Datasource::Table { oid, .. } => oid,
+                                _ => {
+                                    // This case should not ever occur, but just in case...
+                                    return Err(Error::AdhocError("get_default_datasource_transact() function did not return a Datasource::Table, which is not allowed."));
+                                }
+                            };
+                        self.compile_formula(
+                            trans,
+                            formula_root_oid,
+                            column_datasource,
+                            parsed_formula,
+                        )?
                     }
                     _ => {
                         // Column type is not allowed to be used as a parameter in a formula
-                        return Err(Error::InvalidParameter { 
-                            column_oid, 
-                            column_name: column_metadata.name, 
-                            column_type: column_metadata.column_type.to_str() 
+                        return Err(Error::InvalidParameter {
+                            column_oid,
+                            column_name: column_metadata.name,
+                            column_type: column_metadata.column_type.to_str(),
                         });
                     }
                 }
@@ -1689,38 +1903,69 @@ impl SchemaView {
             Formula::Coalesce(items) => {
                 let mut items_compiled: Vec<ScalarExpression> = Vec::new();
                 for item in items {
-                    let item_compiled: ScalarExpression = self.compile_formula(trans, root_oid.clone(), root_datasource.clone(), Box::new(item))?;
+                    let item_compiled: ScalarExpression = self.compile_formula(
+                        trans,
+                        root_oid.clone(),
+                        root_datasource.clone(),
+                        Box::new(item),
+                    )?;
                     items_compiled.push(item_compiled);
                 }
 
-                let deterministic: bool = items_compiled.iter().all(|item_compiled| item_compiled.deterministic);
-                let arg_type: ExpressionReturnType = items_compiled.iter().fold(ExpressionReturnType::new_primitive(PrimitiveScalarType::Null), |acc, item_compiled| acc.generalize(&item_compiled.arg_type));
+                let deterministic: bool = items_compiled
+                    .iter()
+                    .all(|item_compiled| item_compiled.deterministic);
+                let arg_type: ExpressionReturnType = items_compiled.iter().fold(
+                    ExpressionReturnType::new_primitive(PrimitiveScalarType::Null),
+                    |acc, item_compiled| acc.generalize(&item_compiled.arg_type),
+                );
                 let (label_expr, param_expr) = if items_compiled.len() > 1 {
                     (
-                        format!("{} ELSE {} END",
-                            items_compiled.iter()
-                                .take(items_compiled.len() - 1)
-                                .fold(String::from("CASE"), |acc, item_compiled| format!("{acc} WHEN {} IS NOT NULL THEN {}", item_compiled.value_expr, item_compiled.label_expr)),
+                        format!(
+                            "{} ELSE {} END",
+                            items_compiled.iter().take(items_compiled.len() - 1).fold(
+                                String::from("CASE"),
+                                |acc, item_compiled| format!(
+                                    "{acc} WHEN {} IS NOT NULL THEN {}",
+                                    item_compiled.value_expr, item_compiled.label_expr
+                                )
+                            ),
                             items_compiled[items_compiled.len() - 1].label_expr
                         ),
-                        format!("{} ELSE {} END",
-                            items_compiled.iter()
-                                .take(items_compiled.len() - 1)
-                                .fold(String::from("CASE"), |acc, item_compiled| format!("{acc} WHEN {} IS NOT NULL THEN {}", item_compiled.value_expr, item_compiled.param_expr)),
+                        format!(
+                            "{} ELSE {} END",
+                            items_compiled.iter().take(items_compiled.len() - 1).fold(
+                                String::from("CASE"),
+                                |acc, item_compiled| format!(
+                                    "{acc} WHEN {} IS NOT NULL THEN {}",
+                                    item_compiled.value_expr, item_compiled.param_expr
+                                )
+                            ),
                             items_compiled[items_compiled.len() - 1].param_expr
-                        )
+                        ),
                     )
                 } else if items_compiled.len() == 1 {
-                    (items_compiled[0].label_expr.clone(), items_compiled[0].param_expr.clone())
+                    (
+                        items_compiled[0].label_expr.clone(),
+                        items_compiled[0].param_expr.clone(),
+                    )
                 } else {
                     (String::from("NULL"), String::from("NULL"))
                 };
-                let (value_expr, arg_expr) = match items_compiled.into_iter()
+                let (value_expr, arg_expr) = match items_compiled
+                    .into_iter()
                     .map(|item_compiled| (item_compiled.value_expr, item_compiled.arg_expr))
-                    .reduce(|(acc_value, acc_arg), (e_value, e_arg)| (format!("{acc_value}, {e_value}"), format!("{acc_arg}, {e_arg}"))) {
-                    
-                    Some((acc_value, acc_arg)) => (format!("COALESCE({acc_value})"), format!("COALESCE({acc_arg})")),
-                    None => (String::from("NULL"), String::from("NULL"))
+                    .reduce(|(acc_value, acc_arg), (e_value, e_arg)| {
+                        (
+                            format!("{acc_value}, {e_value}"),
+                            format!("{acc_arg}, {e_arg}"),
+                        )
+                    }) {
+                    Some((acc_value, acc_arg)) => (
+                        format!("COALESCE({acc_value})"),
+                        format!("COALESCE({acc_arg})"),
+                    ),
+                    None => (String::from("NULL"), String::from("NULL")),
                 };
 
                 ScalarExpression {
@@ -1729,18 +1974,24 @@ impl SchemaView {
                     value_expr,
                     label_expr,
                     param_expr,
-                    deterministic
+                    deterministic,
                 }
             }
             Formula::Abs(inner) => {
                 let inner_name: String = inner.to_string();
-                let inner_compiled: ScalarExpression = self.compile_formula(trans, root_oid, root_datasource, inner)?;
-                if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
-                    return Err(Error::FormulaTypeValidationError { 
-                        outer_name: "abs", 
-                        inner_name, 
-                        expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
-                        received_type: inner_compiled.arg_type.to_string(trans) 
+                let inner_compiled: ScalarExpression =
+                    self.compile_formula(trans, root_oid, root_datasource, inner)?;
+                if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number)
+                    .accepts_arg(&inner_compiled.arg_type)
+                {
+                    return Err(Error::FormulaTypeValidationError {
+                        outer_name: "abs",
+                        inner_name,
+                        expected_type: ExpressionReturnType::new_primitive(
+                            PrimitiveScalarType::Number,
+                        )
+                        .to_string(trans),
+                        received_type: inner_compiled.arg_type.to_string(trans),
                     });
                 }
 
@@ -1753,18 +2004,24 @@ impl SchemaView {
                     label_expr,
                     value_expr,
                     param_expr: inner_compiled.param_expr,
-                    deterministic: inner_compiled.deterministic
+                    deterministic: inner_compiled.deterministic,
                 }
             }
             Formula::Sign(inner) => {
                 let inner_name: String = inner.to_string();
-                let inner_compiled: ScalarExpression = self.compile_formula(trans, root_oid, root_datasource, inner)?;
-                if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
-                    return Err(Error::FormulaTypeValidationError { 
-                        outer_name: "sign", 
-                        inner_name, 
-                        expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
-                        received_type: inner_compiled.arg_type.to_string(trans) 
+                let inner_compiled: ScalarExpression =
+                    self.compile_formula(trans, root_oid, root_datasource, inner)?;
+                if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number)
+                    .accepts_arg(&inner_compiled.arg_type)
+                {
+                    return Err(Error::FormulaTypeValidationError {
+                        outer_name: "sign",
+                        inner_name,
+                        expected_type: ExpressionReturnType::new_primitive(
+                            PrimitiveScalarType::Number,
+                        )
+                        .to_string(trans),
+                        received_type: inner_compiled.arg_type.to_string(trans),
                     });
                 }
 
@@ -1777,18 +2034,24 @@ impl SchemaView {
                     label_expr,
                     value_expr,
                     param_expr: String::from("'integer'"),
-                    deterministic: inner_compiled.deterministic
+                    deterministic: inner_compiled.deterministic,
                 }
             }
             Formula::Floor(inner) => {
                 let inner_name: String = inner.to_string();
-                let inner_compiled: ScalarExpression = self.compile_formula(trans, root_oid, root_datasource, inner)?;
-                if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
-                    return Err(Error::FormulaTypeValidationError { 
-                        outer_name: "floor", 
-                        inner_name, 
-                        expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
-                        received_type: inner_compiled.arg_type.to_string(trans) 
+                let inner_compiled: ScalarExpression =
+                    self.compile_formula(trans, root_oid, root_datasource, inner)?;
+                if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number)
+                    .accepts_arg(&inner_compiled.arg_type)
+                {
+                    return Err(Error::FormulaTypeValidationError {
+                        outer_name: "floor",
+                        inner_name,
+                        expected_type: ExpressionReturnType::new_primitive(
+                            PrimitiveScalarType::Number,
+                        )
+                        .to_string(trans),
+                        received_type: inner_compiled.arg_type.to_string(trans),
                     });
                 }
 
@@ -1801,18 +2064,24 @@ impl SchemaView {
                     label_expr,
                     value_expr,
                     param_expr: String::from("'integer'"),
-                    deterministic: inner_compiled.deterministic
+                    deterministic: inner_compiled.deterministic,
                 }
             }
             Formula::Ceiling(inner) => {
                 let inner_name: String = inner.to_string();
-                let inner_compiled: ScalarExpression = self.compile_formula(trans, root_oid, root_datasource, inner)?;
-                if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
-                    return Err(Error::FormulaTypeValidationError { 
-                        outer_name: "ceil", 
-                        inner_name, 
-                        expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
-                        received_type: inner_compiled.arg_type.to_string(trans) 
+                let inner_compiled: ScalarExpression =
+                    self.compile_formula(trans, root_oid, root_datasource, inner)?;
+                if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number)
+                    .accepts_arg(&inner_compiled.arg_type)
+                {
+                    return Err(Error::FormulaTypeValidationError {
+                        outer_name: "ceil",
+                        inner_name,
+                        expected_type: ExpressionReturnType::new_primitive(
+                            PrimitiveScalarType::Number,
+                        )
+                        .to_string(trans),
+                        received_type: inner_compiled.arg_type.to_string(trans),
                     });
                 }
 
@@ -1825,18 +2094,24 @@ impl SchemaView {
                     label_expr,
                     value_expr,
                     param_expr: String::from("'integer'"),
-                    deterministic: inner_compiled.deterministic
+                    deterministic: inner_compiled.deterministic,
                 }
             }
             Formula::Round(inner) => {
                 let inner_name: String = inner.to_string();
-                let inner_compiled: ScalarExpression = self.compile_formula(trans, root_oid, root_datasource, inner)?;
-                if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).accepts_arg(&inner_compiled.arg_type) {
-                    return Err(Error::FormulaTypeValidationError { 
-                        outer_name: "round", 
-                        inner_name, 
-                        expected_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Number).to_string(trans), 
-                        received_type: inner_compiled.arg_type.to_string(trans) 
+                let inner_compiled: ScalarExpression =
+                    self.compile_formula(trans, root_oid, root_datasource, inner)?;
+                if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number)
+                    .accepts_arg(&inner_compiled.arg_type)
+                {
+                    return Err(Error::FormulaTypeValidationError {
+                        outer_name: "round",
+                        inner_name,
+                        expected_type: ExpressionReturnType::new_primitive(
+                            PrimitiveScalarType::Number,
+                        )
+                        .to_string(trans),
+                        received_type: inner_compiled.arg_type.to_string(trans),
                     });
                 }
 
@@ -1849,9 +2124,9 @@ impl SchemaView {
                     label_expr,
                     value_expr,
                     param_expr: String::from("'integer'"),
-                    deterministic: inner_compiled.deterministic
+                    deterministic: inner_compiled.deterministic,
                 }
-            },
+            }
             _ => {
                 todo!("Function {} is not implemented yet!", formula.to_string());
             }
@@ -1859,17 +2134,25 @@ impl SchemaView {
     }
 }
 
-
 /// Create a view for the table.
 fn create_schema_view(trans: &Transaction, schema_oid: i64) -> Result<(), Error> {
     println!("Creating schema view SCHEMA{schema_oid}_VIEW...");
 
     // Get the root table datasource for the view
     let mut view: SchemaView = SchemaView::new();
-    let root_datasource: Option<Datasource> = if let Some(root_datasource_oid) = trans.query_one("SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = ?1 LIMIT 1", params![schema_oid], |row| row.get("OID")).optional()? {
-        Some(Datasource::get_transact(trans, root_datasource_oid)?)
+    let root_datasource: Option<Datasource> = if let Some(root_datasource_oid) = trans
+        .query_one(
+            "SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = ?1 LIMIT 1",
+            params![schema_oid],
+            |row| row.get("OID"),
+        )
+        .optional()?
+    {
+        let root_datasource: Datasource = Datasource::get_transact(trans, root_datasource_oid)?;
+        view.add_datasource_cte(&root_datasource);
+        Some(root_datasource)
     } else {
-        None 
+        None
     };
 
     // Add each column that belongs to the schema
@@ -1884,7 +2167,6 @@ fn create_schema_view(trans: &Transaction, schema_oid: i64) -> Result<(), Error>
     trans.execute(&create_sql, [])?;
     Ok(())
 }
-
 
 /// Create the views associated with a schema.
 pub fn regenerate_schema_views(trans: &Transaction, schema_oid: i64) -> Result<(), Error> {

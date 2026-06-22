@@ -1,28 +1,26 @@
 use crate::data::column;
+use crate::data::column_type;
 use crate::data::datasource;
 use crate::data::query;
-use crate::util::error::Error;
-use crate::util::db;
-use crate::util::channel::Sender;
 use crate::data::schema;
 use crate::data::surrogate;
-use crate::data::column_type;
-use crate::data::view::{regenerate_schema_views};
+use crate::data::view::regenerate_schema_views;
+use crate::util::channel::Sender;
+use crate::util::db;
+use crate::util::error::Error;
 use rusqlite::OptionalExtension;
-use rusqlite::{Connection, Transaction, params};
-use serde::{Serialize, Deserialize};
+use rusqlite::{params, Connection, Transaction};
+use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 
 #[derive(Serialize, Clone)]
 pub struct DropdownValue {
     pub label: String,
-    pub value: i64
+    pub value: i64,
 }
 
-
-
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(rename_all="camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct FullMetadata {
     pub oid: i64,
     pub hidden: bool,
@@ -32,7 +30,7 @@ pub struct FullMetadata {
     pub style: String,
     pub ordering: i64,
     pub default_value: Option<String>,
-    pub is_primary_key: bool
+    pub is_primary_key: bool,
 }
 
 impl Hash for FullMetadata {
@@ -52,7 +50,7 @@ impl FullMetadata {
             style,
             ordering,
             default_value,
-            is_primary_key
+            is_primary_key,
         ) = conn.query_one(
             "
             SELECT
@@ -68,20 +66,23 @@ impl FullMetadata {
             WHERE c.OID = ?1
             ",
             params![oid],
-            |row| {Ok((
-                row.get::<_, bool>("HIDDEN")?,
-                row.get::<_, i64>("SCHEMA_OID")?,
-                row.get::<_, String>("NAME")?,
-                row.get::<_, i64>("TYPE_OID")?,
-                row.get::<_, String>("STYLE")?,
-                row.get::<_, i64>("ORDERING")?,
-                row.get::<_, Option<String>>("DEFAULT_VALUE")?,
-                row.get::<_, bool>("IS_PRIMARY_KEY")?
-            ))}
+            |row| {
+                Ok((
+                    row.get::<_, bool>("HIDDEN")?,
+                    row.get::<_, i64>("SCHEMA_OID")?,
+                    row.get::<_, String>("NAME")?,
+                    row.get::<_, i64>("TYPE_OID")?,
+                    row.get::<_, String>("STYLE")?,
+                    row.get::<_, i64>("ORDERING")?,
+                    row.get::<_, Option<String>>("DEFAULT_VALUE")?,
+                    row.get::<_, bool>("IS_PRIMARY_KEY")?,
+                ))
+            },
         )?;
 
         let schema: schema::FullMetadata = schema::FullMetadata::get(&conn, schema_oid)?;
-        let column_type: column_type::ColumnType = column_type::ColumnType::get(column_type_oid)?;
+        let column_type: column_type::ColumnType =
+            column_type::ColumnType::get_transact(&conn, column_type_oid)?;
         Ok(Self {
             oid,
             hidden,
@@ -91,7 +92,7 @@ impl FullMetadata {
             style,
             ordering,
             default_value,
-            is_primary_key
+            is_primary_key,
         })
     }
 
@@ -105,7 +106,10 @@ impl FullMetadata {
     pub fn trash(oid: i64) -> Result<(), Error> {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
-        trans.execute("UPDATE METADATA_COLUMN SET TRASH = TRUE WHERE OID = ?1", params![oid])?;
+        trans.execute(
+            "UPDATE METADATA_COLUMN SET TRASH = TRUE WHERE OID = ?1",
+            params![oid],
+        )?;
 
         // Commit the transaction
         trans.commit()?;
@@ -116,7 +120,10 @@ impl FullMetadata {
     pub fn untrash(oid: i64) -> Result<(), Error> {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
-        trans.execute("UPDATE METADATA_COLUMN SET TRASH = FALSE WHERE OID = ?1", params![oid])?;
+        trans.execute(
+            "UPDATE METADATA_COLUMN SET TRASH = FALSE WHERE OID = ?1",
+            params![oid],
+        )?;
 
         // Commit the transaction
         trans.commit()?;
@@ -127,8 +134,14 @@ impl FullMetadata {
     pub fn trash_and_untrash(untrash_oid: i64, trash_oid: i64) -> Result<(), Error> {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
-        trans.execute("UPDATE METADATA_COLUMN SET TRASH = TRUE WHERE OID = ?1", params![trash_oid])?;
-        trans.execute("UPDATE METADATA_COLUMN SET TRASH = FALSE WHERE OID = ?1", params![untrash_oid])?;
+        trans.execute(
+            "UPDATE METADATA_COLUMN SET TRASH = TRUE WHERE OID = ?1",
+            params![trash_oid],
+        )?;
+        trans.execute(
+            "UPDATE METADATA_COLUMN SET TRASH = FALSE WHERE OID = ?1",
+            params![untrash_oid],
+        )?;
 
         // Commit the transaction
         trans.commit()?;
@@ -139,7 +152,8 @@ impl FullMetadata {
     pub fn query_by_schema(mut sender: Sender<Self>, schema_oid: i64) -> Result<(), Error> {
         let conn = db::open()?;
 
-        let mut select_statement = conn.prepare("
+        let mut select_statement = conn.prepare(
+            "
             SELECT
                 c.OID,
                 c.HIDDEN,
@@ -155,11 +169,10 @@ impl FullMetadata {
             INNER JOIN METADATA_COLUMN c ON c.OID = sc.COLUMN_OID
             WHERE sc.SCHEMA_OID = ?1
             ORDER BY c.ORDERING
-            "
+            ",
         )?;
-        for row_result in select_statement.query_map(
-            params![schema_oid],
-            |row| {Ok((
+        for row_result in select_statement.query_map(params![schema_oid], |row| {
+            Ok((
                 row.get::<_, i64>("OID")?,
                 row.get::<_, bool>("HIDDEN")?,
                 row.get::<_, i64>("SCHEMA_OID")?,
@@ -168,9 +181,9 @@ impl FullMetadata {
                 row.get::<_, String>("STYLE")?,
                 row.get::<_, i64>("ORDERING")?,
                 row.get::<_, Option<String>>("DEFAULT_VALUE")?,
-                row.get::<_, bool>("IS_PRIMARY_KEY")?
-            ))}
-        )? {
+                row.get::<_, bool>("IS_PRIMARY_KEY")?,
+            ))
+        })? {
             let (
                 oid,
                 hidden,
@@ -180,11 +193,12 @@ impl FullMetadata {
                 style,
                 ordering,
                 default_value,
-                is_primary_key
+                is_primary_key,
             ) = row_result?;
 
             let schema: schema::FullMetadata = schema::FullMetadata::get(&conn, schema_oid)?;
-            let column_type: column_type::ColumnType = column_type::ColumnType::get(column_type_oid)?;
+            let column_type: column_type::ColumnType =
+                column_type::ColumnType::get(column_type_oid)?;
             sender.send(Self {
                 oid,
                 hidden,
@@ -194,7 +208,7 @@ impl FullMetadata {
                 style,
                 ordering,
                 default_value,
-                is_primary_key
+                is_primary_key,
             })?;
         }
         Ok(())
@@ -205,7 +219,12 @@ impl FullMetadata {
         let conn = db::open()?;
 
         let mut select_stmt = conn.prepare("SELECT s.OID, s.NAME AS LABEL FROM METADATA_SCHEMA s INNER JOIN METADATA_TABLE t ON s.OID = t.OID WHERE NOT s.TRASH ORDER BY s.NAME")?;
-        let select_rows = select_stmt.query_and_then([], |row| Ok::<(i64, String), rusqlite::Error>((row.get::<_, i64>("OID")?, row.get::<_, String>("LABEL")?)))?;
+        let select_rows = select_stmt.query_and_then([], |row| {
+            Ok::<(i64, String), rusqlite::Error>((
+                row.get::<_, i64>("OID")?,
+                row.get::<_, String>("LABEL")?,
+            ))
+        })?;
         for row_result in select_rows {
             let (value, label) = row_result?;
             sender.send(DropdownValue { label, value })?;
@@ -219,7 +238,12 @@ impl FullMetadata {
         let conn = db::open()?;
 
         let mut select_stmt = conn.prepare("SELECT s.OID, s.NAME AS LABEL FROM METADATA_SCHEMA s INNER JOIN METADATA_REPORT r ON s.OID = r.OID WHERE NOT s.TRASH ORDER BY s.NAME")?;
-        let select_rows = select_stmt.query_and_then([], |row| Ok::<(i64, String), rusqlite::Error>((row.get::<_, i64>("OID")?, row.get::<_, String>("LABEL")?)))?;
+        let select_rows = select_stmt.query_and_then([], |row| {
+            Ok::<(i64, String), rusqlite::Error>((
+                row.get::<_, i64>("OID")?,
+                row.get::<_, String>("LABEL")?,
+            ))
+        })?;
         for row_result in select_rows {
             let (value, label) = row_result?;
             sender.send(DropdownValue { label, value })?;
@@ -231,11 +255,13 @@ impl FullMetadata {
     /// Queries the values of a Select or Multiselect column for a schema.
     pub fn query_values(mut sender: Sender<DropdownValue>, schema_oid: i64) -> Result<(), Error> {
         let conn = db::open()?;
-        
+
         // Construct surrogate query
-        let datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&conn, schema_oid)?;
+        let datasource: datasource::Datasource =
+            datasource::Datasource::get_default_datasource_transact(&conn, schema_oid)?;
         let mut query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
-        let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&conn, &mut query, datasource, vec![])?;
+        let surrogate: surrogate::Surrogate =
+            surrogate::Surrogate::get_flat(&conn, &mut query, datasource, vec![])?;
 
         // Add ordering columns, if any
         let mut stmt_orderby = conn.prepare(
@@ -246,12 +272,20 @@ impl FullMetadata {
                 SORT_ASCENDING 
             FROM METADATA_SCHEMA_ORDERBY_VIEW
             WHERE SCHEMA_OID = ?1 
-            "
+            ",
         )?;
-        for row_result in stmt_orderby.query_and_then(params![schema_oid], |row| { Ok::<(String, i64, bool), rusqlite::Error>((row.get::<_, String>("DATASOURCE_ALIAS")?, row.get::<_, i64>("COLUMN_OID")?, row.get::<_, bool>("SORT_ASCENDING")?)) })? {
+        for row_result in stmt_orderby.query_and_then(params![schema_oid], |row| {
+            Ok::<(String, i64, bool), rusqlite::Error>((
+                row.get::<_, String>("DATASOURCE_ALIAS")?,
+                row.get::<_, i64>("COLUMN_OID")?,
+                row.get::<_, bool>("SORT_ASCENDING")?,
+            ))
+        })? {
             let (datasource_alias, column_oid, sort_ascending) = row_result?;
-            let column_datasource: datasource::Datasource = datasource::Datasource::from_alias_transact(&conn, datasource_alias)?;
-            let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(&conn, column_oid)?;
+            let column_datasource: datasource::Datasource =
+                datasource::Datasource::from_alias_transact(&conn, datasource_alias)?;
+            let column_metadata: column::FullMetadata =
+                column::FullMetadata::get_transact(&conn, column_oid)?;
 
             // Insert ORDER BY clause
             query.insert_ordering(&column_datasource, column_metadata, sort_ascending)?;
@@ -272,7 +306,12 @@ impl FullMetadata {
         println!("{sql_select}");
 
         let mut select_stmt = conn.prepare(&sql_select)?;
-        let select_rows = select_stmt.query_and_then([], |row| Ok::<(i64, String), rusqlite::Error>((row.get::<_, i64>("OID")?, row.get::<_, String>("LABEL")?)))?;
+        let select_rows = select_stmt.query_and_then([], |row| {
+            Ok::<(i64, String), rusqlite::Error>((
+                row.get::<_, i64>("OID")?,
+                row.get::<_, String>("LABEL")?,
+            ))
+        })?;
         for row_result in select_rows {
             let (value, label) = row_result?;
             sender.send(DropdownValue { label, value })?;
@@ -289,13 +328,27 @@ impl FullMetadata {
 
         if self.ordering < 0 {
             // Set the ordering to the maximum
-            self.ordering = trans.query_one("SELECT MAX(ORDERING) + 1 AS ORDERING FROM METADATA_COLUMN", [], |row| row.get::<_, Option<i64>>("ORDERING")).optional()?.unwrap_or(Some(1)).unwrap_or(1);
+            self.ordering = trans
+                .query_one(
+                    "SELECT MAX(ORDERING) + 1 AS ORDERING FROM METADATA_COLUMN",
+                    [],
+                    |row| row.get::<_, Option<i64>>("ORDERING"),
+                )
+                .optional()?
+                .unwrap_or(Some(1))
+                .unwrap_or(1);
         } else {
             // Make space for the column by adjusting the ordering of any columns to the left of it
-            trans.execute("UPDATE METADATA_COLUMN SET ORDERING = -ORDERING WHERE ORDERING >= ?1", params![self.ordering])?;
-            trans.execute("UPDATE METADATA_COLUMN SET ORDERING = 1 - ORDERING WHERE ORDERING < 0", [])?;
+            trans.execute(
+                "UPDATE METADATA_COLUMN SET ORDERING = -ORDERING WHERE ORDERING >= ?1",
+                params![self.ordering],
+            )?;
+            trans.execute(
+                "UPDATE METADATA_COLUMN SET ORDERING = 1 - ORDERING WHERE ORDERING < 0",
+                [],
+            )?;
         }
-        
+
         // Insert the column metadata
         trans.execute(
             "
@@ -318,7 +371,7 @@ impl FullMetadata {
                 ?7,
                 ?8
             )
-            ", 
+            ",
             params![
                 self.hidden,
                 self.schema.oid,
@@ -328,7 +381,7 @@ impl FullMetadata {
                 self.ordering,
                 self.is_primary_key,
                 self.default_value
-            ]
+            ],
         )?;
         self.oid = trans.last_insert_rowid();
 
@@ -358,13 +411,11 @@ impl FullMetadata {
                 let cmd: String = format!(
                     "
                     ALTER TABLE TABLE{} ADD COLUMN COLUMN{} INTEGER 
-                        REFERENCES TABLE{} (OID) 
+                        REFERENCES TABLE{table_oid} (OID) 
                         ON UPDATE CASCADE 
                         ON DELETE SET DEFAULT
-                    ", 
-                    self.schema.oid,
-                    self.oid,
-                    table_oid
+                    ",
+                    self.schema.oid, self.oid
                 );
                 trans.execute(&cmd, [])?;
             }
@@ -375,40 +426,32 @@ impl FullMetadata {
                         TABLE{}_OID INTEGER NOT NULL REFERENCES TABLE{} (OID)
                             ON UPDATE CASCADE
                             ON DELETE CASCADE,
-                        TABLE{}_OID INTEGER NOT NULL REFERENCES TABLE{} (OID)
+                        TABLE{table_oid}_OID INTEGER NOT NULL REFERENCES TABLE{table_oid} (OID)
                             ON UPDATE CASCADE
                             ON DELETE CASCADE,
-                        PRIMARY KEY (TABLE{}_OID, TABLE{}_OID)
+                        PRIMARY KEY (TABLE{}_OID, TABLE{table_oid}_OID)
                     );
                     CREATE VIEW MULTISELECT{}_VIEW AS
                         SELECT 
                             m.TABLE{}_OID,
-                            m.TABLE{}_OID
+                            m.TABLE{table_oid}_OID
                         FROM MULTISELECT{} m
                         INNER JOIN TABLE{} t1 ON t1.OID = m.TABLE{}_OID
-                        INNER JOIN TABLE{} t2 ON t2.OID = m.TABLE{}_OID
+                        INNER JOIN TABLE{table_oid} t2 ON t2.OID = m.TABLE{table_oid}_OID
                         WHERE NOT t1.TRASH AND NOT t2.TRASH
                     ;
                     ",
-                    
                     self.oid,
                     self.schema.oid,
                     self.schema.oid,
-                    table_oid,
-                    table_oid,
                     self.schema.oid,
-                    table_oid,
-
                     self.oid,
                     self.schema.oid,
-                    table_oid,
                     self.oid,
                     self.schema.oid,
-                    self.schema.oid,
-                    table_oid,
-                    table_oid
+                    self.schema.oid
                 );
-                trans.execute(&cmd, [])?;
+                trans.execute_batch(&cmd)?;
             }
             _ => {
                 // Otherwise, a virtual column that requires nothing to be done
@@ -442,7 +485,10 @@ impl FullMetadata {
         // Find the column type OID
         let old_column: Self = Self::get(self.oid)?;
         // Trash the old column
-        trans.execute("UPDATE METADATA_COLUMN SET TRASH = TRUE WHERE OID = ?1", params![old_column.oid])?;
+        trans.execute(
+            "UPDATE METADATA_COLUMN SET TRASH = TRUE WHERE OID = ?1",
+            params![old_column.oid],
+        )?;
 
         // Create a new column
         self._create(&trans)?;
@@ -467,9 +513,7 @@ impl FullMetadata {
                 | column_type::ColumnType::Select { .. } => {
                     let sql_update: String = format!(
                         "UPDATE TABLE{} SET COLUMN{} = COLUMN{}",
-                        self.schema.oid,
-                        self.oid,
-                        old_column.oid
+                        self.schema.oid, self.oid, old_column.oid
                     );
                     trans.execute(&sql_update, [])?;
                 }
@@ -480,32 +524,58 @@ impl FullMetadata {
             if let Some(sql_update) = match &self.column_type {
                 column_type::ColumnType::Primitive(prim) => {
                     match prim {
-                        column_type::Primitive::Text
-                        | column_type::Primitive::JSON => {
+                        column_type::Primitive::Text | column_type::Primitive::JSON => {
                             if let Some(label_expr) = match &old_column.column_type {
                                 column_type::ColumnType::Primitive(old_prim) => {
-                                    let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
+                                    let old_column_label: String =
+                                        format!("t.COLUMN{}", old_column.oid);
                                     match old_prim {
-                                        column_type::Primitive::File 
+                                        column_type::Primitive::File
                                         | column_type::Primitive::Image => None,
-                                        column_type::Primitive::Date => Some(format!(r#"DATE({old_column_label}, 'julianday')"#)),
-                                        column_type::Primitive::Datetime => Some(format!(r#"STRFTIME('%FT%TZ', {old_column_label}, 'julianday')"#)),
-                                        column_type::Primitive::Checkbox => Some(format!(r#"CASE WHEN {old_column_label} IS NULL THEN NULL WHEN {old_column_label} THEN 'True' ELSE 'False' END"#)),
-                                        _ => Some(format!(r#"CAST({old_column_label} AS TEXT)"#))
+                                        column_type::Primitive::Date => Some(format!(
+                                            r#"DATE({old_column_label}, 'julianday')"#
+                                        )),
+                                        column_type::Primitive::Datetime => Some(format!(
+                                            r#"STRFTIME('%FT%TZ', {old_column_label}, 'julianday')"#
+                                        )),
+                                        column_type::Primitive::Checkbox => Some(format!(
+                                            r#"CASE WHEN {old_column_label} IS NULL THEN NULL WHEN {old_column_label} THEN 'True' ELSE 'False' END"#
+                                        )),
+                                        _ => Some(format!(r#"CAST({old_column_label} AS TEXT)"#)),
                                     }
                                 }
-                                column_type::ColumnType::Object { table_oid: old_table_oid, .. } 
-                                | column_type::ColumnType::Select { table_oid: old_table_oid, .. } => {
-                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
-                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
-                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+                                column_type::ColumnType::Object {
+                                    table_oid: old_table_oid,
+                                    ..
+                                }
+                                | column_type::ColumnType::Select {
+                                    table_oid: old_table_oid,
+                                    ..
+                                } => {
+                                    let mut surrogate_query: query::QueryBuilder =
+                                        query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource =
+                                        datasource::Datasource::get_default_datasource_transact(
+                                            &trans,
+                                            *old_table_oid,
+                                        )?;
+                                    let surrogate: surrogate::Surrogate =
+                                        surrogate::Surrogate::get_flat(
+                                            &trans,
+                                            &mut surrogate_query,
+                                            surrogate_datasource,
+                                            Vec::new(),
+                                        )?;
 
-                                    let old_column_expr: String = format!("t.COLUMN{}", old_column.oid);
+                                    let old_column_expr: String =
+                                        format!("t.COLUMN{}", old_column.oid);
                                     Some(format!(
                                         "(SELECT {} {} WHERE {} = {old_column_expr})",
                                         surrogate.label_expr,
                                         {
-                                            let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                            let Some((sql_from, _)) =
+                                                surrogate_query.compile_datasources(false)?
+                                            else {
                                                 return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
                                             };
                                             sql_from
@@ -513,11 +583,25 @@ impl FullMetadata {
                                         surrogate.oid_expr
                                     ))
                                 }
-                                column_type::ColumnType::Multiselect { table_oid: old_table_oid, .. } => {
+                                column_type::ColumnType::Multiselect {
+                                    table_oid: old_table_oid,
+                                    ..
+                                } => {
                                     // Use the array of selected rows as the label
-                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
-                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
-                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+                                    let mut surrogate_query: query::QueryBuilder =
+                                        query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource =
+                                        datasource::Datasource::get_default_datasource_transact(
+                                            &trans,
+                                            *old_table_oid,
+                                        )?;
+                                    let surrogate: surrogate::Surrogate =
+                                        surrogate::Surrogate::get_flat(
+                                            &trans,
+                                            &mut surrogate_query,
+                                            surrogate_datasource,
+                                            Vec::new(),
+                                        )?;
 
                                     Some(format!(
                                         "(SELECT GROUP_CONCAT('[' || {} || ']') {} INNER JOIN MULTISELECT{} m ON m.TABLE{}_OID = {} WHERE m.TABLE{}_OID = t.OID)",
@@ -534,13 +618,12 @@ impl FullMetadata {
                                         old_column.schema.oid
                                     ))
                                 }
-                                _ => None // Virtual column, so no data to transfer
+                                _ => None, // Virtual column, so no data to transfer
                             } {
                                 // Do batch update, because there shouldn't be any chance of failure
                                 let sql_update: String = format!(
                                     "UPDATE TABLE{} AS t SET COLUMN{} = {label_expr}",
-                                    self.schema.oid,
-                                    self.oid 
+                                    self.schema.oid, self.oid
                                 );
                                 trans.execute(&sql_update, [])?;
                             }
@@ -551,26 +634,53 @@ impl FullMetadata {
                         column_type::Primitive::Integer => {
                             if let Some(int_expr) = match &old_column.column_type {
                                 column_type::ColumnType::Primitive(old_prim) => {
-                                    let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
+                                    let old_column_label: String =
+                                        format!("t.COLUMN{}", old_column.oid);
                                     match old_prim {
-                                        column_type::Primitive::File 
+                                        column_type::Primitive::File
                                         | column_type::Primitive::Image => None,
                                         column_type::Primitive::Date
-                                        | column_type::Primitive::Datetime => Some(format!(r#"CAST({old_column_label} AS INTEGER)"#)),
+                                        | column_type::Primitive::Datetime => {
+                                            Some(format!(r#"CAST({old_column_label} AS INTEGER)"#))
+                                        }
                                         column_type::Primitive::Checkbox
-                                        | column_type::Primitive::Integer => Some(format!(r#"{old_column_label}"#)),
-                                        column_type::Primitive::Number => Some(format!("ROUND({old_column_label})")),
+                                        | column_type::Primitive::Integer => {
+                                            Some(format!(r#"{old_column_label}"#))
+                                        }
+                                        column_type::Primitive::Number => {
+                                            Some(format!("ROUND({old_column_label})"))
+                                        }
                                         column_type::Primitive::Text
-                                        | column_type::Primitive::JSON => Some(format!(r#"{old_column_label}"#))
+                                        | column_type::Primitive::JSON => {
+                                            Some(format!(r#"{old_column_label}"#))
+                                        }
                                     }
                                 }
-                                column_type::ColumnType::Object { table_oid: old_table_oid, .. } 
-                                | column_type::ColumnType::Select { table_oid: old_table_oid, .. } => {
-                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
-                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
-                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+                                column_type::ColumnType::Object {
+                                    table_oid: old_table_oid,
+                                    ..
+                                }
+                                | column_type::ColumnType::Select {
+                                    table_oid: old_table_oid,
+                                    ..
+                                } => {
+                                    let mut surrogate_query: query::QueryBuilder =
+                                        query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource =
+                                        datasource::Datasource::get_default_datasource_transact(
+                                            &trans,
+                                            *old_table_oid,
+                                        )?;
+                                    let surrogate: surrogate::Surrogate =
+                                        surrogate::Surrogate::get_flat(
+                                            &trans,
+                                            &mut surrogate_query,
+                                            surrogate_datasource,
+                                            Vec::new(),
+                                        )?;
 
-                                    let old_column_expr: String = format!("t.COLUMN{}", old_column.oid);
+                                    let old_column_expr: String =
+                                        format!("t.COLUMN{}", old_column.oid);
                                     Some(format!(
                                         "(SELECT 
                                             CASE 
@@ -590,11 +700,25 @@ impl FullMetadata {
                                         surrogate.oid_expr
                                     ))
                                 }
-                                column_type::ColumnType::Multiselect { table_oid: old_table_oid, .. } => {
+                                column_type::ColumnType::Multiselect {
+                                    table_oid: old_table_oid,
+                                    ..
+                                } => {
                                     // Use the array of selected rows as the label
-                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
-                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
-                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+                                    let mut surrogate_query: query::QueryBuilder =
+                                        query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource =
+                                        datasource::Datasource::get_default_datasource_transact(
+                                            &trans,
+                                            *old_table_oid,
+                                        )?;
+                                    let surrogate: surrogate::Surrogate =
+                                        surrogate::Surrogate::get_flat(
+                                            &trans,
+                                            &mut surrogate_query,
+                                            surrogate_datasource,
+                                            Vec::new(),
+                                        )?;
 
                                     Some(format!(
                                         "(SELECT INT_EXPR 
@@ -619,7 +743,7 @@ impl FullMetadata {
                                         old_column.schema.oid
                                     ))
                                 }
-                                _ => None // Virtual column, so no data to transfer
+                                _ => None, // Virtual column, so no data to transfer
                             } {
                                 // Update each line item individually, casting the former value to an INTEGER affinity
                                 Some(format!(
@@ -634,26 +758,49 @@ impl FullMetadata {
                         column_type::Primitive::Number => {
                             if let Some(real_expr) = match &old_column.column_type {
                                 column_type::ColumnType::Primitive(old_prim) => {
-                                    let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
+                                    let old_column_label: String =
+                                        format!("t.COLUMN{}", old_column.oid);
                                     match old_prim {
-                                        column_type::Primitive::File 
+                                        column_type::Primitive::File
                                         | column_type::Primitive::Image => None,
-                                        column_type::Primitive::Date 
-                                        | column_type::Primitive::Datetime 
+                                        column_type::Primitive::Date
+                                        | column_type::Primitive::Datetime
                                         | column_type::Primitive::Checkbox
                                         | column_type::Primitive::Integer
-                                        | column_type::Primitive::Number => Some(format!(r#"{old_column_label}"#)),
+                                        | column_type::Primitive::Number => {
+                                            Some(format!(r#"{old_column_label}"#))
+                                        }
                                         column_type::Primitive::Text
-                                        | column_type::Primitive::JSON => Some(format!(r#"{old_column_label}"#))
+                                        | column_type::Primitive::JSON => {
+                                            Some(format!(r#"{old_column_label}"#))
+                                        }
                                     }
                                 }
-                                column_type::ColumnType::Object { table_oid: old_table_oid, .. } 
-                                | column_type::ColumnType::Select { table_oid: old_table_oid, .. } => {
-                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
-                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
-                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+                                column_type::ColumnType::Object {
+                                    table_oid: old_table_oid,
+                                    ..
+                                }
+                                | column_type::ColumnType::Select {
+                                    table_oid: old_table_oid,
+                                    ..
+                                } => {
+                                    let mut surrogate_query: query::QueryBuilder =
+                                        query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource =
+                                        datasource::Datasource::get_default_datasource_transact(
+                                            &trans,
+                                            *old_table_oid,
+                                        )?;
+                                    let surrogate: surrogate::Surrogate =
+                                        surrogate::Surrogate::get_flat(
+                                            &trans,
+                                            &mut surrogate_query,
+                                            surrogate_datasource,
+                                            Vec::new(),
+                                        )?;
 
-                                    let old_column_expr: String = format!("t.COLUMN{}", old_column.oid);
+                                    let old_column_expr: String =
+                                        format!("t.COLUMN{}", old_column.oid);
                                     Some(format!(
                                         "(SELECT 
                                             {}
@@ -661,7 +808,9 @@ impl FullMetadata {
                                         WHERE {} = {old_column_expr})",
                                         surrogate.label_expr,
                                         {
-                                            let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                            let Some((sql_from, _)) =
+                                                surrogate_query.compile_datasources(false)?
+                                            else {
                                                 return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
                                             };
                                             sql_from
@@ -669,11 +818,25 @@ impl FullMetadata {
                                         surrogate.oid_expr
                                     ))
                                 }
-                                column_type::ColumnType::Multiselect { table_oid: old_table_oid, .. } => {
+                                column_type::ColumnType::Multiselect {
+                                    table_oid: old_table_oid,
+                                    ..
+                                } => {
                                     // Use the array of selected rows as the label
-                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
-                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
-                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+                                    let mut surrogate_query: query::QueryBuilder =
+                                        query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource =
+                                        datasource::Datasource::get_default_datasource_transact(
+                                            &trans,
+                                            *old_table_oid,
+                                        )?;
+                                    let surrogate: surrogate::Surrogate =
+                                        surrogate::Surrogate::get_flat(
+                                            &trans,
+                                            &mut surrogate_query,
+                                            surrogate_datasource,
+                                            Vec::new(),
+                                        )?;
 
                                     Some(format!(
                                         "(
@@ -699,7 +862,7 @@ impl FullMetadata {
                                         old_column.schema.oid
                                     ))
                                 }
-                                _ => None // Virtual column, so no data to transfer
+                                _ => None, // Virtual column, so no data to transfer
                             } {
                                 // Update each line item individually, casting the former value to a REAL affinity
                                 Some(format!(
@@ -714,26 +877,49 @@ impl FullMetadata {
                         column_type::Primitive::Date => {
                             if let Some(real_expr) = match &old_column.column_type {
                                 column_type::ColumnType::Primitive(old_prim) => {
-                                    let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
+                                    let old_column_label: String =
+                                        format!("t.COLUMN{}", old_column.oid);
                                     match old_prim {
-                                        column_type::Primitive::File 
+                                        column_type::Primitive::File
                                         | column_type::Primitive::Image
                                         | column_type::Primitive::Checkbox => None,
-                                        column_type::Primitive::Date 
-                                        | column_type::Primitive::Datetime 
+                                        column_type::Primitive::Date
+                                        | column_type::Primitive::Datetime
                                         | column_type::Primitive::Integer
-                                        | column_type::Primitive::Number => Some(format!(r#"CAST(CAST({old_column_label} AS INTEGER) AS REAL)"#)),
+                                        | column_type::Primitive::Number => Some(format!(
+                                            r#"CAST(CAST({old_column_label} AS INTEGER) AS REAL)"#
+                                        )),
                                         column_type::Primitive::Text
-                                        | column_type::Primitive::JSON => Some(format!(r#"JULIANDAY({old_column_label})"#))
+                                        | column_type::Primitive::JSON => {
+                                            Some(format!(r#"JULIANDAY({old_column_label})"#))
+                                        }
                                     }
                                 }
-                                column_type::ColumnType::Object { table_oid: old_table_oid, .. } 
-                                | column_type::ColumnType::Select { table_oid: old_table_oid, .. } => {
-                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
-                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
-                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+                                column_type::ColumnType::Object {
+                                    table_oid: old_table_oid,
+                                    ..
+                                }
+                                | column_type::ColumnType::Select {
+                                    table_oid: old_table_oid,
+                                    ..
+                                } => {
+                                    let mut surrogate_query: query::QueryBuilder =
+                                        query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource =
+                                        datasource::Datasource::get_default_datasource_transact(
+                                            &trans,
+                                            *old_table_oid,
+                                        )?;
+                                    let surrogate: surrogate::Surrogate =
+                                        surrogate::Surrogate::get_flat(
+                                            &trans,
+                                            &mut surrogate_query,
+                                            surrogate_datasource,
+                                            Vec::new(),
+                                        )?;
 
-                                    let old_column_expr: String = format!("t.COLUMN{}", old_column.oid);
+                                    let old_column_expr: String =
+                                        format!("t.COLUMN{}", old_column.oid);
                                     Some(format!(
                                         "(SELECT 
                                             JULIANDAY({})
@@ -741,7 +927,9 @@ impl FullMetadata {
                                         WHERE {} = {old_column_expr})",
                                         surrogate.label_expr,
                                         {
-                                            let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                            let Some((sql_from, _)) =
+                                                surrogate_query.compile_datasources(false)?
+                                            else {
                                                 return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
                                             };
                                             sql_from
@@ -749,13 +937,28 @@ impl FullMetadata {
                                         surrogate.oid_expr
                                     ))
                                 }
-                                column_type::ColumnType::Multiselect { table_oid: old_table_oid, .. } => {
+                                column_type::ColumnType::Multiselect {
+                                    table_oid: old_table_oid,
+                                    ..
+                                } => {
                                     // Use the array of selected rows as the label
-                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
-                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
-                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
-                                    
-                                    let old_column_expr: String = format!("t.COLUMN{}", old_column.oid);
+                                    let mut surrogate_query: query::QueryBuilder =
+                                        query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource =
+                                        datasource::Datasource::get_default_datasource_transact(
+                                            &trans,
+                                            *old_table_oid,
+                                        )?;
+                                    let surrogate: surrogate::Surrogate =
+                                        surrogate::Surrogate::get_flat(
+                                            &trans,
+                                            &mut surrogate_query,
+                                            surrogate_datasource,
+                                            Vec::new(),
+                                        )?;
+
+                                    let old_column_expr: String =
+                                        format!("t.COLUMN{}", old_column.oid);
                                     Some(format!(
                                         "(SELECT 
                                             MIN(JULIANDAY({}))
@@ -776,13 +979,12 @@ impl FullMetadata {
                                         surrogate.label_expr
                                     ))
                                 }
-                                _ => None // Virtual column, so no data to transfer
+                                _ => None, // Virtual column, so no data to transfer
                             } {
                                 // Do batch update, because there shouldn't be any chance of failure
                                 let sql_update: String = format!(
                                     "UPDATE TABLE{} AS t SET COLUMN{} = {real_expr}",
-                                    self.schema.oid,
-                                    self.oid 
+                                    self.schema.oid, self.oid
                                 );
                                 trans.execute(&sql_update, [])?;
                             }
@@ -793,26 +995,49 @@ impl FullMetadata {
                         column_type::Primitive::Datetime => {
                             if let Some(real_expr) = match &old_column.column_type {
                                 column_type::ColumnType::Primitive(old_prim) => {
-                                    let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
+                                    let old_column_label: String =
+                                        format!("t.COLUMN{}", old_column.oid);
                                     match old_prim {
-                                        column_type::Primitive::File 
+                                        column_type::Primitive::File
                                         | column_type::Primitive::Image
                                         | column_type::Primitive::Checkbox => None,
-                                        column_type::Primitive::Date 
-                                        | column_type::Primitive::Datetime 
+                                        column_type::Primitive::Date
+                                        | column_type::Primitive::Datetime
                                         | column_type::Primitive::Integer
-                                        | column_type::Primitive::Number => Some(format!(r#"{old_column_label}"#)),
+                                        | column_type::Primitive::Number => {
+                                            Some(format!(r#"{old_column_label}"#))
+                                        }
                                         column_type::Primitive::Text
-                                        | column_type::Primitive::JSON => Some(format!(r#"JULIANDAY({old_column_label})"#))
+                                        | column_type::Primitive::JSON => {
+                                            Some(format!(r#"JULIANDAY({old_column_label})"#))
+                                        }
                                     }
                                 }
-                                column_type::ColumnType::Object { table_oid: old_table_oid, .. } 
-                                | column_type::ColumnType::Select { table_oid: old_table_oid, .. } => {
-                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
-                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
-                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+                                column_type::ColumnType::Object {
+                                    table_oid: old_table_oid,
+                                    ..
+                                }
+                                | column_type::ColumnType::Select {
+                                    table_oid: old_table_oid,
+                                    ..
+                                } => {
+                                    let mut surrogate_query: query::QueryBuilder =
+                                        query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource =
+                                        datasource::Datasource::get_default_datasource_transact(
+                                            &trans,
+                                            *old_table_oid,
+                                        )?;
+                                    let surrogate: surrogate::Surrogate =
+                                        surrogate::Surrogate::get_flat(
+                                            &trans,
+                                            &mut surrogate_query,
+                                            surrogate_datasource,
+                                            Vec::new(),
+                                        )?;
 
-                                    let old_column_expr: String = format!("t.COLUMN{}", old_column.oid);
+                                    let old_column_expr: String =
+                                        format!("t.COLUMN{}", old_column.oid);
                                     Some(format!(
                                         "(SELECT 
                                             JULIANDAY({})
@@ -820,7 +1045,9 @@ impl FullMetadata {
                                         WHERE {} = {old_column_expr})",
                                         surrogate.label_expr,
                                         {
-                                            let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
+                                            let Some((sql_from, _)) =
+                                                surrogate_query.compile_datasources(false)?
+                                            else {
                                                 return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
                                             };
                                             sql_from
@@ -828,13 +1055,28 @@ impl FullMetadata {
                                         surrogate.oid_expr
                                     ))
                                 }
-                                column_type::ColumnType::Multiselect { table_oid: old_table_oid, .. } => {
+                                column_type::ColumnType::Multiselect {
+                                    table_oid: old_table_oid,
+                                    ..
+                                } => {
                                     // Use the array of selected rows as the label
-                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
-                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
-                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
-                                    
-                                    let old_column_expr: String = format!("t.COLUMN{}", old_column.oid);
+                                    let mut surrogate_query: query::QueryBuilder =
+                                        query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource =
+                                        datasource::Datasource::get_default_datasource_transact(
+                                            &trans,
+                                            *old_table_oid,
+                                        )?;
+                                    let surrogate: surrogate::Surrogate =
+                                        surrogate::Surrogate::get_flat(
+                                            &trans,
+                                            &mut surrogate_query,
+                                            surrogate_datasource,
+                                            Vec::new(),
+                                        )?;
+
+                                    let old_column_expr: String =
+                                        format!("t.COLUMN{}", old_column.oid);
                                     Some(format!(
                                         "(SELECT 
                                             MIN(JULIANDAY({}))
@@ -855,13 +1097,12 @@ impl FullMetadata {
                                         surrogate.label_expr
                                     ))
                                 }
-                                _ => None // Virtual column, so no data to transfer
+                                _ => None, // Virtual column, so no data to transfer
                             } {
                                 // Do batch update, because there shouldn't be any chance of failure
                                 let sql_update: String = format!(
                                     "UPDATE TABLE{} AS t SET COLUMN{} = {real_expr}",
-                                    self.schema.oid,
-                                    self.oid 
+                                    self.schema.oid, self.oid
                                 );
                                 trans.execute(&sql_update, [])?;
                             }
@@ -872,38 +1113,61 @@ impl FullMetadata {
                         column_type::Primitive::Checkbox => {
                             if let Some(bool_expr) = match &old_column.column_type {
                                 column_type::ColumnType::Primitive(old_prim) => {
-                                    let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
+                                    let old_column_label: String =
+                                        format!("t.COLUMN{}", old_column.oid);
                                     match old_prim {
-                                        column_type::Primitive::File 
+                                        column_type::Primitive::File
                                         | column_type::Primitive::Image => None,
                                         column_type::Primitive::Checkbox
-                                        | column_type::Primitive::Date 
-                                        | column_type::Primitive::Datetime 
+                                        | column_type::Primitive::Date
+                                        | column_type::Primitive::Datetime
                                         | column_type::Primitive::Integer
-                                        | column_type::Primitive::Number => Some(format!(r#"
+                                        | column_type::Primitive::Number => Some(format!(
+                                            r#"
                                         CASE
                                             WHEN {old_column_label} != 0 THEN 1
                                             WHEN {old_column_label} = 0 THEN 0
                                             ELSE NULL
                                         END
-                                        "#)),
+                                        "#
+                                        )),
                                         column_type::Primitive::Text
-                                        | column_type::Primitive::JSON => Some(format!(r#"
+                                        | column_type::Primitive::JSON => Some(format!(
+                                            r#"
                                         CASE 
                                             WHEN {old_column_label} LIKE 'TRUE' OR CAST({old_column_label} AS INTEGER) IS NOT 0 THEN 1
                                             WHEN {old_column_label} LIKE 'FALSE' OR {old_column_label} = '0' THEN 0
                                             ELSE NULL
                                         END
-                                        "#))
+                                        "#
+                                        )),
                                     }
                                 }
-                                column_type::ColumnType::Object { table_oid: old_table_oid, .. } 
-                                | column_type::ColumnType::Select { table_oid: old_table_oid, .. } => {
-                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
-                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
-                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+                                column_type::ColumnType::Object {
+                                    table_oid: old_table_oid,
+                                    ..
+                                }
+                                | column_type::ColumnType::Select {
+                                    table_oid: old_table_oid,
+                                    ..
+                                } => {
+                                    let mut surrogate_query: query::QueryBuilder =
+                                        query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource =
+                                        datasource::Datasource::get_default_datasource_transact(
+                                            &trans,
+                                            *old_table_oid,
+                                        )?;
+                                    let surrogate: surrogate::Surrogate =
+                                        surrogate::Surrogate::get_flat(
+                                            &trans,
+                                            &mut surrogate_query,
+                                            surrogate_datasource,
+                                            Vec::new(),
+                                        )?;
 
-                                    let old_column_expr: String = format!("t.COLUMN{}", old_column.oid);
+                                    let old_column_expr: String =
+                                        format!("t.COLUMN{}", old_column.oid);
                                     Some(format!(
                                         "(SELECT 
                                             CASE 
@@ -926,11 +1190,25 @@ impl FullMetadata {
                                         surrogate.oid_expr
                                     ))
                                 }
-                                column_type::ColumnType::Multiselect { table_oid: old_table_oid, .. } => {
+                                column_type::ColumnType::Multiselect {
+                                    table_oid: old_table_oid,
+                                    ..
+                                } => {
                                     // Use the array of selected rows as the label
-                                    let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
-                                    let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
-                                    let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+                                    let mut surrogate_query: query::QueryBuilder =
+                                        query::QueryBuilder::new(Vec::new())?;
+                                    let surrogate_datasource: datasource::Datasource =
+                                        datasource::Datasource::get_default_datasource_transact(
+                                            &trans,
+                                            *old_table_oid,
+                                        )?;
+                                    let surrogate: surrogate::Surrogate =
+                                        surrogate::Surrogate::get_flat(
+                                            &trans,
+                                            &mut surrogate_query,
+                                            surrogate_datasource,
+                                            Vec::new(),
+                                        )?;
 
                                     Some(format!(
                                         "(
@@ -962,13 +1240,12 @@ impl FullMetadata {
                                         old_column.schema.oid
                                     ))
                                 }
-                                _ => None // Virtual column, so no data to transfer
+                                _ => None, // Virtual column, so no data to transfer
                             } {
                                 // Do batch update, because there shouldn't be any chance of failure
                                 let sql_update: String = format!(
                                     "UPDATE TABLE{} AS t SET COLUMN{} = {bool_expr}",
-                                    self.schema.oid,
-                                    self.oid 
+                                    self.schema.oid, self.oid
                                 );
                                 trans.execute(&sql_update, [])?;
                             }
@@ -976,30 +1253,29 @@ impl FullMetadata {
                             // No need to update individually
                             None
                         }
-                        column_type::Primitive::File
-                        | column_type::Primitive::Image => {
+                        column_type::Primitive::File | column_type::Primitive::Image => {
                             if let Some(file_expr) = match &old_column.column_type {
                                 column_type::ColumnType::Primitive(old_prim) => {
-                                    let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
+                                    let old_column_label: String =
+                                        format!("t.COLUMN{}", old_column.oid);
                                     match old_prim {
-                                        column_type::Primitive::File 
+                                        column_type::Primitive::File
                                         | column_type::Primitive::Image => Some(old_column_label),
                                         column_type::Primitive::Checkbox
-                                        | column_type::Primitive::Date 
-                                        | column_type::Primitive::Datetime 
+                                        | column_type::Primitive::Date
+                                        | column_type::Primitive::Datetime
                                         | column_type::Primitive::Integer
                                         | column_type::Primitive::Number
                                         | column_type::Primitive::Text
-                                        | column_type::Primitive::JSON => None // No conversion from other primitive to File
+                                        | column_type::Primitive::JSON => None, // No conversion from other primitive to File
                                     }
                                 }
-                                _ => None // No data to transfer to File column
+                                _ => None, // No data to transfer to File column
                             } {
                                 // Do batch update, because there shouldn't be any chance of failure
                                 let sql_update: String = format!(
                                     "UPDATE TABLE{} AS t SET COLUMN{} = {file_expr}",
-                                    self.schema.oid,
-                                    self.oid 
+                                    self.schema.oid, self.oid
                                 );
                                 trans.execute(&sql_update, [])?;
                             }
@@ -1009,47 +1285,75 @@ impl FullMetadata {
                         }
                     }
                 }
-                column_type::ColumnType::Object { table_oid, .. } 
+                column_type::ColumnType::Object { table_oid, .. }
                 | column_type::ColumnType::Select { table_oid, .. } => {
                     // Match rows in the new associated table on an individual basis, using the JSON label
                     if let Some(json_label_expr) = match &old_column.column_type {
                         column_type::ColumnType::Primitive(old_prim) => {
                             let old_column_label: String = format!("t.COLUMN{}", old_column.oid);
                             match old_prim {
-                                column_type::Primitive::File 
-                                | column_type::Primitive::Image => None,
-                                column_type::Primitive::Date => Some(format!(r#"COALESCE('"' || DATE({old_column_label}, 'julianday') || '"', 'null')"#)),
-                                column_type::Primitive::Datetime => Some(format!(r#"COALESCE('"' || STRFTIME('%FT%TZ', {old_column_label}, 'julianday') || '"', 'null')"#)),
-                                column_type::Primitive::Checkbox => Some(format!(r#"CASE WHEN {old_column_label} IS NULL THEN 'null' WHEN {old_column_label} THEN 'true' ELSE 'false' END"#)),
-                                _ => Some(format!(r#"COALESCE('"' || CAST({old_column_label} AS TEXT) || '"', 'null')"#))
+                                column_type::Primitive::File | column_type::Primitive::Image => {
+                                    None
+                                }
+                                column_type::Primitive::Date => Some(format!(
+                                    r#"COALESCE('"' || DATE({old_column_label}, 'julianday') || '"', 'null')"#
+                                )),
+                                column_type::Primitive::Datetime => Some(format!(
+                                    r#"COALESCE('"' || STRFTIME('%FT%TZ', {old_column_label}, 'julianday') || '"', 'null')"#
+                                )),
+                                column_type::Primitive::Checkbox => Some(format!(
+                                    r#"CASE WHEN {old_column_label} IS NULL THEN 'null' WHEN {old_column_label} THEN 'true' ELSE 'false' END"#
+                                )),
+                                _ => Some(format!(
+                                    r#"COALESCE('"' || CAST({old_column_label} AS TEXT) || '"', 'null')"#
+                                )),
                             }
                         }
-                        column_type::ColumnType::Object { table_oid: old_table_oid, .. } 
-                        | column_type::ColumnType::Select { table_oid: old_table_oid, .. } => {
+                        column_type::ColumnType::Object {
+                            table_oid: old_table_oid,
+                            ..
+                        }
+                        | column_type::ColumnType::Select {
+                            table_oid: old_table_oid,
+                            ..
+                        } => {
                             if table_oid == old_table_oid {
                                 // Can be updated directly, rather than needing to use labels to identify rows
                                 let sql_update: String = format!(
                                     "UPDATE TABLE{} SET COLUMN{} = COLUMN{}",
-                                    self.schema.oid,
-                                    self.oid,
-                                    old_column.oid
+                                    self.schema.oid, self.oid, old_column.oid
                                 );
                                 trans.execute(&sql_update, [])?;
 
                                 // Don't update rows individually
-                                None 
+                                None
                             } else {
-                                let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
-                                let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
-                                let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+                                let mut surrogate_query: query::QueryBuilder =
+                                    query::QueryBuilder::new(Vec::new())?;
+                                let surrogate_datasource: datasource::Datasource =
+                                    datasource::Datasource::get_default_datasource_transact(
+                                        &trans,
+                                        *old_table_oid,
+                                    )?;
+                                let surrogate: surrogate::Surrogate =
+                                    surrogate::Surrogate::get_flat(
+                                        &trans,
+                                        &mut surrogate_query,
+                                        surrogate_datasource,
+                                        Vec::new(),
+                                    )?;
 
                                 let old_column_expr: String = format!("t.COLUMN{}", old_column.oid);
                                 Some(format!(
                                     "(SELECT {} {} WHERE {} = {old_column_expr})",
                                     surrogate.json_expr,
                                     {
-                                        let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
-                                            return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
+                                        let Some((sql_from, _)) =
+                                            surrogate_query.compile_datasources(false)?
+                                        else {
+                                            return Err(Error::AdhocError(
+                                                "No datasources for expression to retrieve column!",
+                                            ));
                                         };
                                         sql_from
                                     },
@@ -1057,7 +1361,10 @@ impl FullMetadata {
                                 ))
                             }
                         }
-                        column_type::ColumnType::Multiselect { table_oid: old_table_oid, .. } => {
+                        column_type::ColumnType::Multiselect {
+                            table_oid: old_table_oid,
+                            ..
+                        } => {
                             if table_oid == old_table_oid {
                                 // Can be updated more or less directly, rather than needing to use labels to identify rows
                                 // Pick which one to assign to the new column arbitrarily
@@ -1071,12 +1378,23 @@ impl FullMetadata {
                                 trans.execute(&sql_update, [])?;
 
                                 // Don't update rows individually
-                                None 
+                                None
                             } else {
                                 // Use the array of selected rows as the label
-                                let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
-                                let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *old_table_oid)?;
-                                let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+                                let mut surrogate_query: query::QueryBuilder =
+                                    query::QueryBuilder::new(Vec::new())?;
+                                let surrogate_datasource: datasource::Datasource =
+                                    datasource::Datasource::get_default_datasource_transact(
+                                        &trans,
+                                        *old_table_oid,
+                                    )?;
+                                let surrogate: surrogate::Surrogate =
+                                    surrogate::Surrogate::get_flat(
+                                        &trans,
+                                        &mut surrogate_query,
+                                        surrogate_datasource,
+                                        Vec::new(),
+                                    )?;
 
                                 Some(format!(
                                     "(SELECT GROUP_CONCAT('[' || {} || ']') {} INNER JOIN MULTISELECT{} m ON m.TABLE{}_OID = {} WHERE m.TABLE{}_OID = t.OID)",
@@ -1094,19 +1412,32 @@ impl FullMetadata {
                                 ))
                             }
                         }
-                        _ => None
+                        _ => None,
                     } {
                         // Locate the new row by matching primary key
-                        let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
-                        let surrogate_datasource: datasource::Datasource = datasource::Datasource::get_default_datasource_transact(&trans, *table_oid)?;
-                        let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(&trans, &mut surrogate_query, surrogate_datasource, Vec::new())?;
+                        let mut surrogate_query: query::QueryBuilder =
+                            query::QueryBuilder::new(Vec::new())?;
+                        let surrogate_datasource: datasource::Datasource =
+                            datasource::Datasource::get_default_datasource_transact(
+                                &trans, *table_oid,
+                            )?;
+                        let surrogate: surrogate::Surrogate = surrogate::Surrogate::get_flat(
+                            &trans,
+                            &mut surrogate_query,
+                            surrogate_datasource,
+                            Vec::new(),
+                        )?;
 
                         let column_value_expr: String = format!(
                             "(SELECT {} {} WHERE {} = {json_label_expr} LIMIT 1)",
                             surrogate.oid_expr,
                             {
-                                let Some((sql_from, _)) = surrogate_query.compile_datasources(false)? else {
-                                    return Err(Error::AdhocError("No datasources for expression to retrieve column!"));
+                                let Some((sql_from, _)) =
+                                    surrogate_query.compile_datasources(false)?
+                                else {
+                                    return Err(Error::AdhocError(
+                                        "No datasources for expression to retrieve column!",
+                                    ));
                                 };
                                 sql_from
                             },
@@ -1119,8 +1450,7 @@ impl FullMetadata {
                                 COLUMN{} = {column_value_expr}
                             WHERE t.OID = ?1
                             ",
-                            self.schema.oid,
-                            self.oid
+                            self.schema.oid, self.oid
                         ))
                     } else {
                         None
@@ -1236,11 +1566,14 @@ impl FullMetadata {
                         _ => None
                     }
                 }
-                _ => None // No copy necessary
+                _ => None, // No copy necessary
             } {
                 // Iterate over each row and try to update each row on an individual basis
                 let sql_select_rows: String = format!("SELECT OID FROM TABLE{}", self.schema.oid);
-                let row_results: Vec<_> = trans.prepare(&sql_select_rows)?.query_map([], |row| row.get::<_, i64>("OID"))?.collect();
+                let row_results: Vec<_> = trans
+                    .prepare(&sql_select_rows)?
+                    .query_map([], |row| row.get::<_, i64>("OID"))?
+                    .collect();
                 for row_result in row_results {
                     let row_oid: i64 = row_result?;
                     let savepoint = trans.savepoint()?;
@@ -1264,7 +1597,10 @@ impl FullMetadata {
 
         // Update the style in the database
         self.style = new_style;
-        trans.execute("UPDATE METADATA_COLUMN SET STYLE = ?1 WHERE OID = ?2", params![self.style, self.oid])?;
+        trans.execute(
+            "UPDATE METADATA_COLUMN SET STYLE = ?1 WHERE OID = ?2",
+            params![self.style, self.oid],
+        )?;
 
         // Commit the transaction
         trans.commit()?;
@@ -1279,12 +1615,30 @@ impl FullMetadata {
         // Update the ordering in the database
         if let Some(new_ordering) = new_ordering {
             self.ordering = new_ordering;
-            trans.execute("UPDATE METADATA_COLUMN SET ORDERING = -ORDERING WHERE ORDERING >= ?1", params![self.ordering])?;
-            trans.execute("UPDATE METADATA_COLUMN SET ORDERING = ?1 WHERE OID = ?2", params![self.ordering, self.oid])?;
-            trans.execute("UPDATE METADATA_COLUMN SET ORDERING = 1 - ORDERING WHERE ORDERING < 0", [])?;
+            trans.execute(
+                "UPDATE METADATA_COLUMN SET ORDERING = -ORDERING WHERE ORDERING >= ?1",
+                params![self.ordering],
+            )?;
+            trans.execute(
+                "UPDATE METADATA_COLUMN SET ORDERING = ?1 WHERE OID = ?2",
+                params![self.ordering, self.oid],
+            )?;
+            trans.execute(
+                "UPDATE METADATA_COLUMN SET ORDERING = 1 - ORDERING WHERE ORDERING < 0",
+                [],
+            )?;
         } else {
-            self.ordering = trans.query_one("SELECT MAX(ORDERING) + 1 FROM METADATA_COLUMN", [], |row| row.get::<_, Option<i64>>(0)).optional()?.unwrap_or(Some(1)).unwrap_or(1);
-            trans.execute("UPDATE METADATA_COLUMN SET ORDERING = ?1 WHERE OID = ?2", params![self.ordering, self.oid])?;
+            self.ordering = trans
+                .query_one("SELECT MAX(ORDERING) + 1 FROM METADATA_COLUMN", [], |row| {
+                    row.get::<_, Option<i64>>(0)
+                })
+                .optional()?
+                .unwrap_or(Some(1))
+                .unwrap_or(1);
+            trans.execute(
+                "UPDATE METADATA_COLUMN SET ORDERING = ?1 WHERE OID = ?2",
+                params![self.ordering, self.oid],
+            )?;
         }
 
         // Commit the transaction

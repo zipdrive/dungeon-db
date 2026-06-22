@@ -34,9 +34,9 @@
     ],
     "fileAssociations": [
       {
-        "ext": ["ddb"],
+        "ext": ["dndb"],
         "exportedType": {
-          "identifier": "com.dungeon-db.ddb",
+          "identifier": "com.dungeon-db.dndb",
           "conformsTo": ["public.database"]
         }
       }

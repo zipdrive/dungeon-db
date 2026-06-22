@@ -1,9 +1,9 @@
 use crate::util::error;
 use rusqlite::{Connection, Result};
-use tauri::AppHandle;
 use std::fs;
 use std::path::Path;
-use std::sync::{Mutex};
+use std::sync::Mutex;
+use tauri::AppHandle;
 use tempfile::NamedTempFile;
 
 static DATABASE_PATH: Mutex<Option<String>> = Mutex::new(None);
@@ -449,7 +449,7 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
     return Ok(());
 }
 
-/// Closes any previous database connection, and opens 
+/// Closes any previous database connection, and opens
 pub fn init_new() -> Result<(), error::Error> {
     // Reset static variables
     let mut database_path = DATABASE_PATH.lock().unwrap();
@@ -486,7 +486,9 @@ pub fn init_existing(path: String) -> Result<(), error::Error> {
 
     // Copy the data over from the main file to the autosave
     let Ok(_) = fs::copy(&path, tempfile.path()) else {
-        return Err(error::Error::AdhocError("Unable to transfer contents of autosave to main file."));
+        return Err(error::Error::AdhocError(
+            "Unable to transfer contents of autosave to main file.",
+        ));
     };
     setup_db_at_path(tempfile.path())?;
 
@@ -530,7 +532,12 @@ pub fn save(app: &AppHandle) -> Result<(), error::Error> {
                 None => {
                     use tauri_plugin_dialog::DialogExt;
 
-                    if let Some(file_path) = app.dialog().file().add_filter("DungeonDB File (*.dndb)", &["dndb"]).blocking_save_file() {
+                    if let Some(file_path) = app
+                        .dialog()
+                        .file()
+                        .add_filter("DungeonDB File (*.dndb)", &["dndb"])
+                        .blocking_save_file()
+                    {
                         *database_path = Some(file_path.to_string());
                         (database_path.as_ref()).unwrap()
                     } else {
@@ -541,7 +548,9 @@ pub fn save(app: &AppHandle) -> Result<(), error::Error> {
 
             // Copy the data from the autosave back to the main file
             let Ok(_) = fs::copy(tempfile.path(), save_path) else {
-                return Err(error::Error::AdhocError("Unable to transfer contents of autosave to main file."));
+                return Err(error::Error::AdhocError(
+                    "Unable to transfer contents of autosave to main file.",
+                ));
             };
 
             // Open connection to the main file
@@ -586,22 +595,28 @@ pub fn save(app: &AppHandle) -> Result<(), error::Error> {
             }
 
             // Delete data tables
-            for row_result in trans.prepare("SELECT s.OID FROM METADATA_SCHEMA s WHERE s.TRASH")?.query_map([], |row| row.get("OID"))? {
+            for row_result in trans
+                .prepare("SELECT s.OID FROM METADATA_SCHEMA s WHERE s.TRASH")?
+                .query_map([], |row| row.get("OID"))?
+            {
                 let schema_oid: i64 = row_result?;
 
                 // Drop the table and views related to the table
-                let drop_sql: String = format!("
+                let drop_sql: String = format!(
+                    "
                     DROP VIEW IF EXISTS REPORT{schema_oid}_VIEW;
                     DROP VIEW IF EXISTS TABLE{schema_oid}_VIEW;
                     DROP VIEW IF EXISTS TABLE{schema_oid}_LABEL_VIEW;
                     DROP VIEW IF EXISTS TABLE{schema_oid}_POLYMORPHISM_VIEW;
                     DROP TABLE IF EXISTS TABLE{schema_oid};
-                ");
+                "
+                );
                 trans.execute_batch(&drop_sql)?;
             }
 
             // Finish cleaning metadata
-            trans.execute_batch("
+            trans.execute_batch(
+                "
             DELETE FROM METADATA_COLUMN_TYPE AS ct WHERE ct.TRASH OR NOT EXISTS(
                 SELECT OID FROM METADATA_COLUMN_TYPE__FORMULA WHERE OID = ct.OID
                 UNION ALL
@@ -621,7 +636,8 @@ pub fn save(app: &AppHandle) -> Result<(), error::Error> {
             DELETE FROM METADATA_SCHEMA_VALIDATION WHERE TRASH;
             DELETE FROM METADATA_SCHEMA_ORDERBY WHERE TRASH;
             DELETE FROM METADATA_REPORT_GROUPBY WHERE TRASH;
-            ")?;
+            ",
+            )?;
 
             return Ok(());
         }

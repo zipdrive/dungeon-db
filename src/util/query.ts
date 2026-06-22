@@ -2,7 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import { FullMetadata as TableFullMetadata } from "./table";
 import { FullMetadata as ReportFullMetadata } from "./report";
 import { FullMetadata as ColumnFullMetadata } from "./column";
-import { CellContent, ValueOid, File, CellIdentifier } from "./cell";
+import { CellContent, File, CellIdentifier, CellStream } from "./cell";
 import { message } from "@tauri-apps/plugin-dialog";
 import { Datasource } from "./datasource";
 import { Schema } from "./schema";
@@ -99,7 +99,12 @@ export type Query = {
         filters: [string, number][],
         limit: Limit,
         columnChannel: Channel<ColumnFullMetadata>,
-        cellChannel: Channel<CellContent & { maxIndex: number }>
+        cellChannel: Channel<CellStream>
+    }
+} | {
+    tableRowLabels: {
+        tableOid: number,
+        processid: number
     }
 };
 
@@ -129,12 +134,16 @@ export async function getColumnAsync(oid: number): Promise<ColumnFullMetadata> {
     return await invoke('get_column', { columnOid: oid });
 }
 
-export async function getCellAsync(cellOid: CellIdentifier): Promise<CellContent> {
-    return await invoke('get_cell', { cellOid: cellOid });
+export async function getCellAsync(cellIdentifier: CellIdentifier): Promise<CellContent> {
+    return await invoke('get_cell', { cellIdentifier: cellIdentifier });
 }
 
-export async function getFileBase64Async(data: { fileOid: number }): Promise<string> {
-    return await invoke('get_file_base64', data);
+export async function getProcessidAsync(): Promise<number> {
+    return await invoke('get_processid', {});
+}
+
+export async function getImageSrcAsync(data: { file: File }): Promise<string> {
+    return await invoke('get_image_src', data);
 }
 
 export async function downloadFileAsync(data: { fileOid: number, filepath: string }): Promise<void> {

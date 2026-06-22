@@ -1,20 +1,20 @@
 use crate::data::view::regenerate_schema_views;
-use crate::util::error::Error;
+use crate::data::{datasource, schema};
 use crate::util::db;
-use crate::data::{schema, datasource};
-use rusqlite::{Transaction, OptionalExtension, params};
-use serde::{Serialize, Deserialize};
+use crate::util::error::Error;
+use rusqlite::{params, OptionalExtension, Transaction};
+use serde::{Deserialize, Serialize};
+use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
-use std::borrow::Borrow;
 
 /// Data structure representing the table metadata
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
-#[serde(rename_all="camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct FullMetadata {
     pub schema: schema::FullMetadata,
     pub filter_formula: Option<String>,
-    pub group_by_column_oids: Vec<i64>
+    pub group_by_column_oids: Vec<i64>,
 }
 
 impl Hash for FullMetadata {
@@ -41,7 +41,7 @@ impl FullMetadata {
         let filter_formula: Option<String> = conn.query_one(
             "SELECT FILTER_FORMULA FROM METADATA_REPORT WHERE OID = ?1",
             params![oid],
-            |row| row.get::<_, Option<String>>("FILTER_FORMULA")
+            |row| row.get::<_, Option<String>>("FILTER_FORMULA"),
         )?;
 
         // Query for GROUP BY columns
@@ -53,12 +53,10 @@ impl FullMetadata {
                     COLUMN_OID
                 FROM METADATA_REPORT_GROUPBY_VIEW
                 WHERE REPORT_OID = ?1
-                "
+                ",
             )?;
-            let group_by_column_oids_rows = group_by_column_oids_statement.query_and_then(
-                params![oid], 
-                |row| row.get::<_, i64>(0)
-            )?;
+            let group_by_column_oids_rows = group_by_column_oids_statement
+                .query_and_then(params![oid], |row| row.get::<_, i64>(0))?;
             for group_by_column_oids_result in group_by_column_oids_rows {
                 group_by_column_oids.push(group_by_column_oids_result?);
             }
@@ -68,7 +66,7 @@ impl FullMetadata {
         Ok(Self {
             schema: schema_metadata,
             filter_formula,
-            group_by_column_oids
+            group_by_column_oids,
         })
     }
 
@@ -80,7 +78,10 @@ impl FullMetadata {
         // Create schema
         self.schema.create(&trans)?;
         // Create the report metadata
-        trans.execute("INSERT INTO METADATA_REPORT (OID) VALUES (?1)", params![self.schema.oid])?;
+        trans.execute(
+            "INSERT INTO METADATA_REPORT (OID) VALUES (?1)",
+            params![self.schema.oid],
+        )?;
 
         // Set the GROUP BY columns and filter formula
         self.set_transact(&trans)?;
@@ -111,11 +112,14 @@ impl FullMetadata {
         // Update the filter formula applied to each row of the table
         trans.execute(
             "UPDATE METADATA_REPORT SET FILTER_FORMULA = ?1 WHERE OID = ?2",
-            params![self.filter_formula, self.schema.oid]
+            params![self.filter_formula, self.schema.oid],
         )?;
 
         // Trash all previous rows of GROUP BY
-        trans.execute("UPDATE METADATA_REPORT_GROUPBY SET TRASH = TRUE WHERE REPORT_OID = ?1", params![self.schema.oid])?;
+        trans.execute(
+            "UPDATE METADATA_REPORT_GROUPBY SET TRASH = TRUE WHERE REPORT_OID = ?1",
+            params![self.schema.oid],
+        )?;
         // Set new rows of GROUP BY
         for group_by_column_oid in self.group_by_column_oids.iter() {
             trans.execute(

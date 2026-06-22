@@ -1,21 +1,21 @@
 use crate::data::view::regenerate_schema_views;
+use crate::data::{datasource, report, table};
 use crate::util::channel::Sender;
 use crate::util::db;
 use crate::util::error::Error;
-use crate::data::{datasource, table, report};
 use rusqlite::types::Value;
 use rusqlite::vtab::array::Array;
-use rusqlite::{Connection, Transaction, OptionalExtension, params};
-use serde::{Serialize, Deserialize};
-use tauri::{AppHandle, Emitter};
-use std::collections::{HashSet, HashMap};
-use std::hash::{Hash, Hasher};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use tauri::{AppHandle, Emitter};
 
 #[derive(Serialize, Clone)]
 pub struct FlatListItemMetadata {
     oid: i64,
-    name: String
+    name: String,
 }
 
 impl FlatListItemMetadata {
@@ -60,15 +60,13 @@ impl FlatListItemMetadata {
     }
 }
 
-
-
 #[derive(Serialize, Clone)]
-#[serde(rename_all="camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct HierarchicalListItemMetadata {
     oid: i64,
     name: String,
     master_oid: Option<i64>,
-    level: i64
+    level: i64,
 }
 
 impl HierarchicalListItemMetadata {
@@ -165,27 +163,31 @@ impl HierarchicalListItemMetadata {
     }
 }
 
-
-
 #[derive(Serialize, Clone)]
-#[serde(rename_all="camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct SelectedHierarchicalListItemMetadata {
     oid: i64,
     name: String,
     master_oid: Option<i64>,
     level: i64,
-    selected: bool
+    selected: bool,
 }
 
 impl SelectedHierarchicalListItemMetadata {
     /// Queries for all tables inheriting from this one.
-    pub fn query_inheritor_tables<'a>(mut sender: Sender<'a, Self>, table_oid: i64, row_oid: i64) -> Result<(), Error> {
+    pub fn query_inheritor_tables<'a>(
+        mut sender: Sender<'a, Self>,
+        table_oid: i64,
+        row_oid: i64,
+    ) -> Result<(), Error> {
         let conn: Connection = db::open()?;
 
         let mut sub_row_oids: HashMap<i64, i64> = HashMap::new();
 
         // Run query for flat table data
-        for list_item_result in conn.prepare("
+        for list_item_result in conn
+            .prepare(
+                "
             WITH TABLE_HIERARCHY (OID, NAME, MASTER_OID, LEVEL) AS (
                 SELECT
                     s.OID,
@@ -210,23 +212,27 @@ impl SelectedHierarchicalListItemMetadata {
                 ORDER BY LEVEL DESC, NAME -- Order depth first, then by name within a depth
             )
             SELECT * FROM TABLE_HIERARCHY
-            ")?
+            ",
+            )?
             .query_map(params![table_oid], |row| {
                 Ok::<Self, rusqlite::Error>(Self {
                     oid: row.get("OID")?,
                     name: row.get("NAME")?,
                     master_oid: row.get("MASTER_OID")?,
                     level: row.get("LEVEL")?,
-                    selected: false
+                    selected: false,
                 })
-            })? {
-            
+            })?
+        {
             // Query to see if the subtype is currently selected
             let mut list_item: Self = list_item_result?;
             if let Some(master_table_oid) = list_item.master_oid {
                 if let Some(master_row_oid) = sub_row_oids.get(&master_table_oid) {
                     let sql_select: String = format!("SELECT OID FROM TABLE{} WHERE MASTER{master_table_oid}_OID = ?1 AND NOT TRASH", list_item.oid);
-                    if let Some(inheritor_row_oid) = conn.query_one(&sql_select, params![master_row_oid], |row| row.get(0)).optional()? {
+                    if let Some(inheritor_row_oid) = conn
+                        .query_one(&sql_select, params![master_row_oid], |row| row.get(0))
+                        .optional()?
+                    {
                         sub_row_oids.insert(list_item.oid, inheritor_row_oid);
                         list_item.selected = true;
                     }
@@ -242,21 +248,23 @@ impl SelectedHierarchicalListItemMetadata {
     }
 }
 
-
-
 #[derive(Serialize, Clone)]
-#[serde(rename_all="camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct ToggledHierarchicalListItemMetadata {
     oid: i64,
     name: String,
     master_oid: Option<i64>,
     level: i64,
-    disabled: bool
+    disabled: bool,
 }
 
 impl ToggledHierarchicalListItemMetadata {
     /// Queries for all reports.
-    pub fn query_master_schemas<'a>(mut sender: Sender<'a, Self>, schema_oid: Option<i64>, is_table: bool) -> Result<(), Error> {
+    pub fn query_master_schemas<'a>(
+        mut sender: Sender<'a, Self>,
+        schema_oid: Option<i64>,
+        is_table: bool,
+    ) -> Result<(), Error> {
         let conn: Connection = db::open()?;
 
         // Run query for flat table data
@@ -339,22 +347,18 @@ impl ToggledHierarchicalListItemMetadata {
     }
 }
 
-
-
-
-
 #[derive(PartialEq, Eq, Hash, Serialize, Deserialize, Clone)]
-#[serde(rename_all="camelCase", rename_all_fields="camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Schema {
     Table(table::FullMetadata),
-    Report(report::FullMetadata)
+    Report(report::FullMetadata),
 }
 
 impl Borrow<FullMetadata> for Schema {
     fn borrow(&self) -> &FullMetadata {
         match self {
             Self::Table(table_metadata) => &table_metadata.schema,
-            Self::Report(report_metadata) => &report_metadata.schema
+            Self::Report(report_metadata) => &report_metadata.schema,
         }
     }
 }
@@ -369,9 +373,9 @@ impl Schema {
             SELECT 'table' AS SCHEMA_TYPE FROM METADATA_TABLE WHERE OID = ?1
             UNION
             SELECT 'report' AS SCHEMA_TYPE FROM METADATA_REPORT WHERE OID = ?1
-            ", 
-            params![oid], 
-            |row| row.get::<_, String>("SCHEMA_TYPE")
+            ",
+            params![oid],
+            |row| row.get::<_, String>("SCHEMA_TYPE"),
         )?;
         if schema_type == "table" {
             Ok(Self::Table(table::FullMetadata::get(oid)?))
@@ -387,19 +391,16 @@ impl Schema {
     }
 }
 
-
-
-const UPDATE_SCHEMA_SIGNAL: &'static str = "schema";
-
+pub const UPDATE_SCHEMA_SIGNAL: &'static str = "schema";
 
 /// Data structure representing the schema metadata.
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
-#[serde(rename_all="camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct FullMetadata {
     pub oid: i64,
     pub name: String,
     pub master_schema_oids: HashSet<i64>,
-    pub order_by_column_oids: Vec<(i64, bool)>
+    pub order_by_column_oids: Vec<(i64, bool)>,
 }
 
 impl Hash for FullMetadata {
@@ -426,12 +427,10 @@ impl FullMetadata {
                     MASTER_SCHEMA_OID 
                 FROM METADATA_SCHEMA_INHERITANCE_VIEW 
                 WHERE INHERITOR_SCHEMA_OID = ?1 
-                "
+                ",
             )?;
-            let master_schema_oid_rows = master_schema_oid_statement.query_and_then(
-                params![oid], 
-                |row| row.get::<_, i64>(0)
-            )?;
+            let master_schema_oid_rows = master_schema_oid_statement
+                .query_and_then(params![oid], |row| row.get::<_, i64>(0))?;
             for master_schema_oid_result in master_schema_oid_rows {
                 master_schemas.insert(master_schema_oid_result?);
             }
@@ -447,21 +446,18 @@ impl FullMetadata {
                     SORT_ASCENDING
                 FROM METADATA_SCHEMA_ORDERBY_VIEW
                 WHERE SCHEMA_OID = ?1
-                "
+                ",
             )?;
-            let order_by_column_oids_rows = order_by_column_oids_statement.query_and_then(
-                params![oid], 
-                |row| Ok::<(i64, bool), rusqlite::Error>((
-                    row.get("COLUMN_OID")?,
-                    row.get("SORT_ASCENDING")?
-                ))
-            )?;
+            let order_by_column_oids_rows =
+                order_by_column_oids_statement.query_and_then(params![oid], |row| {
+                    Ok::<(i64, bool), rusqlite::Error>((
+                        row.get("COLUMN_OID")?,
+                        row.get("SORT_ASCENDING")?,
+                    ))
+                })?;
             for order_by_column_oids_result in order_by_column_oids_rows {
                 let (order_by_column_oid, order_by_column_ascending) = order_by_column_oids_result?;
-                order_by_column_oids.push((
-                    order_by_column_oid, 
-                    order_by_column_ascending
-                ));
+                order_by_column_oids.push((order_by_column_oid, order_by_column_ascending));
             }
         }
 
@@ -474,9 +470,9 @@ impl FullMetadata {
                     oid,
                     name: row.get("NAME")?,
                     master_schema_oids: master_schemas,
-                    order_by_column_oids
+                    order_by_column_oids,
                 })
-            }
+            },
         )?)
     }
 
@@ -484,7 +480,10 @@ impl FullMetadata {
     pub fn trash(oid: i64) -> Result<(), Error> {
         let mut conn: Connection = db::open()?;
         let trans: Transaction = conn.transaction()?;
-        trans.execute("UPDATE METADATA_SCHEMA SET TRASH = TRUE WHERE OID = ?1", params![oid])?;
+        trans.execute(
+            "UPDATE METADATA_SCHEMA SET TRASH = TRUE WHERE OID = ?1",
+            params![oid],
+        )?;
         trans.commit()?;
         Ok(())
     }
@@ -493,7 +492,10 @@ impl FullMetadata {
     pub fn untrash(oid: i64) -> Result<(), Error> {
         let mut conn: Connection = db::open()?;
         let trans: Transaction = conn.transaction()?;
-        trans.execute("UPDATE METADATA_SCHEMA SET TRASH = FALSE WHERE OID = ?1", params![oid])?;
+        trans.execute(
+            "UPDATE METADATA_SCHEMA SET TRASH = FALSE WHERE OID = ?1",
+            params![oid],
+        )?;
         trans.commit()?;
         Ok(())
     }
@@ -501,7 +503,10 @@ impl FullMetadata {
     /// Creates a new schema.
     pub fn create(&mut self, trans: &Transaction) -> Result<(), Error> {
         // Create schema metadata
-        trans.execute("INSERT INTO METADATA_SCHEMA (NAME) VALUES (?1)", params![&self.name])?;
+        trans.execute(
+            "INSERT INTO METADATA_SCHEMA (NAME) VALUES (?1)",
+            params![&self.name],
+        )?;
         self.oid = trans.last_insert_rowid();
 
         // Create the inheritance pattern
@@ -512,7 +517,10 @@ impl FullMetadata {
     /// Overwrites the metadata of the schema.
     pub fn set(&self, trans: &Transaction) -> Result<(), Error> {
         // Overwrite schema metadata
-        trans.execute("UPDATE METADATA_SCHEMA SET NAME = ?1 WHERE OID = ?2", params![&self.name, self.oid])?;
+        trans.execute(
+            "UPDATE METADATA_SCHEMA SET NAME = ?1 WHERE OID = ?2",
+            params![&self.name, self.oid],
+        )?;
 
         // Overwrite the inheritance pattern
         self.set_transact(trans)?;
@@ -524,7 +532,7 @@ impl FullMetadata {
         // Clear all metadata describing inheritance
         trans.execute(
             "UPDATE METADATA_SCHEMA_INHERITANCE SET TRASH = TRUE WHERE INHERITOR_SCHEMA_OID = ?1",
-            params![self.oid]
+            params![self.oid],
         )?;
 
         // Check if self is a table
@@ -560,14 +568,20 @@ impl FullMetadata {
         }
 
         // Trash all previous rows of ORDER BY
-        trans.execute("UPDATE METADATA_SCHEMA_ORDERBY SET TRASH = TRUE WHERE SCHEMA_OID = ?1", params![self.oid])?;
+        trans.execute(
+            "UPDATE METADATA_SCHEMA_ORDERBY SET TRASH = TRUE WHERE SCHEMA_OID = ?1",
+            params![self.oid],
+        )?;
         // Set new rows of ORDER BY
-        for (order_by_column_ordering, (order_by_column_oid, order_by_column_ascending)) in self.order_by_column_oids.iter().enumerate() {
-            
+        for (order_by_column_ordering, (order_by_column_oid, order_by_column_ascending)) in
+            self.order_by_column_oids.iter().enumerate()
+        {
             let order_by_column_ordering: i64 = match i64::try_from(order_by_column_ordering) {
                 Ok(len) => len,
                 Err(_) => {
-                    return Err(Error::AdhocError("More than 9,223,372,036,854,775,807 columns."));
+                    return Err(Error::AdhocError(
+                        "More than 9,223,372,036,854,775,807 columns.",
+                    ));
                 }
             };
             trans.execute(
@@ -581,7 +595,12 @@ impl FullMetadata {
                     ORDERING = excluded.ORDERING,
                     SORT_ASCENDING = excluded.SORT_ASCENDING
                 ",
-                params![self.oid, order_by_column_oid, order_by_column_ordering, order_by_column_ascending]
+                params![
+                    self.oid,
+                    order_by_column_oid,
+                    order_by_column_ordering,
+                    order_by_column_ascending
+                ],
             )?;
         }
 
@@ -591,6 +610,8 @@ impl FullMetadata {
     /// Emit signal to update schema related to the indicated schemas.
     pub fn emit_affected_schema(app: &AppHandle, schema_oids: Vec<i64>) -> Result<(), Error> {
         let conn = db::open()?;
+
+        let mut affected_schema: Vec<i64> = Vec::new();
         for affected_schema_results in conn
             .prepare(
                 "
@@ -645,8 +666,9 @@ impl FullMetadata {
             )?
             .query_map(params![Array::new(schema_oids.into_iter().map(|i| Value::Integer(i)).collect())], |row| row.get::<_, i64>(0))? {
             
-            app.emit(UPDATE_SCHEMA_SIGNAL, affected_schema_results?)?;
+            affected_schema.push(affected_schema_results?);
         }
+        app.emit(UPDATE_SCHEMA_SIGNAL, affected_schema)?;
         Ok(())
     }
 

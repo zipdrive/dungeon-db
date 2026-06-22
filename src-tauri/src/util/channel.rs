@@ -1,16 +1,16 @@
+use crate::util::error::Error;
+use serde::Serialize;
+use serde_json::Serializer;
 use std::io::{BufWriter, Write};
 use std::marker::PhantomData;
-use serde::{Serialize};
-use serde_json::Serializer;
-use tauri::{AppHandle,Emitter};
-use tauri::ipc::{ Channel as TauriChannel };
-use crate::util::error::Error;
+use tauri::ipc::Channel as TauriChannel;
+use tauri::{AppHandle, Emitter};
 
 pub enum Sender<'a, T: Serialize + Clone> {
     Channel(TauriChannel<T>),
     Event(&'a AppHandle, &'static str),
     Callback(Box<dyn FnMut(T) -> Result<(), Error> + 'a>),
-    Dummy
+    Dummy,
 }
 
 impl<'a, T: Serialize + Clone> Sender<'a, T> {
@@ -25,7 +25,7 @@ impl<'a, T: Serialize + Clone> Sender<'a, T> {
             Self::Callback(callback) => {
                 callback(payload)?;
             }
-            Self::Dummy => { 
+            Self::Dummy => {
                 // Do nothing
             }
         }

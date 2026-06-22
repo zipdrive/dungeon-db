@@ -1,14 +1,11 @@
 import { message } from "@tauri-apps/plugin-dialog";
-import { getReportMetadataAsync, getTableMetadataAsync, queryAsync, ToggledHierarchicalListItemMetadata } from "./util/query";
+import { queryAsync } from "./util/query";
 import { Channel } from "@tauri-apps/api/core";
-import { FullMetadata as ColumnFullMetadata, createColumnHeaderHTML, runResizeSetupCallbacks } from "./util/column";
-import { CellContent, CellIdentifier, ValueOid, createCellAsync as createCell, runDropdownValueQueries, updateCell } from "./util/cell";
+import { FullMetadata as ColumnFullMetadata } from "./util/column";
+import { CellContent, CellStream } from "./util/cell";
+import { Grid } from "./util/grid";
 import { listen } from "@tauri-apps/api/event";
 import { openDialogAsync } from "./util/dialog";
-
-import Sortable, { SortableEvent, AutoScroll } from 'sortablejs/modular/sortable.core.esm.js';
-import { executeAsync } from "./util/action";
-Sortable.mount(new AutoScroll());
 
 const urlParams = new URLSearchParams(window.location.search);
 const urlParamSchemaOid: string | null = urlParams.get('schema_oid');
@@ -16,202 +13,35 @@ const urlParamPageNum: string | null = urlParams.get('page_num');
 const urlParamPageSize: string | null = urlParams.get('page_size');
 if (urlParamSchemaOid) {
     const schemaOid: number = parseInt(urlParamSchemaOid);
-    let pageNum: number = urlParamPageNum ? parseInt(urlParamPageNum) : 1;
-    let maxPageNum: number = 100; // TODO dynamically query this value when refreshing cells
-    let pageSize: number = urlParamPageSize ? parseInt(urlParamPageSize) : 2000;
 
-    let filters: [string, number][] = [];
+    // Update page number
+    const pageNum: number = urlParamPageNum ? parseInt(urlParamPageNum) : 1;
+    const pageNumInput: HTMLInputElement = document.getElementById('page-num-input') as HTMLInputElement;
+    pageNumInput.value = `${pageNum}`;
+
+    // Update page size
+    const pageSize: number = urlParamPageSize ? parseInt(urlParamPageSize) : 2000;
+    const pageSizeInput: HTMLInputElement = document.getElementById('page-size-input') as HTMLInputElement;
+    pageSizeInput.value = `${pageSize}`;
+
+    // Get filters from query parameters
+    const filters: [string, number][] = [];
     urlParams.forEach((urlParamValue, urlParamKey) => {
-        if (urlParamKey != 'schema_oid' && urlParamKey != 'page_num' && urlParamKey != 'page_size') {
+        if (urlParamKey != 'schema_oid' && urlParamKey != 'page_num' && urlParamKey != 'page_size' && urlParamKey != 'scroll_top') {
             filters.push([urlParamKey, parseInt(urlParamValue)]);
         }
     });
 
 
-    /**
-     * Reloads all cells in the schema.
-     */
-    function reloadAllCells() {
-        navigator.locks.request('page-content', async () => {
-            // Record the scroll height
-            const page: HTMLElement = document.getElementById('page') as HTMLElement;
-            const pageBottomSpacer: HTMLElement = document.getElementById('page-bottom-spacer') as HTMLElement;
-            pageBottomSpacer.style.height = '50%';
-            const pageHeight: number = page.scrollHeight;
-            const pageScrollTop: number = page.scrollTop;
 
-            // Reset the stylesheet for columns
-            const columnStylesheet: HTMLStyleElement | null = document.getElementById('column-stylesheet') as HTMLStyleElement;
-            columnStylesheet.innerHTML = '';
-
-            // Update page number
-            const pageNumInput: HTMLInputElement = document.getElementById('page-num-input') as HTMLInputElement;
-            pageNumInput.value = `${pageNum}`;
-
-            // Update page size
-            const pageSizeInput: HTMLInputElement = document.getElementById('page-size-input') as HTMLInputElement;
-            pageSizeInput.value = `${pageSize}`;
-
-            // Reset the table
-            const pageContentElem: HTMLTableElement = document.getElementById('page-content') as HTMLTableElement;
-            pageContentElem.innerHTML = '';
-            const pageContentBody: HTMLElement = document.createElement('tbody');
-            pageContentElem.appendChild(pageContentBody);
-            const pageContentHead: HTMLElement = document.createElement('thead');
-            pageContentElem.appendChild(pageContentHead);
-            const pageContentFoot: HTMLElement = document.createElement('tfoot');
-            pageContentElem.appendChild(pageContentFoot);
-
-            // Construct header
-            const columnHeaderRow: HTMLElement = document.createElement('tr');
-            columnHeaderRow.appendChild(document.createElement('th'));
-            pageContentHead.appendChild(columnHeaderRow);
-            const columnChannel: Channel<ColumnFullMetadata> = new Channel<ColumnFullMetadata>((column) => {
-                //console.debug(`COLUMN: ${JSON.stringify(column)}`);
-                const elem: HTMLTableCellElement = createColumnHeaderHTML(schemaOid, column);
-                elem.classList.add('reorderable-column');
-                columnHeaderRow.appendChild(elem);
-            });
-
-            // Construct body
-            let currentRow: HTMLElement = pageContentBody;
-            const cellChannel: Channel<CellContent & { maxIndex: number }> = new Channel<CellContent & { maxIndex: number }>((cell) => {
-                if ('maxIndex' in cell) {
-                    maxPageNum = 1 + Math.floor(cell.maxIndex / pageSize);
-                } else {
-                    const elem: HTMLTableRowElement | HTMLTableCellElement | null = createCell(cell, true);
-                    if (elem) {
-                        if (elem.nodeName == 'TR') {
-                            currentRow = elem;
-                            pageContentBody.appendChild(elem);
-                        } else {
-                            currentRow.appendChild(elem);
-                        }
-                    }
-                }
-            });
-
-            // Query for columns and cells
-            await queryAsync({
-                cells: {
-                    schemaOid: schemaOid,
-                    filters: filters,
-                    limit: {
-                        page: {
-                            num: pageNum,
-                            size: pageSize
-                        }
-                    },
-                    columnChannel: columnChannel,
-                    cellChannel: cellChannel
-                }
-            });
-
-            // Once all cells have been created, query for dropdown values
-            await runDropdownValueQueries();
-            runResizeSetupCallbacks();
-
-            // Add button to add new column
-            const addNewColumnButton: HTMLTableCellElement = document.createElement('th');
-            addNewColumnButton.classList.add('clickable-text');
-            addNewColumnButton.style.whiteSpace = 'nowrap';
-            addNewColumnButton.style.width = '8em';
-            addNewColumnButton.innerText = 'Add New Column';
-            addNewColumnButton.addEventListener('click', () => {
-                openDialogAsync({
-                    createColumn: {
-                        schemaOid: schemaOid,
-                        columnOrdering: null
-                    }
-                });
-            });
-            columnHeaderRow.appendChild(addNewColumnButton);
-
-            // Set columns to be reorderable
-            new Sortable(columnHeaderRow, {
-                draggable: '.reorderable-column',
-                onChange(e: SortableEvent) {
-                    console.debug('Row ordering onChange');
-                },
-                onUpdate(e: SortableEvent) {
-                    console.debug('Row ordering onUpdate');
-                    const reorderedColumn: ColumnFullMetadata = JSON.parse(e.item.dataset.columnMetadata);
-                    const immediateRightColumnHeader = e.newIndex || e.newIndex == 0 ? e.to.querySelector(`.reorderable-column:nth-child(${(e.newIndex + 2)})`) : null;
-                    const columnToImmediateRightOfReorderedColumn: ColumnFullMetadata | null = immediateRightColumnHeader ? JSON.parse(immediateRightColumnHeader.dataset.columnMetadata) : null;
-                    executeAsync({
-                        editColumnOrdering: {
-                            metadata: reorderedColumn,
-                            newColumnOrdering: columnToImmediateRightOfReorderedColumn ? columnToImmediateRightOfReorderedColumn.ordering : null
-                        }
-                    })
-                    .catch(async (e) => {
-                        await message(e, {
-                            title: 'An error occurred while updating column ordering.',
-                            kind: 'error'
-                        });
-                    });
-                }
-            });
-
-            // Set rows to be reorderable
-            new Sortable(pageContentBody, {
-                draggable: '.reorderable-row',
-                handle: '.reorderable-row-dragger',
-                onChange(e: SortableEvent) {
-                    // TODO ? anything?
-                },
-                onUpdate(e: SortableEvent) {
-                    const [reorderedTableOid, reorderedRowOid]: [number, number] = JSON.parse(e.item.dataset.rowIdentifier);
-                    console.debug(`New index: ${e.newIndex}`);
-                    const immediateBelowRow = e.newIndex || e.newIndex == 0 ? e.to.querySelector(`.reorderable-row:nth-child(${(e.newIndex + 2)})`) : null;
-                    console.debug(immediateBelowRow);
-                    const rowImmediatelyBelowReorderedRow: [number, number] | null = immediateBelowRow ? JSON.parse(immediateBelowRow.dataset.rowIdentifier) : null;
-                    console.debug(rowImmediatelyBelowReorderedRow ? rowImmediatelyBelowReorderedRow[1] : null);
-                    executeAsync({
-                        editRowOid: {
-                            tableOid: reorderedTableOid,
-                            rowOid: reorderedRowOid,
-                            newRowOid: rowImmediatelyBelowReorderedRow ? rowImmediatelyBelowReorderedRow[1] : null
-                        }
-                    })
-                    .catch(async (e) => {
-                        await message(e, {
-                            title: 'An error occurred while updating row\'s natural order.',
-                            kind: 'error'
-                        });
-                    });
-                }
-            });
-
-            // Enable or disable page navigation buttons
-            const firstPageButton: HTMLButtonElement = document.getElementById('first-page-button') as HTMLButtonElement;
-            firstPageButton.disabled = pageNum <= 1;
-            const prevPageButton: HTMLButtonElement = document.getElementById('prev-page-button') as HTMLButtonElement;
-            prevPageButton.disabled = pageNum <= 1;
-            const nextPageButton: HTMLButtonElement = document.getElementById('next-page-button') as HTMLButtonElement;
-            nextPageButton.disabled = pageNum >= maxPageNum;
-            const lastPageButton: HTMLButtonElement = document.getElementById('last-page-button') as HTMLButtonElement;
-            lastPageButton.disabled = pageNum >= maxPageNum;
-
-            // Return the page to where it was scrolled before
-            if (pageHeight > page.scrollHeight) {
-                pageBottomSpacer.style.height = `calc(50% + ${Math.ceil(pageHeight - page.scrollHeight)}px)`;
-            }
-            page.scrollTop = pageScrollTop;
-        });
-    }
-
-
-    window.addEventListener("DOMContentLoaded", () => {
-        reloadAllCells();
-
+    window.addEventListener("DOMContentLoaded", async () => {
         // Listen for manual input of page number
         const pageNumInput: HTMLInputElement = document.getElementById('page-num-input') as HTMLInputElement;
         pageNumInput.addEventListener('change', () => {
             const newPageNum: number = parseInt(pageNumInput.value);
             if (newPageNum > 0 && isFinite(newPageNum)) {
-                pageNum = newPageNum;
-                reloadAllCells();
+                urlParams.set('page_num', newPageNum.toString());
+                reload();
             } else {
                 pageNumInput.value = `${pageNum}`;
             }
@@ -222,44 +52,153 @@ if (urlParamSchemaOid) {
         pageSizeInput.addEventListener('change', () => {
             const newPageSize: number = parseInt(pageSizeInput.value);
             if (newPageSize > 0 && isFinite(newPageSize)) {
-                pageSize = newPageSize;
-                reloadAllCells();
+                urlParams.set('page_size', newPageSize.toString());
+                reload();
             } else {
                 pageSizeInput.value = `${pageSize}`;
             }
         });
+        
+        // Construct the grid
+        const grid: Grid = new Grid({
+            iframe: document.getElementById('page') as HTMLIFrameElement
+        });
+        function reload() {
+            // Record the position that the grid has been scrolled from the top
+            const scrollTop: number = grid.getIframe().contentDocument?.scrollingElement?.scrollTop || 0;
+            urlParams.set('scroll_top', scrollTop.toString());
+            // Record the position that the grid has been scrolled from the left
+            const scrollLeft: number = grid.getIframe().contentDocument?.scrollingElement?.scrollLeft || 0;
+            urlParams.set('scroll_left', scrollLeft.toString());
 
-        // Listen for buttons adjusting page number
-        const firstPageButton: HTMLElement = document.getElementById('first-page-button') as HTMLElement;
-        firstPageButton.addEventListener('click', () => {
-            pageNum = 1;
-            reloadAllCells();
-        });
-        const prevPageButton: HTMLElement = document.getElementById('prev-page-button') as HTMLElement;
-        prevPageButton.addEventListener('click', () => {
-            pageNum = Math.max(pageNum - 1, 1);
-            reloadAllCells();
-        });
-        const nextPageButton: HTMLElement = document.getElementById('next-page-button') as HTMLElement;
-        nextPageButton.addEventListener('click', () => {
-            pageNum = Math.min(pageNum + 1, maxPageNum);
-            reloadAllCells();
-        });
-        const lastPageButton: HTMLElement = document.getElementById('last-page-button') as HTMLElement;
-        lastPageButton.addEventListener('click', () => {
-            pageNum = maxPageNum;
-            reloadAllCells();
-        });
-    });
-
-    listen<number>('schema', (e) => {
-        console.debug(`schemaOid: ${e.payload}`);
-        if (e.payload == schemaOid) {
-            reloadAllCells();
+            // Reload the page
+            window.location.href = `/src/schema.html?${urlParams}`;
         }
-    });
-    listen<CellIdentifier>('cell', (e) => {
-        console.debug(`cellOid: ${JSON.stringify(e.payload)}`);
-        updateCell(e.payload, true);
+
+        const firstPageButton: HTMLButtonElement = document.getElementById('first-page-button') as HTMLButtonElement;
+        const prevPageButton: HTMLButtonElement = document.getElementById('prev-page-button') as HTMLButtonElement;
+        if (pageNum > 1) {
+            // Add listeners to first page and prev page buttons
+            firstPageButton.addEventListener('click', () => {
+                urlParams.set('page_num', '1');
+                reload();
+            });
+            prevPageButton.addEventListener('click', () => {
+                urlParams.set('page_num', (pageNum - 1).toString());
+                reload();
+            });
+            grid.setPrevHref(() => {
+                urlParams.set('page_num', (pageNum - 1).toString());
+                reload();
+            });
+        } else {
+            // Disable the first page and prev page buttons
+            firstPageButton.disabled = true;
+            prevPageButton.disabled = true;
+        }
+
+        // Query for schema page data
+        const columnChannel: Channel<ColumnFullMetadata> = new Channel<ColumnFullMetadata>((columnMetadata) => {
+            grid.addColumn(columnMetadata);
+        });
+        const cellChannel: Channel<CellStream> = new Channel<CellStream>((streamedCellContent) => {
+            if ('maxIndex' in streamedCellContent) {
+                // Set the max page number
+                const maxPageNum = 1 + Math.floor(streamedCellContent.maxIndex / pageSize);
+                console.debug(`Max index: ${streamedCellContent.maxIndex}, Max page num: ${maxPageNum}`);
+                
+                const nextPageButton: HTMLButtonElement = document.getElementById('next-page-button') as HTMLButtonElement;
+                const lastPageButton: HTMLButtonElement = document.getElementById('last-page-button') as HTMLButtonElement;
+                if (pageNum < maxPageNum) {
+                    // Create listeners for next page button and last page button
+                    nextPageButton.addEventListener('click', () => {
+                        urlParams.set('page_num', (pageNum + 1).toString());
+                        reload();
+                    });
+                    lastPageButton.addEventListener('click', () => {
+                        urlParams.set('page_num', maxPageNum.toString());
+                        reload();
+                    });
+                    grid.setNextHref(() => {
+                        urlParams.set('page_num', (pageNum + 1).toString());
+                        reload();
+                    });
+                } else {
+                    // Disable the next page and last page buttons
+                    nextPageButton.disabled = true;
+                    lastPageButton.disabled = true;
+                }
+            } else if ('row' in streamedCellContent) {
+                // Add row to grid
+                grid.addRow(streamedCellContent.row);
+            } else if ('addNewRowButton' in streamedCellContent) {
+                // Construct an "Add New Row" button
+                grid.addNewRowButton(streamedCellContent.addNewRowButton);
+            } else {
+                try {
+                    // Add cell to last row of grid
+                    const cellContent: CellContent = streamedCellContent.cell;
+                    grid.addCellContentToRow(cellContent, async () => {
+                        reload();
+                    });
+                } catch (e) {
+                    console.debug(streamedCellContent.cell);
+                    console.debug(e);
+                }
+            }
+        });
+        await queryAsync({
+            'cells': {
+                schemaOid: schemaOid,
+                filters: filters,
+                limit: {
+                    page: {
+                        num: pageNum,
+                        size: pageSize
+                    }
+                },
+                columnChannel: columnChannel,
+                cellChannel: cellChannel
+            }
+        })
+        .catch(async (e) => {
+            await message(e, {
+                title: 'An error occurred while querying data from schema.',
+                kind: 'error'
+            });
+        });
+
+        // Build the grid
+        const urlParamScrollTop: string | null = urlParams.get('scroll_top');
+        const scrollTop: number = urlParamScrollTop ? parseInt(urlParamScrollTop) : 0;
+        const urlParamScrollLeft: string | null = urlParams.get('scroll_left');
+        const scrollLeft: number = urlParamScrollLeft ? parseInt(urlParamScrollLeft) : 0;
+        grid.build({
+            scrollTop: scrollTop,
+            scrollLeft: scrollLeft,
+            constructAdditionalColumns(cwd): HTMLElement[] {
+                const addNewColumn: HTMLElement = cwd.createElement('TH');
+                addNewColumn.classList.add('clickable-text', 'one-line');
+                addNewColumn.innerText = 'Add New Column';
+                addNewColumn.style.width = '10em';
+                addNewColumn.addEventListener('click', async () => {
+                    await openDialogAsync({
+                        createColumn: {
+                            schemaOid: schemaOid,
+                            columnOrdering: null
+                        }
+                    });
+                });
+                return [addNewColumn];
+            }
+        });
+
+        // Reload page when the schema is updated
+        listen<number[]>('schema', (e) => {
+            console.debug(`One or more schemas have been updated: ${e.payload}`);
+            if (e.payload.some(s => s == schemaOid)) {
+                reload();
+            }
+        });
     });
 }

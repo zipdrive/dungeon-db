@@ -1,42 +1,42 @@
-use crate::util::error;
 use crate::util::channel::Sender;
-use serde::{Deserialize};
+use crate::util::error;
+use serde::Deserialize;
 use std::sync::Mutex;
 use tauri::ipc::{Channel as TauriChannel, JavaScriptChannelId};
 use tauri::{AppHandle, Emitter, Manager, Webview, WebviewUrl, WebviewWindowBuilder};
 
 #[derive(Deserialize)]
-#[serde(rename_all="camelCase", rename_all_fields="camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Dialog {
     CreateTable,
     EditTable {
-        table_oid: i64
+        table_oid: i64,
     },
     CreateReport,
     EditReport {
-        report_oid: i64
+        report_oid: i64,
     },
 
     CreateColumn {
         schema_oid: i64,
-        column_ordering: Option<i64>
+        column_ordering: Option<i64>,
     },
     EditColumn {
-        column_oid: i64
+        column_oid: i64,
     },
     AddParameter {
         id: i64,
-        schema_oid: i64
+        schema_oid: i64,
     },
 
     Schema {
         title: String,
-        query_string: String
+        query_string: String,
     },
     Object {
         title: String,
-        query_string: String
-    }
+        query_string: String,
+    },
 }
 
 /// Unique index for a window.
@@ -50,43 +50,61 @@ impl Dialog {
 
         match &self {
             Self::CreateTable => {
-                WebviewWindowBuilder::new(app, label,
+                WebviewWindowBuilder::new(
+                    app,
+                    label,
                     WebviewUrl::App("/src/dialog/schema.html?mode=table".into()),
                 )
                 .title("Create New Table")
                 .inner_size(400.0, 400.0)
                 .maximizable(false)
                 .build()?;
-            },
+            }
             Self::EditTable { table_oid } => {
-                WebviewWindowBuilder::new(app, label,
-                    WebviewUrl::App(format!("/src/dialog/schema.html?schema_oid={table_oid}&mode=table").into()),
+                WebviewWindowBuilder::new(
+                    app,
+                    label,
+                    WebviewUrl::App(
+                        format!("/src/dialog/schema.html?schema_oid={table_oid}&mode=table").into(),
+                    ),
                 )
                 .title("Edit Table")
                 .inner_size(400.0, 400.0)
                 .maximizable(false)
                 .build()?;
-            },
+            }
             Self::CreateReport => {
-                WebviewWindowBuilder::new(app, label,
+                WebviewWindowBuilder::new(
+                    app,
+                    label,
                     WebviewUrl::App("/src/dialog/schema.html?mode=report".into()),
                 )
                 .title("Create New Report")
                 .inner_size(400.0, 400.0)
                 .maximizable(false)
                 .build()?;
-            },
+            }
             Self::EditReport { report_oid } => {
-                WebviewWindowBuilder::new(app, label,
-                    WebviewUrl::App(format!("/src/dialog/schema.html?schema_oid={report_oid}&mode=report").into()),
+                WebviewWindowBuilder::new(
+                    app,
+                    label,
+                    WebviewUrl::App(
+                        format!("/src/dialog/schema.html?schema_oid={report_oid}&mode=report")
+                            .into(),
+                    ),
                 )
                 .title("Edit Report")
                 .inner_size(400.0, 400.0)
                 .maximizable(false)
                 .build()?;
-            },
-            Self::CreateColumn { schema_oid, column_ordering } => {
-                WebviewWindowBuilder::new(app, label,
+            }
+            Self::CreateColumn {
+                schema_oid,
+                column_ordering,
+            } => {
+                WebviewWindowBuilder::new(
+                    app,
+                    label,
                     WebviewUrl::App(
                         format!(
                             "/src/dialog/column.html?schema_oid={schema_oid}{}",
@@ -102,41 +120,55 @@ impl Dialog {
                 .inner_size(600.0, 600.0)
                 .maximizable(false)
                 .build()?;
-            },
+            }
             Self::EditColumn { column_oid } => {
-                WebviewWindowBuilder::new(app, label,
-                    WebviewUrl::App(format!(
-                        "/src/dialog/column.html?column_oid={column_oid}"
-                    ).into()),
+                WebviewWindowBuilder::new(
+                    app,
+                    label,
+                    WebviewUrl::App(
+                        format!("/src/dialog/column.html?column_oid={column_oid}").into(),
+                    ),
                 )
                 .title("Edit Column")
                 .inner_size(600.0, 600.0)
                 .maximizable(false)
                 .build()?;
-            },
+            }
             Self::AddParameter { id, schema_oid } => {
-                WebviewWindowBuilder::new(app, label,
-                    WebviewUrl::App(format!("/src/dialog/parameter.html?id={id}&schema_oid={schema_oid}").into()),
+                WebviewWindowBuilder::new(
+                    app,
+                    label,
+                    WebviewUrl::App(
+                        format!("/src/dialog/parameter.html?id={id}&schema_oid={schema_oid}")
+                            .into(),
+                    ),
                 )
                 .title("Add Parameter")
                 .inner_size(400.0, 400.0)
                 .maximizable(false)
                 .build()?;
-            },
-            Self::Schema { title, query_string } => {
-                WebviewWindowBuilder::new(app, label,
+            }
+            Self::Schema {
+                title,
+                query_string,
+            } => {
+                WebviewWindowBuilder::new(
+                    app,
+                    label,
                     WebviewUrl::App(format!("/src/schema.html?{query_string}").into()),
                 )
                 .title(&*title)
                 .inner_size(800.0, 600.0)
                 .build()?;
-            },
-            Self::Object { title, query_string } => {
-                WebviewWindowBuilder::new(app, label,
-                    WebviewUrl::App(
-                        format!("/src/object.html?{query_string}")
-                            .into(),
-                    ),
+            }
+            Self::Object {
+                title,
+                query_string,
+            } => {
+                WebviewWindowBuilder::new(
+                    app,
+                    label,
+                    WebviewUrl::App(format!("/src/object.html?{query_string}").into()),
                 )
                 .title(&*title)
                 .inner_size(800.0, 600.0)

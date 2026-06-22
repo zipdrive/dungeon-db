@@ -1,3 +1,4 @@
+use rocket::Responder;
 use rusqlite::Error as RusqliteError;
 use serde::Serialize;
 use tauri::ipc::InvokeError;
@@ -8,44 +9,44 @@ pub enum Error {
 
     // Duplicate column name
     DuplicateColumnName {
-        column_name: String
+        column_name: String,
     },
-    
+
     /// Error for when a column with type Primitive, Object, Select, or Multiselect does not belong to a table.
     OrphanedDataColumn {
         column_oid: i64,
-        column_name: String 
+        column_name: String,
     },
 
     /// Error for when a datasource cannot be added to a view.
     InvalidDatasource {
-        datasource_alias: String
+        datasource_alias: String,
     },
 
     /// Error for when a datasource is identified by an improper column.
     InvalidDatasourceColumn {
         column_oid: i64,
         column_name: String,
-        column_type: &'static str
+        column_type: &'static str,
     },
 
     /// Error for when a virtual column is attempted to be added as a parameter to the view for a schema.
     InvalidParameter {
         column_oid: i64,
         column_name: String,
-        column_type: &'static str
+        column_type: &'static str,
     },
 
     FormulaParseError {
         msg: String,
         full_formula: String,
-        substring_with_error: String
+        substring_with_error: String,
     },
     FormulaTypeValidationError {
         outer_name: &'static str,
         inner_name: String,
         expected_type: String,
-        received_type: String
+        received_type: String,
     },
     /*
     FormulaTypeConflictError {
