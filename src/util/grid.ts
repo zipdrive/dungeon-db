@@ -102,6 +102,505 @@ class GridColumn {
 }
 
 
+class GridSelectionRegion {
+    start: GridPosition;
+    rowSpan: number;
+    columnSpan: number;
+
+    constructor(start: GridPosition, rowSpan: number = 0, columnSpan: number = 0) {
+        this.start = start;
+        this.rowSpan = rowSpan;
+        this.columnSpan = columnSpan;
+    }
+
+    /**
+     * Tests if the region contains the given position.
+     * @param pos 
+     * @returns 
+     */
+    contains(pos: GridPosition): boolean {
+        const rowMin: number = Math.min(this.start.rowIndex, this.start.rowIndex + this.rowSpan);
+        const rowMax: number = Math.max(this.start.rowIndex, this.start.rowIndex + this.rowSpan);
+        const columnMin: number = Math.min(this.start.columnIndex, this.start.columnIndex + this.columnSpan);
+        const columnMax: number = Math.max(this.start.columnIndex, this.start.columnIndex + this.columnSpan);
+        return pos.rowIndex >= rowMin
+            && pos.rowIndex <= rowMax
+            && pos.columnIndex >= columnMin
+            && pos.columnIndex <= columnMax;
+    }
+
+    disjoint({ rowMin: otherRowMin, rowMax: otherRowMax, columnMin: otherColumnMin, columnMax: otherColumnMax }: { rowMin: number, rowMax: number, columnMin: number, columnMax: number }): GridSelectionRegion[] {
+        const rowMin: number = Math.min(this.start.rowIndex, this.start.rowIndex + this.rowSpan);
+        const rowMax: number = Math.max(this.start.rowIndex, this.start.rowIndex + this.rowSpan);
+        const columnMin: number = Math.min(this.start.columnIndex, this.start.columnIndex + this.columnSpan);
+        const columnMax: number = Math.max(this.start.columnIndex, this.start.columnIndex + this.columnSpan);
+
+        if (rowMax < otherRowMin || rowMin > otherRowMax || columnMax < otherColumnMin || columnMin > otherColumnMax) {
+            // No intersection between two rectangles
+            return [this];
+        } else {
+            let disjointRegions: GridSelectionRegion[] = [];
+
+            // Rows above disallowed region
+            if (rowMin < otherRowMin) {
+                disjointRegions.push(new GridSelectionRegion({ rowIndex: rowMin, columnIndex: columnMin }, otherRowMin - rowMin - 1, columnMax - columnMin));
+            }
+            // Columns to left of disallowed region
+            if (columnMin < otherColumnMin) {
+                disjointRegions.push(new GridSelectionRegion({ rowIndex: Math.max(rowMin, otherRowMin), columnIndex: columnMin }, Math.min(rowMax, otherRowMax) - Math.max(rowMin, otherRowMin), otherColumnMin - columnMin - 1));
+            }
+            // Columns to right of disallowed region
+            if (columnMax < otherColumnMax) {
+                disjointRegions.push(new GridSelectionRegion({ rowIndex: Math.max(rowMin, otherRowMin), columnIndex: otherColumnMax }, Math.min(rowMax, otherRowMax) - Math.max(rowMin, otherRowMin), columnMax - otherColumnMax - 1));
+            }
+            // Rows below disallowed region
+            if (rowMax > otherRowMax) {
+                disjointRegions.push(new GridSelectionRegion({ rowIndex: otherRowMax, columnIndex: columnMin }, rowMax - otherRowMax - 1, columnMax - columnMin));
+            }
+            return disjointRegions;
+        }
+    }
+};
+
+class GridSelection {
+    #onSetFocusCallbackFn: ((oldFocus: GridPosition, newFocus: GridPosition) => void);
+    #onRemoveSelectionCallbackFn: ((pos: GridPosition) => void);
+    #onAddSelectionCallbackFn: ((pos: GridPosition) => void);
+
+    #currentRegion: GridSelectionRegion;
+
+    #otherRegions: GridSelectionRegion[] = [];
+
+    /**
+     * The focused cell.
+     */
+    #focus: GridPosition;
+
+    /**
+     * The focused cell.
+     */
+    get focus(): GridPosition {
+        return this.#focus;
+    }
+
+    /**
+     * Sets the focused cell.
+     */
+    set focus(pos: GridPosition) {
+        this.#onSetFocusCallbackFn(this.focus, pos);
+        this.#focus = pos;
+    }
+
+    constructor(pos: GridPosition, { onSetFocus, onRemoveSelection, onAddSelection } : {
+        onSetFocus?: ((oldFocus: GridPosition, newFocus: GridPosition) => void),
+        onRemoveSelection?: ((pos: GridPosition) => void),
+        onAddSelection?: ((pos: GridPosition) => void)
+    }) {
+        this.#onSetFocusCallbackFn = onSetFocus || (() => {});
+        this.#onRemoveSelectionCallbackFn = onRemoveSelection || (() => {});
+        this.#onAddSelectionCallbackFn = onAddSelection || (() => {});
+
+        this.#currentRegion = new GridSelectionRegion(pos);
+        this.#onAddSelectionCallbackFn(pos);
+        this.#focus = pos;
+        this.#onSetFocusCallbackFn(pos, pos);
+    }
+
+    reset(pos: GridPosition) {
+        // Invoke the deselect callback for each currently-selected cell
+        this.getSelectedPositions().forEach(({ rowIndex, columnIndices }) => {
+            columnIndices.forEach(columnIndex => {
+                this.#onRemoveSelectionCallbackFn({ rowIndex: rowIndex, columnIndex: columnIndex });
+            });
+        });
+
+        // Reset the selection to a single cell
+        this.#currentRegion = new GridSelectionRegion(pos);
+        this.#onAddSelectionCallbackFn(pos);
+        this.#otherRegions = [];
+        this.focus = pos;
+    }
+
+    /**
+     * Invokes the callback functions for when a cell is selected or deselected.
+     * @param param0 
+     */
+    #afterAdjustSelection({ oldRowSpan, oldColumnSpan } : { oldRowSpan?: number, oldColumnSpan?: number }) {
+        const deselecting: boolean = this.#otherRegions.some(otherRegion => otherRegion.contains(this.#currentRegion.start));
+
+        if (oldRowSpan !== undefined) {
+            // Adjust selection for added/removed rows only
+
+            const columnSpan: number = oldColumnSpan !== undefined ? oldColumnSpan : this.#currentRegion.columnSpan;
+            const sgnColumnSpan: number = columnSpan < 0 ? -1 : 1; // Normalize columnSpan to be >= 0
+            const iterateOverColumnIndices = (fn: (columnIndex: number) => void) => {
+                for (let cs: number = 0; cs <= sgnColumnSpan * columnSpan; ++cs) {
+                    fn(this.#currentRegion.start.columnIndex + (sgnColumnSpan * cs));
+                }
+            }
+
+            const sgn: number = oldRowSpan < 0 ? -1 : 1; // Normalize oldRowSpan to be >= 0
+            if (sgn * this.#currentRegion.rowSpan < sgn * oldRowSpan) {
+                // Remove selected cells
+                for (let rs: number = sgn * oldRowSpan; rs > Math.max(0, sgn * this.#currentRegion.rowSpan); --rs) {
+                    iterateOverColumnIndices((columnIndex) => {
+                        const pos: GridPosition = {
+                            rowIndex: this.#currentRegion.start.rowIndex + (sgn * rs),
+                            columnIndex: columnIndex
+                        };
+
+                        if (deselecting) {
+                            // Check if the un-deselected cell belongs to some other selection region, and add it back if so
+                            if (this.#otherRegions.some(otherRegion => otherRegion.contains(pos))) {
+                                this.#onAddSelectionCallbackFn(pos);
+                            }
+                        } else {
+                            this.#onRemoveSelectionCallbackFn(pos);
+                        }
+                    });
+                }
+
+                if (sgn * this.#currentRegion.rowSpan < 0) {
+                    // Add selected cells on the other side (or remove, if deselecting)
+                    for (let rs: number = -1; rs >= sgn * this.#currentRegion.rowSpan; --rs) {
+                        iterateOverColumnIndices((columnIndex) => {
+                            (deselecting ? this.#onRemoveSelectionCallbackFn : this.#onAddSelectionCallbackFn)({
+                                rowIndex: this.#currentRegion.start.rowIndex + (sgn * rs),
+                                columnIndex: columnIndex
+                            });
+                        });
+                    }
+                }
+            } else if (sgn * this.#currentRegion.rowSpan > sgn * oldRowSpan) {
+                // Add selected cells (or remove, if deselecting)
+                for (let rs: number = (sgn * oldRowSpan) + 1; rs <= sgn * this.#currentRegion.rowSpan; ++rs) {
+                    iterateOverColumnIndices((columnIndex) => {
+                        (deselecting ? this.#onRemoveSelectionCallbackFn : this.#onAddSelectionCallbackFn)({
+                            rowIndex: this.#currentRegion.start.rowIndex + (sgn * rs),
+                            columnIndex: columnIndex
+                        });
+                    });
+                }
+            }
+        } 
+        
+        if (oldColumnSpan !== undefined) {
+            // Adjust selection for added/removed columns only
+
+            const iterateOverRowIndices = (fn: (rowIndex: number) => void) => {
+                for (let rs: number = 0; (this.#currentRegion.rowSpan > 0 ? rs <= this.#currentRegion.rowSpan : rs >= this.#currentRegion.rowSpan); (this.#currentRegion.rowSpan > 0 ? ++rs : --rs)) {
+                    fn(this.#currentRegion.start.rowIndex + rs);
+                }
+            }
+            
+            const sgn: number = oldColumnSpan < 0 ? -1 : 1; // Normalize oldRowSpan to be >= 0
+            if (sgn * this.#currentRegion.columnSpan < sgn * oldColumnSpan) {
+                // Remove selected cells
+                for (let cs: number = sgn * oldColumnSpan; cs > Math.max(0, sgn * this.#currentRegion.columnSpan); --cs) {
+                    iterateOverRowIndices((rowIndex) => {
+                        const pos: GridPosition = {
+                            rowIndex: rowIndex,
+                            columnIndex: this.#currentRegion.start.columnIndex + (sgn * cs)
+                        };
+
+                        if (deselecting) {
+                            // Check if the un-deselected cell belongs to some other selection region, and add it back if so
+                            if (this.#otherRegions.some(otherRegion => otherRegion.contains(pos))) {
+                                this.#onAddSelectionCallbackFn(pos);
+                            }
+                        } else {
+                            this.#onRemoveSelectionCallbackFn(pos);
+                        }
+                    });
+                }
+
+                if (sgn * this.#currentRegion.columnSpan < 0) {
+                    // Add selected cells on the other side (or remove, if deselecting)
+                    for (let cs: number = -1; cs >= sgn * this.#currentRegion.columnSpan; --cs) {
+                        iterateOverRowIndices((rowIndex) => {
+                            (deselecting ? this.#onRemoveSelectionCallbackFn : this.#onAddSelectionCallbackFn)({
+                                rowIndex: rowIndex,
+                                columnIndex: this.#currentRegion.columnSpan + (sgn * cs)
+                            });
+                        });
+                    }
+                }
+            } else if (sgn * this.#currentRegion.columnSpan > sgn * oldColumnSpan) {
+                // Add selected cells (or remove, if deselecting)
+                for (let cs: number = (sgn * oldColumnSpan) + 1; cs <= sgn * this.#currentRegion.columnSpan; ++cs) {
+                    iterateOverRowIndices((rowIndex) => {
+                        (deselecting ? this.#onRemoveSelectionCallbackFn : this.#onAddSelectionCallbackFn)({
+                            rowIndex: rowIndex,
+                            columnIndex: this.#currentRegion.start.columnIndex + (sgn * cs)
+                        });
+                    });
+                }
+            }
+        }
+    }
+
+    /**
+     * Adds a new selection region.
+     * @param pos 
+     */
+    pushRegion(pos: GridPosition) {
+        this.#otherRegions.push(this.#currentRegion);
+        this.#currentRegion = new GridSelectionRegion(pos);
+        this.#onAddSelectionCallbackFn(pos);
+
+        // Change the focused cell, if the new region is not deselecting
+        if (!this.#otherRegions.some((otherRegion) => otherRegion.contains(pos)))
+            this.focus = pos;
+    }
+
+    /**
+     * Resizes the selection region that is currently editable.
+     * @param param0 
+     */
+    resizeCurrentRegion({ rowSpanShift, columnSpanShift, maxRowIndex, maxColumnIndex }: { rowSpanShift?: number, columnSpanShift?: number, maxRowIndex: number, maxColumnIndex: number }) {
+        if (rowSpanShift) {
+            const oldRowSpan = this.#currentRegion.rowSpan;
+
+            this.#currentRegion.rowSpan += rowSpanShift;
+            if (this.#currentRegion.start.rowIndex + this.#currentRegion.rowSpan < 0) 
+                this.#currentRegion.rowSpan = -this.#currentRegion.start.rowIndex;
+            if (this.#currentRegion.start.rowIndex + this.#currentRegion.rowSpan >= maxRowIndex)
+                this.#currentRegion.rowSpan = maxRowIndex - this.#currentRegion.start.rowIndex - 1;
+
+            this.#afterAdjustSelection({ oldRowSpan: oldRowSpan });
+        }
+        if (columnSpanShift) {
+            const oldColumnSpan: number = this.#currentRegion.columnSpan;
+
+            this.#currentRegion.columnSpan += columnSpanShift;
+            if (this.#currentRegion.start.columnIndex + this.#currentRegion.columnSpan < 0) 
+                this.#currentRegion.columnSpan = -this.#currentRegion.start.columnIndex;
+            if (this.#currentRegion.start.columnIndex + this.#currentRegion.columnSpan >= maxColumnIndex)
+                this.#currentRegion.columnSpan = maxColumnIndex - this.#currentRegion.start.columnIndex - 1;
+
+            this.#afterAdjustSelection({ oldColumnSpan: oldColumnSpan });
+        }
+    }
+
+    /**
+     * Directly sets the size of the selection region that is currently editable.
+     * @param end The endpoint of the current selection region.
+     */
+    setSizeCurrentRegion(end: GridPosition) {
+        const oldRowSpan: number = this.#currentRegion.rowSpan;
+        const oldColumnSpan: number = this.#currentRegion.columnSpan;
+
+        this.#currentRegion.rowSpan = end.rowIndex - this.#currentRegion.start.rowIndex;
+        this.#currentRegion.columnSpan = end.columnIndex - this.#currentRegion.start.columnIndex;
+
+        this.#afterAdjustSelection({ oldRowSpan: oldRowSpan, oldColumnSpan: oldColumnSpan });
+    }
+
+    /**
+     * Stops doing mouse selection of the current region.
+     */
+    finalizeCurrentRegion() {
+        if (this.#otherRegions.some((otherRegion: GridSelectionRegion) => otherRegion.contains(this.#currentRegion.start))) {
+            const rowMin: number = Math.min(this.#currentRegion.start.rowIndex, this.#currentRegion.start.rowIndex + this.#currentRegion.rowSpan);
+            const rowMax: number = Math.max(this.#currentRegion.start.rowIndex, this.#currentRegion.start.rowIndex + this.#currentRegion.rowSpan);
+            const columnMin: number = Math.min(this.#currentRegion.start.columnIndex, this.#currentRegion.start.columnIndex + this.#currentRegion.columnSpan);
+            const columnMax: number = Math.max(this.#currentRegion.start.columnIndex, this.#currentRegion.start.columnIndex + this.#currentRegion.columnSpan);            
+
+            // Remove the current region from the selection
+            for (let k = this.#otherRegions.length - 1; k >= 0; --k) {
+                const otherRegion: GridSelectionRegion = this.#otherRegions[k];
+                this.#otherRegions.splice(k, 1, ...otherRegion.disjoint({ rowMin: rowMin, rowMax: rowMax, columnMin: columnMin, columnMax: columnMax }));
+            }
+
+            // Set the new current region
+            this.#currentRegion = this.#otherRegions.pop() || new GridSelectionRegion(this.#currentRegion.start);
+        }
+    }
+
+    /**
+     * Shifts the focused position within the selection, prioritizing keeping the columnIndex the same if possible.
+     * @param delta 
+     * @returns True if multiple cells are selected. False if only a single cell is selected.
+     */
+    shiftFocusByRowThenColumn(delta: number): boolean {
+        const selectedPositions = this.getSelectedPositions();
+        if (selectedPositions.length <= 1)
+            return false;
+
+        const selectedPositionsIndex = selectedPositions.findIndex(({ rowIndex }) => rowIndex === this.focus.rowIndex);
+        if (selectedPositionsIndex < 0) {
+            this.focus = this.#currentRegion.start;
+            return true;
+        }
+
+        // Prioritize shifting rowIndex in the direction of delta while preserving columnIndex
+        for (let newSelectedPositionsIndex: number = selectedPositionsIndex + delta; newSelectedPositionsIndex >= 0 && newSelectedPositionsIndex < selectedPositions.length; newSelectedPositionsIndex += delta) {
+            const newSelectedPositionsColumnIndex = selectedPositions[newSelectedPositionsIndex].columnIndices.indexOf(this.focus.columnIndex);
+            if (newSelectedPositionsColumnIndex >= 0) {
+                this.focus = {
+                    rowIndex: selectedPositions[newSelectedPositionsIndex].rowIndex,
+                    columnIndex: this.focus.columnIndex
+                };
+                return true;
+            }
+        }
+
+        // If columnIndex cannot be preserved, shift columnIndex in the direction of delta and reset rowIndex
+        if (delta > 0) {
+            // Find the next-greatest columnIndex
+            let next: GridPosition | null = null;
+            selectedPositions.forEach(({ rowIndex, columnIndices }) => {
+                const newColumnIndex = columnIndices.find(columnIndex => columnIndex > this.focus.columnIndex);
+                if (newColumnIndex !== undefined) {
+                    if (next === null || next.columnIndex > newColumnIndex)
+                        next = { rowIndex: rowIndex, columnIndex: newColumnIndex };
+                }
+            });
+
+            if (!next) {
+                // If no next-greatest columnIndex exists in selection, find the lowest columnIndex
+                selectedPositions.forEach(({ rowIndex, columnIndices }) => {
+                    const newColumnIndex = columnIndices[0];
+                    if (newColumnIndex !== undefined) {
+                        if (next === null || next.columnIndex > newColumnIndex)
+                            next = { rowIndex: rowIndex, columnIndex: newColumnIndex };
+                    }
+                });
+            }
+
+            if (next) {
+                this.focus = next;
+            } else {
+                // This case shouldn't happen
+                this.focus = this.#currentRegion.start;
+            }
+            return true;
+        } else {
+            const reversedSelectedPositions = selectedPositions.reverse();
+
+            // Find the next-lowest columnIndex
+            let next: GridPosition | null = null;
+            reversedSelectedPositions.forEach(({ rowIndex, columnIndices }) => {
+                const newColumnIndex = columnIndices.find(columnIndex => columnIndex < this.focus.columnIndex);
+                if (newColumnIndex !== undefined) {
+                    if (next === null || next.columnIndex < newColumnIndex)
+                        next = { rowIndex: rowIndex, columnIndex: newColumnIndex };
+                }
+            });
+
+            if (!next) {
+                // If no next-lowest columnIndex exists in selection, find the greatest columnIndex
+                reversedSelectedPositions.forEach(({ rowIndex, columnIndices }) => {
+                    const newColumnIndex = columnIndices[columnIndices.length - 1];
+                    if (newColumnIndex !== undefined) {
+                        if (next === null || next.columnIndex < newColumnIndex)
+                            next = { rowIndex: rowIndex, columnIndex: newColumnIndex };
+                    }
+                });
+            }
+
+            if (next) {
+                this.focus = next;
+            } else {
+                // This case shouldn't happen
+                this.focus = this.#currentRegion.start;
+            }
+            return true;
+        }
+    }
+
+    /**
+     * Shifts the focused position within the selection, prioritizing keeping the rowIndex the same if possible.
+     * @param delta 
+     * @returns True if multiple cells are selected. False if only a single cell is selected.
+     */
+    shiftFocusByColumnThenRow(delta: number): boolean {
+        const selectedPositions = this.getSelectedPositions();
+        if (selectedPositions.length <= 1)
+            return false;
+
+        const selectedPositionsIndex = selectedPositions.findIndex(({ rowIndex }) => rowIndex === this.focus.rowIndex);
+        if (selectedPositionsIndex < 0) {
+            this.focus = this.#currentRegion.start;
+            return true;
+        }
+
+        // Prioritize shifting columnIndex in the direction of delta while preserving rowIndex
+        const columnIndexIndex = selectedPositions[selectedPositionsIndex].columnIndices.indexOf(this.focus.columnIndex);
+        if (columnIndexIndex < 0) {
+            this.focus = this.#currentRegion.start;
+            return true;
+        }
+        const newColumnIndexIndex = columnIndexIndex + delta;
+
+        if (newColumnIndexIndex >= 0 && newColumnIndexIndex < selectedPositions[selectedPositionsIndex].columnIndices.length) {
+            this.focus = {
+                rowIndex: this.focus.rowIndex,
+                columnIndex: selectedPositions[selectedPositionsIndex].columnIndices[newColumnIndexIndex]
+            };
+            return true;
+        }
+
+        // If rowIndex cannot be preserved, shift rowIndex in the direction of delta and reset columnIndex
+        const newSelectedPositionsIndex = (selectedPositionsIndex + delta) % selectedPositions.length;
+        this.focus = {
+            rowIndex: selectedPositions[newSelectedPositionsIndex].rowIndex,
+            columnIndex: selectedPositions[newSelectedPositionsIndex].columnIndices[delta > 0 ? 0 : (selectedPositions[newSelectedPositionsIndex].columnIndices.length - 1)]
+        };
+        return true;
+    }
+
+    /**
+     * Tests if the selection contains the given position.
+     * @param pos 
+     * @returns 
+     */
+    contains(pos: GridPosition): boolean {
+        return this.#currentRegion.contains(pos)
+            || this.#otherRegions.some((otherRegion: GridSelectionRegion) => otherRegion.contains(pos));
+    }
+
+    /**
+     * Gets an array of all selected positions.
+     * @returns 
+     */
+    getSelectedPositions(): { rowIndex: number, columnIndices: number[] }[] {
+        // Get all column spans associated with each row
+        const rows: { [rowIndex: number]: [number, number][] } = {};
+        [this.#currentRegion, ...this.#otherRegions].forEach((region: GridSelectionRegion) => {
+            const rowMin: number = Math.min(region.start.rowIndex, region.start.rowIndex + region.rowSpan);
+            const rowMax: number = Math.max(region.start.rowIndex, region.start.rowIndex + region.rowSpan);
+            const columnMin: number = Math.min(region.start.columnIndex, region.start.columnIndex + region.columnSpan);
+            const columnMax: number = Math.max(region.start.columnIndex, region.start.columnIndex + region.columnSpan);         
+
+            for (let rowIndex: number = rowMin; rowIndex <= rowMax; ++rowIndex) {
+                if (rowIndex in rows) {
+                    rows[rowIndex].push([columnMin, columnMax]);
+                } else {
+                    rows[rowIndex] = [[columnMin, columnMax]];
+                }
+            }
+        });
+
+        // Filter out duplicate columns
+        let selectedPositions: { rowIndex: number, columnIndices: number[] }[] = [];
+        for (const rowIndex of Object.keys(rows).map(str => parseInt(str)).sort()) {
+            const columnIndices: Set<number> = new Set();
+            rows[rowIndex].forEach(([columnMin, columnMax]) => {
+                for (let columnIndex: number = columnMin; columnIndex <= columnMax; ++columnIndex) {
+                    columnIndices.add(columnIndex);
+                }
+            });
+            selectedPositions.push({
+                rowIndex: rowIndex,
+                columnIndices: [...columnIndices].sort()
+            });
+        }
+        return selectedPositions;
+    }
+}
+
+
 export class Grid {
     /**
      * The IFrame containing the grid.
@@ -188,18 +687,25 @@ export class Grid {
                         rowIndex: this.#rows.length - 1,
                         columnIndex: lastRow.cells.length
                     };
-                    cell.setStartEditingCallback(async () => {    
-                        // User can only edit one cell at a time                    
-                        if (this.#editing && this.#editing !== pos)
-                            await this.#stopEditingAsync();
+                    cell.elem.setAttribute('pos', JSON.stringify(pos));
 
-                        // Mark the position of the cell being edited
-                        this.#editing = pos;
+                    cell.setStartEditingCallback(async () => {
+                        if (!this.#mode)
+                            this.#initSelection(pos);
+                        else {
+                            // User can only edit one cell at a time                    
+                            if (this.#mode && this.#mode.state == 'editingFocus' && this.#mode.selection.focus !== pos) {
+                                await this.#stopEditingAsync();
+                            }
+
+                            // Mark the position of the cell being edited
+                            this.#mode.selection.focus = pos;
+                        }
                     });
                     cell.setStopEditingCallback(async () => {
                         // Unmark that the cell is being edited
-                        if (this.#editing === pos) 
-                            this.#editing = null;
+                        if (this.#mode && this.#mode.state == 'editingFocus' && this.#mode.selection.focus === pos) 
+                            this.#mode.state = null;
                     });
 
                     lastRow.cells.push(cell);
@@ -261,29 +767,6 @@ export class Grid {
 
 
     /**
-     * The cells that are currently selected. More than one cell may be selected at a time.
-     * A single item in the selectedCells array can be copied to clipboard.
-     */
-    #selectedCells: {
-        rowIndex: number,
-        columnIndex: number,
-        rowSpan: number,
-        columnSpan: number
-    }[] = [];
-
-    /**
-     * The cell that is currently focused. Only one cell can be focused at a time.
-     */
-    #focusedCell: GridPosition | null = null;
-
-    /**
-     * The current mode.
-     * The "select" mode allows the user to select cells.
-     * The "edit" mode indicates the user is currently editing a cell.
-     */
-    #mode: 'select' | 'edit' = 'select';
-
-    /**
      * Code blatantly lifted (and slightly modified) from https://github.com/renanlecaro/importabular/blob/master/src/index.js
      * @param columns The columns of the grid.
      */
@@ -311,16 +794,8 @@ export class Grid {
         cwd.head.appendChild(gridStyle);
 
 
-        /**
-         * Construct the headers for the table
-         */
-
+        // Set up initial columns
         this.#columns = columns?.map(c => new GridColumn(cwd, c)) || [];
-
-        
-        /**
-         * Start constructing the table
-         */
 
         // Set up event listeners within the IFrame
         for (const eventName in this.#eventListeners) {
@@ -447,6 +922,20 @@ export class Grid {
             return undefined;
         }
         return row.cells[pos.columnIndex];
+    }
+
+    /**
+     * Retrieves the cell by its corresponding HTMLElement, or a child of its corresponding HTMLElement.
+     * @param elem 
+     * @returns 
+     */
+    #getCellByElem(elem: Node | null) : Cell | undefined {
+        while (elem) {
+            if (elem instanceof Element && elem.hasAttribute('pos')) 
+                return this.#getCellByPosition(JSON.parse(elem.getAttribute('pos') || '{"rowIndex":0,"columnIndex":0}'));
+            elem = elem.parentElement;
+        }
+        return undefined;
     }
 
     #getSelectedCellPositions(): { rowIndex: number, pos: GridPosition[] }[] {
@@ -586,21 +1075,101 @@ export class Grid {
         this._scrollIntoView(nc);
     }
 
-    #tabCursor() {
-        
+    /**
+     * Shifts the focus in a direction, as by ENTER or TAB key-presses.
+     * @param columnThenRow True if prioritizing keeping rowIndex the same while shifting columnIndex. False if prioritizing keeping columnIndex the same while shifting rowIndex.
+     * @param delta The direction to shift in. Should be either +1 or -1.
+     */
+    #shiftFocus(columnThenRow: boolean, delta: number) {
+        if (this.#mode) {
+            // Remove the "focused" class from the currently-focused cell
+            const oldFocus = this.#mode.selection.focus;
+
+            // Shift the focus within the selection by the indicated direction
+            if (!(columnThenRow ? this.#mode.selection.shiftFocusByColumnThenRow : this.#mode.selection.shiftFocusByRowThenColumn)(delta)) {
+                // Only a single cell is selected, so shift the single cell that is selected
+                let newRowIndex: number = oldFocus.rowIndex;
+                let newColumnIndex: number = oldFocus.columnIndex;
+                if (columnThenRow) {
+                    // Shift by column first, then row
+                    newColumnIndex += delta;
+                    if (newColumnIndex < 0) {
+                        newRowIndex = (newRowIndex - 1) % this.#rows.length;
+                        newColumnIndex = this.#columns.length - 1;
+                    } else if (newColumnIndex >= this.#columns.length) {
+                        newRowIndex = (newRowIndex + 1) % this.#rows.length;
+                        newColumnIndex = 0;
+                    }
+                } else {
+                    // Shift by row first, then column
+                    newRowIndex += delta;
+                    if (newRowIndex < 0) {
+                        newColumnIndex = (newColumnIndex - 1) % this.#columns.length;
+                        newRowIndex = this.#rows.length - 1;
+                    } else if (newRowIndex >= this.#rows.length) {
+                        newColumnIndex = (newColumnIndex + 1) % this.#columns.length;
+                        newRowIndex = 0;
+                    }
+                }
+                this.#mode.selection.focus = {
+                    rowIndex: newRowIndex,
+                    columnIndex: newColumnIndex
+                };
+            }
+        }
     }
 
 
-    /**
-     * True if the user is currently selecting cells with their mouse.
-     */
-    #isMouseSelecting: boolean = false;
-
 
     /**
-     * True if the user is currently editing a cell.
+     * The current user mode.
      */
-    #editing: GridPosition | null = null;
+    #mode: {
+        selection: GridSelection,
+        state: 'editingFocus' | 'draggingCurrentRegion' | null
+    } | null = null;
+
+    /**
+     * Initializes the selection as a single cell.
+     * @param pos 
+     */
+    #initSelection(pos: GridPosition) {
+        this.#mode = {
+            selection: new GridSelection(pos, {
+                onSetFocus: (oldFocus, newFocus) => {
+                    const oldFocusedCell = this.#getCellByPosition(oldFocus);
+                    if (oldFocusedCell)
+                        oldFocusedCell.elem.classList.remove('focused');
+
+                    const newFocusedCell = this.#getCellByPosition(newFocus);
+                    if (newFocusedCell)
+                        newFocusedCell.elem.classList.add('focused');
+                },
+                onAddSelection: (pos) => {
+                    const cell = this.#getCellByPosition(pos);
+                    if (cell)
+                        cell.elem.classList.add('selected');
+                },
+                onRemoveSelection: (pos) => {
+                    const cell = this.#getCellByPosition(pos);
+                    if (cell)
+                        cell.elem.classList.remove('selected');
+                }
+            }),
+            state: null
+        }
+    }
+
+    /**
+     * Resets the user's selection to a single cell.
+     * @param pos 
+     */
+    #resetSelection(pos: GridPosition) {
+        if (!this.#mode)
+            this.#initSelection(pos);
+        else 
+            this.#mode.selection.reset(pos);
+    }
 
     /**
      * Begin editing the cell at the given position.
@@ -617,8 +1186,8 @@ export class Grid {
      * Stop editing the cell currently being edited, and do not push the changes to the database.
      */
     async #revertEditAsync() {
-        if (this.#editing) {
-            const cell = this.#getCellByPosition(this.#editing);
+        if (this.#mode && this.#mode.state === 'editingFocus') {
+            const cell = this.#getCellByPosition(this.#mode.selection.focus);
             if (cell) {
                 // TODO
             }
@@ -629,8 +1198,8 @@ export class Grid {
      * Stop editing the cell currently being edited, and push the changes to the database.
      */
     async #stopEditingAsync() {
-        if (this.#editing) {
-            const cell = this.#getCellByPosition(this.#editing);
+        if (this.#mode && this.#mode.state === 'editingFocus') {
+            const cell = this.#getCellByPosition(this.#mode.selection.focus);
             if (cell) {
                 await cell.stopEditingAsync();
             }
@@ -641,9 +1210,19 @@ export class Grid {
      * Clears the content of the cells that are currently selected.
      */
     #clearSelectedCells() {
-        this.#selectedCells.forEach((selectedCellRegion) => {
-
-        });
+        // Iterate over all selected positions of the grid
+        if (this.#mode) {
+            this.#mode.selection.getSelectedPositions().forEach(({ rowIndex, columnIndices }) => {
+                columnIndices.forEach((columnIndex) => {
+                    const pos: GridPosition = { rowIndex: rowIndex, columnIndex: columnIndex };
+                    const cell: Cell | undefined = this.#getCellByPosition(pos);
+                    if (cell) {
+                        // Clear the contents of the cell
+                        // TODO
+                    }
+                })
+            });
+        }
     }
 
 
@@ -752,29 +1331,37 @@ export class Grid {
         },
 
         "keydown": (e: KeyboardEvent) => {
-            if ((e.ctrlKey && e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "ArrowLeft" && e.key !== "ArrowRight") || e.metaKey) return;
+            if (e.metaKey
+                || (e.ctrlKey && e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "ArrowLeft" && e.key !== "ArrowRight")) 
+                return;
 
-            if (this.#selectedCells.length > 0) {
-                if (e.key === "Escape" && this.#mode == 'edit') {
+            if (this.#mode) {
+                if (e.key === "Escape" && this.#mode && this.#mode.state === 'editingFocus') {
+                    // Cancel changes and stop editing the cell
                     e.preventDefault();
                     this.#revertEditAsync();
-                    this.#stopEditingAsync();
                 }
+
                 if (e.key === "Enter") {
+                    // Shift the focus by row
                     e.preventDefault();
-                    this._tabCursorInSelection(false, e.shiftKey ? -1 : 1);
+                    this.#shiftFocus(false, e.shiftKey ? -1 : 1);
                 }
 
                 if (e.key === "Tab") {
+                    // Shift the focus by column
                     e.preventDefault();
-                    this._tabCursorInSelection(true, e.shiftKey ? -1 : 1);
+                    this.#shiftFocus(true, e.shiftKey ? -1 : 1);
                 }
-                if (this.#mode == 'select') {
+
+                if (this.#mode && this.#mode.state !== 'editingFocus') {
                     if (e.key === "F2") {
+                        // Start editing the focused cell
                         e.preventDefault();
-                        this.#startEditingAsync(this.#focusedCell);
+                        this.#startEditingAsync(this.#mode.selection.focus);
                     }
                     if (e.key === "Delete" || e.key === "Backspace") {
+                        // Clear the selected cells
                         e.preventDefault();
                         this.#clearSelectedCells();
                     }
@@ -821,14 +1408,9 @@ export class Grid {
                     }
                 }
 
-                if (e.key.length === 1 && this.#mode != 'edit') {
-                    this._changeSelectedCellsStyle(() => {
-                        const { x, y } = this._focus;
-                        // We clear the value of the cell, and the keyup event will
-                        // happen with the cursor inside the cell and type the character there
-                        this._startEditing({ x, y });
-                        this._getCell(x, y).firstChild.value = "";
-                    });
+                if (e.key.length === 1 && this.#mode && this.#mode.state !== 'editingFocus') {
+                    // Start editing the cell. The first keypress will happen after the cell's text has already been highlighted.
+                    this.#startEditingAsync(this.#mode.selection.focus);
                 }
             }
         },
@@ -839,8 +1421,13 @@ export class Grid {
             }
         },
         "mouseenter": (e: MouseEvent) => {
-            if (this.#isMouseSelecting) {
+            if (this.#mode && e.target instanceof Node) {
+                const highlightedCell = this.#getCellByElem(e.target as Node);
+                if (!highlightedCell)
+                    return;
 
+                const pos: GridPosition = JSON.parse(highlightedCell.elem.getAttribute('pos') || '{"rowIndex":0,"columnIndex":0}');
+                this.#mode.selection.setSizeCurrentRegion(pos);
             }
         },
     };
