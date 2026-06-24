@@ -522,30 +522,47 @@ pub fn open() -> Result<Connection, error::Error> {
 }
 
 /// Copies the data from the autosave file to the main file, then open a connection to the main file for cleaning purposes.
-pub fn save(app: &AppHandle) -> Result<(), error::Error> {
+/// Returns false if the file was not saved due to the user cancelling the save prompt, and returns true otherwise.
+pub fn save_to_current_file(app: &AppHandle) -> Result<bool, error::Error> {
+    // First, check if there is a main file
+    {
+        let database_path = DATABASE_PATH.lock().unwrap();
+        if let Some(ref save_path) = *database_path {
+            // If there is a main file, save to it
+            save(app, save_path)?;
+            return Ok(true);
+        }
+    }
+
+    // If there is not a main file, prompt which file to save to
+    save_to_prompted_file(app)
+}
+
+/// Copies the data from the autosave file to a prompted main file, then open a connection to the main file for cleaning purposes.
+/// Returns false if the file was not saved due to the user cancelling the save prompt, and returns true otherwise.
+pub fn save_to_prompted_file(app: &AppHandle) -> Result<bool, error::Error> {
+    use tauri_plugin_dialog::DialogExt;
+
     let mut database_path = DATABASE_PATH.lock().unwrap();
+    if let Some(file_path) = app
+        .dialog()
+        .file()
+        .add_filter("DungeonDB File (*.dndb)", &["dndb"])
+        .blocking_save_file()
+    {
+        *database_path = Some(file_path.to_string());
+        save(app, (database_path.as_ref()).unwrap())?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Copies the data from the autosave file to the specified main file, then open a connection to the main file for cleaning purposes.
+fn save(app: &AppHandle, save_path: &String) -> Result<(), error::Error> {
     let database_autosave_tempfile = DATABASE_AUTOSAVE_PATH.lock().unwrap();
     match *database_autosave_tempfile {
         Some(ref tempfile) => {
-            let save_path: &String = match *database_path {
-                Some(ref path) => path,
-                None => {
-                    use tauri_plugin_dialog::DialogExt;
-
-                    if let Some(file_path) = app
-                        .dialog()
-                        .file()
-                        .add_filter("DungeonDB File (*.dndb)", &["dndb"])
-                        .blocking_save_file()
-                    {
-                        *database_path = Some(file_path.to_string());
-                        (database_path.as_ref()).unwrap()
-                    } else {
-                        return Ok(());
-                    }
-                }
-            };
-
             // Copy the data from the autosave back to the main file
             let Ok(_) = fs::copy(tempfile.path(), save_path) else {
                 return Err(error::Error::AdhocError(

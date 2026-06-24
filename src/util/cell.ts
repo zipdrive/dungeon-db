@@ -15,7 +15,13 @@ import { DropdownItem } from "jsuites/dist/types/dropdown";
 /**
  * Clipboard data for cells.
  */
-export type ClipboardCellsData = ClipboardCellData[][];
+export type ClipboardCellsData = {
+    content: ClipboardCellData[][],
+    shape: 'rect' | 'free'
+} | {
+    content: ClipboardCellData,
+    shape: 'cell'
+};
 
 
 
@@ -337,7 +343,7 @@ function isDataCellEntry(obj: any): boolean {
 }
 
 
-type ClipboardCellData = {
+export type ClipboardCellData = {
     columnOid: number,
     value: null | {
         text: string
@@ -440,7 +446,8 @@ function clipboardAsNumber(data: ClipboardCellData): number | null {
             label = value.object.label;
         else 
             label = value.reference.label;
-        return label ? parseFloat(label) : null;
+        const parsedLabel = label ? parseFloat(label) : null;
+        return parsedLabel !== null && Number.isFinite(parsedLabel) ? parsedLabel : null;
     }
 }
 
@@ -492,10 +499,14 @@ export class Cell {
     }
 
     /**
-     * Stops editing the cell.
-     * @returns The Cell that should replace this one.
+     * Stops editing the cell, saving changes.
      */
     #stopEditingAsync: () => Promise<void> = async () => {};
+
+    /**
+     * Stops editing the cell, discarding changes.
+     */
+    #revertEditAsync: () => Promise<void> = async () => {};
 
     /**
      * A callback function for when the user stops editing the cell.
@@ -947,12 +958,21 @@ export class Cell {
     }
 
     /**
-     * The user stops editing the cell.
+     * The user stops editing the cell, saving changes.
      */
     async stopEditingAsync(): Promise<void> {
         this.elem.classList.remove('editing');
         await this.#stopEditingCallbackFn(this);
         await this.#stopEditingAsync();
+    }
+
+    /**
+     * The user stops editing the cell, discarding changes.
+     */
+    async revertEditAsync(): Promise<void> {
+        this.elem.classList.remove('editing');
+        await this.#stopEditingCallbackFn(this);
+        await this.#revertEditAsync();
     }
 
     /**
@@ -1228,6 +1248,19 @@ export class Cell {
             });
         };
 
+        // When you stop editing, update the database and swap the editable INPUT for the readonly DIV
+        this.#revertEditAsync = async () => {
+            navigator.locks.request(editingLock, async () => {
+                if (editing) {
+                    editing = false;
+
+                    // Remove the input, restore the readonly text
+                    elem.removeChild(input);
+                    elem.appendChild(readonly);
+                }
+            });
+        };
+
         return elem;
     }
 
@@ -1306,6 +1339,19 @@ export class Cell {
                             });
                         });
                     }
+
+                    // Remove the input, restore the readonly text
+                    elem.removeChild(input);
+                    elem.appendChild(readonly);
+                }
+            });
+        };
+
+        // When you stop editing, update the database and swap the editable INPUT for the readonly DIV
+        this.#revertEditAsync = async () => {
+            navigator.locks.request(editingLock, async () => {
+                if (editing) {
+                    editing = false;
 
                     // Remove the input, restore the readonly text
                     elem.removeChild(input);
@@ -1399,6 +1445,19 @@ export class Cell {
             });
         };
 
+        // When you stop editing, discard changes
+        this.#revertEditAsync = async () => {
+            navigator.locks.request(editingLock, async () => {
+                if (editing) {
+                    editing = false;
+
+                    // Remove the input, restore the readonly text
+                    elem.removeChild(input);
+                    elem.appendChild(readonly);
+                }
+            });
+        };
+
         return elem;
     }
 
@@ -1479,6 +1538,19 @@ export class Cell {
             });
         };
 
+        // When you stop editing, discard changes
+        this.#revertEditAsync = async () => {
+            navigator.locks.request(editingLock, async () => {
+                if (editing) {
+                    editing = false;
+
+                    // Remove the input, restore the readonly text
+                    elem.removeChild(input);
+                    elem.appendChild(readonly);
+                }
+            });
+        };
+
         return elem;
     }
 
@@ -1549,6 +1621,19 @@ export class Cell {
                             });
                         });
                     }
+
+                    // Remove the input, restore the readonly text
+                    elem.removeChild(input);
+                    elem.appendChild(readonly);
+                }
+            });
+        };
+
+        // When you stop editing, discard changes
+        this.#revertEditAsync = async () => {
+            navigator.locks.request(editingLock, async () => {
+                if (editing) {
+                    editing = false;
 
                     // Remove the input, restore the readonly text
                     elem.removeChild(input);
@@ -1834,12 +1919,24 @@ export class Cell {
                     });
 
                     // Remove the input, restore the image
-                    elem.classList.remove('editing');
                     elem.removeChild(input);
                     elem.appendChild(readonly);
 
                     // Refresh the input area
                     ({ div: input, getFileOidAsync } = this.#constructFileInput(cwd, content));
+                }
+            });
+        };
+
+        // When you stop editing, discard changes
+        this.#revertEditAsync = async () => {
+            navigator.locks.request(editingLock, async () => {
+                if (editing) {
+                    editing = false;
+
+                    // Remove the input, restore the readonly text
+                    elem.removeChild(input);
+                    elem.appendChild(readonly);
                 }
             });
         };
@@ -1942,6 +2039,19 @@ export class Cell {
                         label: content.label,
                         validationFailures: content.validationFailures
                     }));
+                }
+            });
+        };
+
+        // When you stop editing, discard changes
+        this.#revertEditAsync = async () => {
+            navigator.locks.request(editingLock, async () => {
+                if (editing) {
+                    editing = false;
+
+                    // Remove the input, restore the readonly text
+                    elem.removeChild(input);
+                    elem.appendChild(img);
                 }
             });
         };
@@ -2057,6 +2167,19 @@ export class Cell {
                                 }
 
                                 // Swap the dropdown for the readonly label
+                                elem.removeChild(input);
+                                elem.appendChild(readonly);
+                            }
+                        });
+                    };
+                    
+                    // When you stop editing, discard changes
+                    this.#revertEditAsync = async () => {
+                        navigator.locks.request(editingLock, async () => {
+                            if (editing) {
+                                editing = false;
+
+                                // Remove the input, restore the readonly text
                                 elem.removeChild(input);
                                 elem.appendChild(readonly);
                             }

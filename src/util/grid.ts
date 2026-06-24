@@ -1,6 +1,6 @@
 import { message } from "@tauri-apps/plugin-dialog";
 import { executeAsync } from "./action";
-import { CellContent, ClipboardCellsData, SchemaRow, Cell, isClipboardCellData, AddNewRowButton } from "./cell";
+import { CellContent, ClipboardCellsData, SchemaRow, Cell, isClipboardCellData, AddNewRowButton, ClipboardCellData } from "./cell";
 import { FullMetadata as ColumnFullMetadata, ColumnType } from "./column";
 
 /**
@@ -106,11 +106,23 @@ class GridSelectionRegion {
     start: GridPosition;
     rowSpan: number;
     columnSpan: number;
+    deselecting: boolean;
 
-    constructor(start: GridPosition, rowSpan: number = 0, columnSpan: number = 0) {
+    constructor(start: GridPosition, rowSpan: number = 0, columnSpan: number = 0, deselecting: boolean = false) {
         this.start = start;
         this.rowSpan = rowSpan;
         this.columnSpan = columnSpan;
+        this.deselecting = deselecting;
+    }
+
+    /**
+     * The top-left corner of the region.
+     */
+    get topLeftCorner(): GridPosition {
+        return {
+            rowIndex: this.start.rowIndex + Math.min(this.rowSpan, 0),
+            columnIndex: this.start.columnIndex + Math.min(this.columnSpan, 0)
+        };
     }
 
     /**
@@ -191,6 +203,13 @@ class GridSelection {
         this.#focus = pos;
     }
 
+    /**
+     * The regions of the selection.
+     */
+    get regions(): GridSelectionRegion[] {
+        return [...this.#otherRegions, this.#currentRegion];
+    }
+
     constructor(pos: GridPosition, { onSetFocus, onRemoveSelection, onAddSelection } : {
         onSetFocus?: ((oldFocus: GridPosition, newFocus: GridPosition) => void),
         onRemoveSelection?: ((pos: GridPosition) => void),
@@ -219,6 +238,47 @@ class GridSelection {
         this.#onAddSelectionCallbackFn(pos);
         this.#otherRegions = [];
         this.focus = pos;
+    }
+
+    /**
+     * Determines the shape of the selection.
+     * @returns The string "rect" if the selection is a rectangular area. Otherwise, the string "free".
+     */
+    shape(): 'cell' | 'rect' | 'free' {
+        if (this.#otherRegions.length === 0) 
+            return (this.#currentRegion.rowSpan === 0 && this.#currentRegion.columnSpan === 0 ? 'cell' : 'rect');
+
+        // Calculate each region as a bounding box
+        const allRegions = this.regions.filter(region => region.deselecting);
+        const allMinmax = allRegions.map(region => {
+            return {
+                rowMin: Math.min(region.start.rowIndex, region.start.rowIndex + region.rowSpan),
+                rowMax: Math.max(region.start.rowIndex, region.start.rowIndex + region.rowSpan),
+                columnMin: Math.min(region.start.columnIndex, region.start.columnIndex + region.columnSpan),
+                columnMax: Math.max(region.start.columnIndex, region.start.columnIndex + region.columnSpan)
+            };
+        })
+
+        // Calculate the bounding box of all regions
+        let rowMin: number = Number.MAX_SAFE_INTEGER;
+        let rowMax: number = 0;
+        let columnMin: number = Number.MAX_SAFE_INTEGER;
+        let columnMax: number = 0;
+        allMinmax.forEach(region => {
+            rowMin = Math.min(rowMin, region.rowMin);
+            rowMax = Math.max(rowMax, region.rowMax);
+            columnMin = Math.min(columnMin, region.columnMin);
+            columnMax = Math.max(columnMax, region.columnMax);
+        });
+
+        // Check if all parts of the bounding box are covered by some region
+        let uncoveredRegions: GridSelectionRegion[] = [new GridSelectionRegion({ rowIndex: rowMin, columnIndex: columnMin }, rowMax - rowMin, columnMax - columnMin)];
+        allMinmax.forEach(region => {
+            for (let k = uncoveredRegions.length - 1; k >= 0; --k) {
+                uncoveredRegions.splice(k, 1, ...uncoveredRegions[k].disjoint(region));
+            }
+        });
+        return uncoveredRegions.length === 0 ? 'rect' : 'free';
     }
 
     /**
@@ -343,13 +403,13 @@ class GridSelection {
      * Adds a new selection region.
      * @param pos 
      */
-    pushRegion(pos: GridPosition) {
+    pushRegion(pos: GridPosition, rowSpan?: number, columnSpan?: number, deselecting?: boolean) {
         this.#otherRegions.push(this.#currentRegion);
-        this.#currentRegion = new GridSelectionRegion(pos);
+        this.#currentRegion = new GridSelectionRegion(pos, rowSpan ?? 0, columnSpan ?? 0, deselecting !== undefined ? deselecting : (this.#otherRegions.some(otherRegion => otherRegion.contains(pos))));
         this.#onAddSelectionCallbackFn(pos);
 
         // Change the focused cell, if the new region is not deselecting
-        if (!this.#otherRegions.some((otherRegion) => otherRegion.contains(pos)))
+        if (!this.#currentRegion.deselecting)
             this.focus = pos;
     }
 
@@ -400,7 +460,7 @@ class GridSelection {
      * Stops doing mouse selection of the current region.
      */
     finalizeCurrentRegion() {
-        if (this.#otherRegions.some((otherRegion: GridSelectionRegion) => otherRegion.contains(this.#currentRegion.start))) {
+        if (this.#currentRegion.deselecting) {
             const rowMin: number = Math.min(this.#currentRegion.start.rowIndex, this.#currentRegion.start.rowIndex + this.#currentRegion.rowSpan);
             const rowMax: number = Math.max(this.#currentRegion.start.rowIndex, this.#currentRegion.start.rowIndex + this.#currentRegion.rowSpan);
             const columnMin: number = Math.min(this.#currentRegion.start.columnIndex, this.#currentRegion.start.columnIndex + this.#currentRegion.columnSpan);
@@ -556,8 +616,7 @@ class GridSelection {
      * @returns 
      */
     contains(pos: GridPosition): boolean {
-        return this.#currentRegion.contains(pos)
-            || this.#otherRegions.some((otherRegion: GridSelectionRegion) => otherRegion.contains(pos));
+        return this.regions.some((region: GridSelectionRegion) => region.contains(pos));
     }
 
     /**
@@ -567,17 +626,35 @@ class GridSelection {
     getSelectedPositions(): { rowIndex: number, columnIndices: number[] }[] {
         // Get all column spans associated with each row
         const rows: { [rowIndex: number]: [number, number][] } = {};
-        [this.#currentRegion, ...this.#otherRegions].forEach((region: GridSelectionRegion) => {
+        this.regions.forEach((region: GridSelectionRegion) => {
             const rowMin: number = Math.min(region.start.rowIndex, region.start.rowIndex + region.rowSpan);
             const rowMax: number = Math.max(region.start.rowIndex, region.start.rowIndex + region.rowSpan);
             const columnMin: number = Math.min(region.start.columnIndex, region.start.columnIndex + region.columnSpan);
             const columnMax: number = Math.max(region.start.columnIndex, region.start.columnIndex + region.columnSpan);         
 
             for (let rowIndex: number = rowMin; rowIndex <= rowMax; ++rowIndex) {
-                if (rowIndex in rows) {
-                    rows[rowIndex].push([columnMin, columnMax]);
+                if (region.deselecting) {
+                    if (rowIndex in rows) {
+                        for (let k = rows[rowIndex].length - 1; k >= 0; --k) {
+                            const [selectedColumnMin, selectedColumnMax] = rows[rowIndex][k];
+                            if (columnMax < selectedColumnMin || selectedColumnMax < columnMin)
+                                continue;
+                            if (columnMin <= selectedColumnMin && selectedColumnMax <= columnMax)
+                                
+
+                            let replacements: [number, number][] = [];
+                            if (columnMin > selectedColumnMin)
+                                replacements.push([selectedColumnMin, columnMin - 1])
+                            rows[rowIndex].splice(k, 1, replacements);
+                        }
+                        rows[rowIndex].splice
+                    }
                 } else {
-                    rows[rowIndex] = [[columnMin, columnMax]];
+                    if (rowIndex in rows) {
+                        rows[rowIndex].push([columnMin, columnMax]);
+                    } else {
+                        rows[rowIndex] = [[columnMin, columnMax]];
+                    }
                 }
             }
         });
@@ -938,141 +1015,32 @@ export class Grid {
         return undefined;
     }
 
-    #getSelectedCellPositions(): { rowIndex: number, pos: GridPosition[] }[] {
-        const selectedPos: Set<GridPosition> = new Set();
-        this.#selectedCells.forEach((selectedCellRegion) => {
-            for (
-                let r: number = Math.min(selectedCellRegion.rowIndex, selectedCellRegion.rowIndex + selectedCellRegion.rowSpan);
-                r <= Math.max(selectedCellRegion.rowIndex, selectedCellRegion.rowIndex + selectedCellRegion.rowSpan);
-                ++r
-            ) {
-                for (
-                    let c: number = Math.min(selectedCellRegion.columnIndex, selectedCellRegion.columnIndex + selectedCellRegion.columnSpan);
-                    c <= Math.max(selectedCellRegion.columnIndex, selectedCellRegion.columnIndex + selectedCellRegion.columnSpan);
-                    ++r
-                ) {
-                    selectedPos.add({
-                        rowIndex: r,
-                        columnIndex: c 
-                    });
-                }
-            }
-        });
-
-        // Group each position by its row index
-        const groupedSelectedPos: { rowIndex: number, pos: GridPosition[] }[] = [];
-        [...selectedPos]
-            .sort((lhs, rhs) => {
-                if (lhs.rowIndex < rhs.rowIndex) 
-                    return -1;
-                else if (lhs.rowIndex > rhs.rowIndex)
-                    return 1;
-                else if (lhs.columnIndex < rhs.columnIndex)
-                    return -1;
-                else if (lhs.columnIndex > rhs.columnIndex)
-                    return 1;
-                else 
-                    return 0;
-            })
-            .forEach(pos => {
-                if (groupedSelectedPos.length === 0 || groupedSelectedPos[groupedSelectedPos.length - 1].rowIndex !== pos.rowIndex)
-                    groupedSelectedPos.push({ rowIndex: pos.rowIndex, pos: [pos]});
-                else 
-                    groupedSelectedPos[groupedSelectedPos.length - 1].pos.push(pos);
-            });
-        return groupedSelectedPos;
-    }
 
     /**
-     * Iterates over the selected cell positions, calling a callback function for each one.
-     * @param callbackFn 
+     * Moves the selection in the specified direction.
+     * @param param0 
+     * @param shiftKey 
      */
-    #forEachSelectedCell(callbackFn: (pos: GridPosition) => void) {
-        const coveredPos: Set<GridPosition> = new Set();
-        this.#selectedCells.forEach((selectedCellRegion) => {
-            for (
-                let r: number = Math.min(selectedCellRegion.rowIndex, selectedCellRegion.rowIndex + selectedCellRegion.rowSpan);
-                r <= Math.max(selectedCellRegion.rowIndex, selectedCellRegion.rowIndex + selectedCellRegion.rowSpan);
-                ++r
-            ) {
-                for (
-                    let c: number = Math.min(selectedCellRegion.columnIndex, selectedCellRegion.columnIndex + selectedCellRegion.columnSpan);
-                    c <= Math.max(selectedCellRegion.columnIndex, selectedCellRegion.columnIndex + selectedCellRegion.columnSpan);
-                    ++r
-                ) {
-                    const pos: GridPosition = {
-                        rowIndex: r,
-                        columnIndex: c 
-                    };
-                    if (!coveredPos.has(pos)) {
-                        coveredPos.add(pos);
-                        callbackFn(pos);
-                    }
-                }
-            }
-        });
-    }
-
-
-    #moveCursor(magnitude: { rowSpanShift?: number, columnSpanShift?: number }, shiftKey: boolean) {
-        const lastSelectedRegion = this.#selectedCells.pop();
-        if (lastSelectedRegion) {
+    #moveSelection({ rowShift, columnShift }: { rowShift?: number, columnShift?: number }, shiftKey: boolean) {
+        if (this.#mode) {
             if (shiftKey) {
                 // Move the span of the last selection region
-                if (magnitude.rowSpanShift) {
-                    lastSelectedRegion.rowSpan += Math.min(
-                        Math.max(magnitude.rowSpanShift, -(lastSelectedRegion.rowIndex + lastSelectedRegion.rowSpan)), 
-                        this.#rows.length - 1 - (lastSelectedRegion.rowIndex + lastSelectedRegion.rowSpan)
-                    );
-                }
-                if (magnitude.columnSpanShift) {
-                    const columns: ColumnFullMetadata[] = Object.values(this.#columns).sort(c => c.ordering);
-                    const columnIndex: number = Math.max(0, columns.findIndex(c => c.oid == lastSelectedRegion.columnOid));
-                    lastSelectedRegion.columnSpan += Math.min(
-                        Math.max(magnitude.columnSpanShift, -(columnIndex + lastSelectedRegion.columnSpan)), 
-                        columns.length - 1 - (columnIndex + lastSelectedRegion.columnSpan)
-                    );
-                }
+                this.#mode.selection.resizeCurrentRegion({
+                    rowSpanShift: rowShift,
+                    columnSpanShift: columnShift,
+                    maxRowIndex: this.#rows.length - 1,
+                    maxColumnIndex: this.#columns.length - 1
+                });
             } else {
-                // Move the last selection region's focal point
-                if (magnitude.rowSpanShift) {
-                    lastSelectedRegion.rowIndex = Math.min(
-                        Math.max(lastSelectedRegion.rowIndex + magnitude.rowSpanShift, 0),
-                        this.#rows.length - 1
-                    );
-                }
-                if (magnitude.columnSpanShift) {
-                    const columns: ColumnFullMetadata[] = Object.values(this.#columns).sort(c => c.ordering);
-                    const oldColumnIndex: number = Math.max(0, columns.findIndex(c => c.oid == lastSelectedRegion.columnOid));
-                    const newColumnIndex: number = Math.min(
-                        Math.max(oldColumnIndex + magnitude.columnSpanShift, 0),
-                        columns.length - 1
-                    );
-                    lastSelectedRegion.columnOid = columns[newColumnIndex].oid;
-                }
-
-                // Drop row span and column span
-                lastSelectedRegion.rowSpan = 0;
-                lastSelectedRegion.columnSpan = 0;
+                // Reset selection to focus on single cell shifted from formerly-focused cell
+                const rowIndex: number = this.#mode.selection.focus.rowIndex + (rowShift || 0);
+                const columnIndex: number = this.#mode.selection.focus.columnIndex + (columnShift || 0);
+                this.#resetSelection({
+                    rowIndex: Math.max(0, Math.min(this.#rows.length - 1, rowIndex)),
+                    columnIndex: Math.max(0, Math.min(this.#columns.length - 1, columnIndex))
+                });
             }
-
-            // Dump everything but the last selection region
-            this.#selectedCells = [lastSelectedRegion];
         }
-
-        const curr = shiftSelectionEnd ? this._selectionEnd : this._selectionStart;
-        const nc = { x: curr.x + magnitude.x, y: curr.y + magnitude.y };
-        if (!this._fitBounds(nc)) return;
-        this.#stopEditingAsync();
-        this._incrementToFit(nc);
-        this._changeSelectedCellsStyle(() => {
-            if (shiftSelectionEnd) {
-                this._selectionEnd = nc;
-            } else {
-                this._selectionStart = this._selectionEnd = this._focus = nc;
-            }
-        });
-        this._scrollIntoView(nc);
     }
 
     /**
@@ -1189,7 +1157,7 @@ export class Grid {
         if (this.#mode && this.#mode.state === 'editingFocus') {
             const cell = this.#getCellByPosition(this.#mode.selection.focus);
             if (cell) {
-                // TODO
+                await cell.revertEditAsync();
             }
         }
     }
@@ -1218,10 +1186,130 @@ export class Grid {
                     const cell: Cell | undefined = this.#getCellByPosition(pos);
                     if (cell) {
                         // Clear the contents of the cell
-                        // TODO
+                        cell.clearAsync();
                     }
                 })
             });
+        }
+    }
+
+
+    /**
+     * Pastes the content of a single cell into the selection.
+     * @param content 
+     */
+    async cellPasteAsync(content: ClipboardCellData) {
+        if (this.#mode) {
+            // Loop over all selected cells, pasting the clipboard data into each of them
+            for (const { rowIndex, columnIndices } of this.#mode.selection.getSelectedPositions()) {
+                for (const columnIndex of columnIndices) {
+                    const pos: GridPosition = { rowIndex: rowIndex, columnIndex: columnIndex };
+                    const cell = this.#getCellByPosition(pos);
+                    if (cell) {
+                        await cell.setAsync(content);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Pastes a rectangle of cells into the selection.
+     * @param content 
+     * @returns 
+     */
+    async rectPasteAsync(content: ClipboardCellData[][]) {
+        if (this.#mode && content.length > 0 && content[0].length > 0) {
+            const regions = this.#mode.selection.regions;
+            for (let regionIndex: number = 0; regionIndex < regions.length; ++regionIndex) {
+                const region = regions[regionIndex];
+                const { rowIndex: baseRowIndex, columnIndex: baseColumnIndex } = region.topLeftCorner;
+
+                // Loop over each pasted row. If there are more selected rows than the pasted rows (in a multiple of the pasted rows), repeat the pasting process
+                let rowIndex: number = baseRowIndex;
+                for (let r = (1 + Math.abs(region.rowSpan)) % content.length === 0 ? Math.max(1, Math.round((1 + Math.abs(region.rowSpan)) / content.length)) : 1; r > 0 && rowIndex < this.#rows.length; --r) {
+                    for (const pastedRow of content) {
+
+                        // Loop over each column in the row. Unlike rows, do not duplicate if the selection extends past the pasted area
+                        let columnIndex: number = baseColumnIndex;
+                        for (const pastedContent of pastedRow) {
+                            const pos: GridPosition = {
+                                rowIndex: rowIndex,
+                                columnIndex: columnIndex
+                            };
+                            const cell = this.#getCellByPosition(pos);
+                            if (cell) {
+                                await cell.setAsync(pastedContent);
+                            }
+
+                            // Increment the column
+                            ++columnIndex;
+                            if (columnIndex >= this.#columns.length)
+                                break;
+                        }
+
+                        // Increment the row
+                        ++rowIndex;
+                        if (rowIndex >= this.#rows.length)
+                            return; // TODO create more rows
+                    }
+                }
+            }
+        }
+    }
+
+    async freePasteAsync(content: ClipboardCellData[][]) {
+        if (this.#mode) {
+            if (this.#mode.selection.shape() == 'cell') {
+                // Paste the full size of the clipboard data
+
+                let rowIndex: number = this.#mode.selection.focus.rowIndex;
+                let needsReset: boolean = true;
+
+                for (const pastedRow of content) {
+                    // For each row being pasted, look up whether the row in the destination table has that columnOid, and paste it in if so
+                    for (const pastedContent of pastedRow) {
+                        const columnIndex: number = this.#columns.findIndex(column => column.metadata.oid === pastedContent.columnOid);
+                        if (columnIndex >= 0) {
+                            const pos: GridPosition = { rowIndex: rowIndex, columnIndex: columnIndex };
+                            const cell = this.#getCellByPosition(pos);
+                            if (cell) {
+                                await cell.setAsync(pastedContent);
+                                
+                                if (needsReset) {
+                                    this.#resetSelection(pos);
+                                } else {
+                                    this.#mode.selection.pushRegion(pos);
+                                }
+                            }
+                        }
+                    }
+
+                    if (++rowIndex >= this.#rows.length)
+                        break; // TODO automatically add new rows
+                }
+            } else {
+                // Paste the clipboard data, as constrained by the selection area
+                let contentIndex: number = 0;
+                for (const { rowIndex, columnIndices } of this.#mode.selection.getSelectedPositions()) {
+                    const pastedRow: ClipboardCellData[] = content[contentIndex];
+
+                    // For each row being pasted, look up whether the row in the destination table has that columnOid, and paste it in if so
+                    for (const pastedContent of pastedRow) {
+                        const columnIndex: number = this.#columns.findIndex(column => column.metadata.oid === pastedContent.columnOid);
+                        if (columnIndex >= 0 && columnIndices.indexOf(columnIndex) >= 0) { // Constrain to only the selected columns in this row
+                            const pos: GridPosition = { rowIndex: rowIndex, columnIndex: columnIndex };
+                            const cell = this.#getCellByPosition(pos);
+                            if (cell) {
+                                await cell.setAsync(pastedContent);
+                            }
+                        }
+                    }
+
+                    // Increment the contentIndex, looping if necessary
+                    contentIndex = (contentIndex + 1) % content.length;
+                }
+            }
         }
     }
 
@@ -1288,46 +1376,64 @@ export class Grid {
             e.clipboardData?.setData('text/plain', json);
         },
 
-        "paste": (e: ClipboardEvent) => {
-            if (this.#mode == 'edit') return;
+        "paste": async (e: ClipboardEvent) => {
+            if (this.#mode && this.#mode.state == 'editingFocus') return;
             e.preventDefault();
 
             function parsePastedData(plaintextData: string | undefined): ClipboardCellsData {
                 if (!plaintextData)
-                    return [[{
-                        columnOid: 0,
-                        value: null
-                    }]];
+                    return {
+                        content: {
+                            columnOid: 0,
+                            value: null
+                        },
+                        shape: 'cell'
+                    };
 
                 try {
                     const obj: any = JSON.parse(plaintextData);
 
                     // Validate the format, then cast
-                    if (!Array.isArray(obj) || !obj.every(arr => Array.isArray(arr) && arr.every((item: any) => isClipboardCellData(item))))
-                        throw new Error('Pasted object is not in the expected format.');
-                    return obj;
+                    if (typeof obj === 'object' && 'shape' in obj && 'content' in obj
+                        && (
+                            ((obj.shape === 'rect' || obj.shape === 'free') 
+                                && Array.isArray(obj.content) 
+                                && obj.content.every((arr: any) => Array.isArray(arr) && arr.every((item: any) => isClipboardCellData(item))))
+                            || (obj.shape === 'cell' && isClipboardCellData(obj.content))
+                        )) {
+                        return obj;
+                    }
+                    throw new Error('Pasted object is not in the expected format.');
                 } catch (e) {
                     // Treat as pasting plaintext
-                    return [[{
-                        columnOid: 0,
-                        value: {
-                            text: plaintextData
-                        }
-                    }]];
+                    return {
+                        content: {
+                            columnOid: 0,
+                            value: {
+                                text: plaintextData
+                            }
+                        },
+                        shape: 'cell'
+                    };
                 }
             }
 
             // window.clipboardData handles clipboard data in IE
             const plaintextData = e.clipboardData?.getData("text/plain");
-            const pastedRows: ClipboardCellsData = parsePastedData(plaintextData);
-            
-            const groupedSelectedPos = this.#getSelectedCellPositions();
-            let pastedRowIndex: number = 0;
-            groupedSelectedPos.forEach(({ pos: posInRow }) => {
-                const pastedRow = pastedRows[pastedRowIndex];
-                // Increment the index of the row to paste, looping if necessary
-                pastedRowIndex = ++pastedRowIndex % pastedRows.length;
-            });
+            const pastedContent: ClipboardCellsData = parsePastedData(plaintextData);
+
+            if (pastedContent.shape == 'cell') {
+                // Paste a single cell
+                await this.cellPasteAsync(pastedContent.content);
+                return;
+            }
+
+            if (pastedContent.shape == 'rect') {
+                // Determine if pasting as a rectangle is appropriate
+            }
+
+            // If pasting as a rectangle is inappropriate or invalid, paste as a free shape
+            await this.freePasteAsync(pastedContent.content);
         },
 
         "keydown": (e: KeyboardEvent) => {
@@ -1370,40 +1476,40 @@ export class Grid {
                         e.preventDefault();
                         if (e.ctrlKey) {
                             // Move to the last row
-                            this.#moveCursor({ rowSpanShift: Number.MAX_SAFE_INTEGER }, e.shiftKey);
+                            this.#moveSelection({ rowShift: Number.MAX_SAFE_INTEGER }, e.shiftKey);
                         } else {
                             // Move down by a single row
-                            this.#moveCursor({ rowSpanShift: +1 }, e.shiftKey);
+                            this.#moveSelection({ rowShift: +1 }, e.shiftKey);
                         }
                     }
                     if (e.key === "ArrowUp") {
                         e.preventDefault();
                         if (e.ctrlKey) {
                             // Move to the first row
-                            this.#moveCursor({ rowSpanShift: Number.MIN_SAFE_INTEGER }, e.shiftKey);
+                            this.#moveSelection({ rowShift: Number.MIN_SAFE_INTEGER }, e.shiftKey);
                         } else {
                             // Move up by a single row
-                            this.#moveCursor({ rowSpanShift: -1 }, e.shiftKey);
+                            this.#moveSelection({ rowShift: -1 }, e.shiftKey);
                         }
                     }
                     if (e.key === "ArrowLeft") {
                         e.preventDefault();
                         if (e.ctrlKey) {
                             // Move to the first column
-                            this.#moveCursor({ columnSpanShift: Number.MIN_SAFE_INTEGER }, e.shiftKey);
+                            this.#moveSelection({ columnShift: Number.MIN_SAFE_INTEGER }, e.shiftKey);
                         } else {
                             // Move left by a single column
-                            this.#moveCursor({ columnSpanShift: -1 }, e.shiftKey);
+                            this.#moveSelection({ columnShift: -1 }, e.shiftKey);
                         }
                     }
                     if (e.key === "ArrowRight") {
                         e.preventDefault();
                         if (e.ctrlKey) {
                             // Move to the last column
-                            this.#moveCursor({ columnSpanShift: Number.MAX_SAFE_INTEGER }, e.shiftKey);
+                            this.#moveSelection({ columnShift: Number.MAX_SAFE_INTEGER }, e.shiftKey);
                         } else {
                             // Move right by a single column
-                            this.#moveCursor({ columnSpanShift: +1 }, e.shiftKey);
+                            this.#moveSelection({ columnShift: +1 }, e.shiftKey);
                         }
                     }
                 }
@@ -1417,11 +1523,27 @@ export class Grid {
 
         "mousedown": (e: MouseEvent) => {
             if (e.button === 0) { // Main mouse button pressed
-
+                const highlightedCell = this.#getCellByElem(e.target as Node);
+                if (!highlightedCell)
+                    return;
+                
+                const pos: GridPosition = JSON.parse(highlightedCell.elem.getAttribute('pos') || '{"rowIndex":0,"columnIndex":0}');
+                if (e.ctrlKey) {
+                    // Multiselect
+                    if (this.#mode) {
+                        this.#mode.selection.pushRegion(pos);
+                    } else {
+                        this.#initSelection(pos);
+                    }
+                } else {
+                    // Reset the selection
+                    this.#resetSelection(pos);
+                }
+                if (this.#mode) this.#mode.state = 'draggingCurrentRegion';
             }
         },
         "mouseenter": (e: MouseEvent) => {
-            if (this.#mode && e.target instanceof Node) {
+            if (this.#mode && this.#mode.state == 'draggingCurrentRegion' && e.target instanceof Node) {
                 const highlightedCell = this.#getCellByElem(e.target as Node);
                 if (!highlightedCell)
                     return;
@@ -1430,5 +1552,11 @@ export class Grid {
                 this.#mode.selection.setSizeCurrentRegion(pos);
             }
         },
+        "mouseup": (e: MouseEvent) => {
+            if (e.button === 0 && this.#mode && this.#mode.state == 'draggingCurrentRegion') {
+                this.#mode.selection.finalizeCurrentRegion();
+                this.#mode.state = null;
+            }
+        }
     };
 }

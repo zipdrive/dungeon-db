@@ -6,6 +6,7 @@ import { FullMetadata as ReportFullMetadata } from "./util/report";
 import { Channel } from "@tauri-apps/api/core";
 import { executeAsync } from "./util/action";
 import { message } from "@tauri-apps/plugin-dialog";
+import "./util/shortcut"; // Install shortcuts
 
 function loadTables() {
     // Disable the open/edit/delete buttons

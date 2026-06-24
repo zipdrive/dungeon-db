@@ -6,6 +6,7 @@ import { CellContent, CellStream } from "./util/cell";
 import { Grid } from "./util/grid";
 import { listen } from "@tauri-apps/api/event";
 import { openDialogAsync } from "./util/dialog";
+import "./util/shortcut"; // Install shortcuts
 
 const urlParams = new URLSearchParams(window.location.search);
 const urlParamSchemaOid: string | null = urlParams.get('schema_oid');

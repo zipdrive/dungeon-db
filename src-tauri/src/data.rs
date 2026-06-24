@@ -38,46 +38,31 @@ fn reset(app: &AppHandle) -> Result<(), Error> {
 #[tauri::command]
 /// Create a new DungeonDB database file.
 pub fn init_new(app: AppHandle) -> Result<(), Error> {
-    init_new_shortcut(&app)
-}
-
-/// Create a new DungeonDB database file.
-pub fn init_new_shortcut(app: &AppHandle) -> Result<(), Error> {
     // Create a new DungeonDB database file
     db::init_new()?;
 
     // Reset the window
-    reset(app)?;
+    reset(&app)?;
     Ok(())
 }
 
 #[tauri::command]
 /// Initialize a connection to an existing DungeonDB database file.
 pub fn init_existing(app: AppHandle, path: String) -> Result<(), Error> {
-    init_existing_shortcut(&app, path)
-}
-
-pub fn init_existing_shortcut(app: &AppHandle, path: String) -> Result<(), Error> {
     // Initialize a connection to an existing DungeonDB database file.
     db::init_existing(path)?;
 
     // Reset the app
-    reset(app)?;
+    reset(&app)?;
     Ok(())
 }
 
 #[tauri::command]
+/// Save to the main file being worked on.
 pub fn save(app: AppHandle) -> Result<(), Error> {
-    // Save to main file, then clean database
-    save_shortcut(&app)
-}
-
-pub fn save_shortcut(app: &AppHandle) -> Result<(), Error> {
-    // Save to main file, then clean database
-    db::save(app)?;
-
-    // Record that there are no changes since the last save
-    {
+     // Save to main file, then clean database
+    if db::save_to_current_file(&app)? {
+        // Record that there are no changes since the last save
         let mut has_unsaved_changes = HAS_UNSAVED_CHANGES.lock().unwrap();
         *has_unsaved_changes = false;
     }
@@ -85,22 +70,28 @@ pub fn save_shortcut(app: &AppHandle) -> Result<(), Error> {
 }
 
 #[tauri::command]
-pub fn load(app: AppHandle) -> Result<(), Error> {
-    load_shortcut(&app)
+/// Save to a prompted file.
+pub fn save_as(app: AppHandle) -> Result<(), Error> {
+    // Save to prompted main file, then clean database
+    if db::save_to_prompted_file(&app)? {
+        // Record that there are no changes since the last save
+        let mut has_unsaved_changes = HAS_UNSAVED_CHANGES.lock().unwrap();
+        *has_unsaved_changes = false;
+    }
+    Ok(())
 }
 
-pub fn load_shortcut(app: &AppHandle) -> Result<(), Error> {
+#[tauri::command]
+/// Prompt for a DungeonDB file to load, then load it.
+pub fn load(app: AppHandle) -> Result<(), Error> {
     if let Some(path) = app
         .dialog()
         .file()
         .add_filter("DungeonDB File (*.dndb)", &["dndb"])
         .blocking_pick_file()
     {
-        db::init_existing(path.to_string())?;
+        init_existing(app, path.to_string())?;
     }
-
-    // Reset the windows
-    reset(app)?;
     Ok(())
 }
 
@@ -706,30 +697,32 @@ pub async fn execute(app: AppHandle, action: Action) -> Result<(), Error> {
     return Ok(());
 }
 
+#[tauri::command]
 /// Undoes the last action by popping the top of the reverse stack.
-pub async fn undo(app: &AppHandle) -> Result<(), Error> {
+pub async fn undo(app: AppHandle) -> Result<(), Error> {
     // Get the action from the top of the stack
     match {
         let mut reverse_stack = REVERSE_STACK.lock().unwrap();
         (*reverse_stack).pop()
     } {
         Some(reverse_action) => {
-            reverse_action.execute(app, false).await?;
+            reverse_action.execute(&app, false).await?;
         }
         None => {}
     }
     return Ok(());
 }
 
+#[tauri::command]
 /// Redoes the last undone action by popping the top of the forward stack.
-pub async fn redo(app: &AppHandle) -> Result<(), Error> {
+pub async fn redo(app: AppHandle) -> Result<(), Error> {
     // Get the action from the top of the stack
     match {
         let mut forward_stack = FORWARD_STACK.lock().unwrap();
         (*forward_stack).pop()
     } {
         Some(forward_action) => {
-            forward_action.execute(app, true).await?;
+            forward_action.execute(&app, true).await?;
         }
         None => {}
     }

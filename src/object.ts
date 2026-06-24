@@ -6,6 +6,7 @@ import { CellContent, ValueOid, createCellAsync, runDropdownValueQueries, update
 import { listen } from "@tauri-apps/api/event";
 import { openDialogAsync } from "./util/dialog";
 import { executeAsync } from "./util/action";
+import "./util/shortcut"; // Install shortcuts
 
 const urlParams = new URLSearchParams(window.location.search);
 const urlParamSchemaOid: string | null = urlParams.get('schema_oid');
