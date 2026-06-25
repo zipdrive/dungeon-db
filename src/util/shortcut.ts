@@ -2,8 +2,9 @@ import { loadAsync, newAsync, redoAsync, saveAsAsync, saveAsync, undoAsync } fro
 
 window.addEventListener("keydown", async (e: KeyboardEvent) => {
     // Check for any shortcuts global to the entire application
+    console.debug(e);
     if (e.ctrlKey) {
-        switch (e.key) {
+        switch (e.key.toUpperCase()) {
             case 'N':
                 e.preventDefault();
                 await newAsync();

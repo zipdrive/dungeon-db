@@ -60,8 +60,13 @@ pub fn init_existing(app: AppHandle, path: String) -> Result<(), Error> {
 #[tauri::command]
 /// Save to the main file being worked on.
 pub fn save(app: AppHandle) -> Result<(), Error> {
+    save_shortcut(&app)
+}
+
+/// Save to the main file being worked on.
+pub fn save_shortcut(app: &AppHandle) -> Result<(), Error> {
      // Save to main file, then clean database
-    if db::save_to_current_file(&app)? {
+    if db::save_to_current_file(app)? {
         // Record that there are no changes since the last save
         let mut has_unsaved_changes = HAS_UNSAVED_CHANGES.lock().unwrap();
         *has_unsaved_changes = false;
@@ -84,14 +89,20 @@ pub fn save_as(app: AppHandle) -> Result<(), Error> {
 #[tauri::command]
 /// Prompt for a DungeonDB file to load, then load it.
 pub fn load(app: AppHandle) -> Result<(), Error> {
-    if let Some(path) = app
+    app
         .dialog()
         .file()
         .add_filter("DungeonDB File (*.dndb)", &["dndb"])
-        .blocking_pick_file()
-    {
-        init_existing(app, path.to_string())?;
-    }
+        .pick_file(|path| {
+            if let Some(path) = path {
+                match init_existing(app, path.to_string()) {
+                    Ok(_) => {},
+                    Err(e) => {
+                        todo!("Do something with the error.")
+                    }
+                }
+            }
+        });
     Ok(())
 }
 

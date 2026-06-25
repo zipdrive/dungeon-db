@@ -406,11 +406,14 @@ class GridSelection {
     pushRegion(pos: GridPosition, rowSpan?: number, columnSpan?: number, deselecting?: boolean) {
         this.#otherRegions.push(this.#currentRegion);
         this.#currentRegion = new GridSelectionRegion(pos, rowSpan ?? 0, columnSpan ?? 0, deselecting !== undefined ? deselecting : (this.#otherRegions.some(otherRegion => otherRegion.contains(pos))));
-        this.#onAddSelectionCallbackFn(pos);
 
         // Change the focused cell, if the new region is not deselecting
-        if (!this.#currentRegion.deselecting)
+        if (!this.#currentRegion.deselecting) {
+            this.#onAddSelectionCallbackFn(pos);
             this.focus = pos;
+        } else {
+            this.#onRemoveSelectionCallbackFn(pos);
+        }
     }
 
     /**
@@ -483,6 +486,8 @@ class GridSelection {
      * @returns True if multiple cells are selected. False if only a single cell is selected.
      */
     shiftFocusByRowThenColumn(delta: number): boolean {
+        console.debug(this);
+        console.trace();
         const selectedPositions = this.getSelectedPositions();
         if (selectedPositions.length <= 1)
             return false;
@@ -639,15 +644,14 @@ class GridSelection {
                             const [selectedColumnMin, selectedColumnMax] = rows[rowIndex][k];
                             if (columnMax < selectedColumnMin || selectedColumnMax < columnMin)
                                 continue;
-                            if (columnMin <= selectedColumnMin && selectedColumnMax <= columnMax)
-                                
 
                             let replacements: [number, number][] = [];
                             if (columnMin > selectedColumnMin)
-                                replacements.push([selectedColumnMin, columnMin - 1])
-                            rows[rowIndex].splice(k, 1, replacements);
+                                replacements.push([selectedColumnMin, columnMin - 1]);
+                            if (columnMax < selectedColumnMax)
+                                replacements.push([columnMax + 1, selectedColumnMax]);
+                            rows[rowIndex].splice(k, 1, ...replacements);
                         }
-                        rows[rowIndex].splice
                     }
                 } else {
                     if (rowIndex in rows) {
@@ -690,6 +694,14 @@ export class Grid {
      */
     getIframe(): HTMLIFrameElement {
         return this.#iframe;
+    }
+
+    /**
+     * Retrieves the window associated with the IFrame containing the grid.
+     */
+    get #window(): Window & typeof globalThis {
+        if (this.#iframe.contentWindow) return this.#iframe.contentWindow as (Window & typeof globalThis);
+        return window;
     }
 
 
@@ -788,13 +800,15 @@ export class Grid {
                     lastRow.cells.push(cell);
 
                     // Start listening for if the cell needs to be updated
+                    const hotReloadCallbackFn = async (newCell: Cell) => {
+                        lastRow.cells[pos.columnIndex] = newCell;
+                        newCell.startListeningForReloadAsync({
+                            hotReloadCallbackFn,
+                            fullReloadCallbackFn
+                        });
+                    };
                     cell.startListeningForReloadAsync({
-                        async hotReloadCallbackFn() {
-                            const newCell: Cell = await cell.getReloadedCellAsync();
-                            cell.destroy();
-                            cell.elem.replaceWith(newCell.elem);
-                            lastRow.cells[pos.columnIndex] = newCell;
-                        },
+                        hotReloadCallbackFn,
                         fullReloadCallbackFn
                     });
 
@@ -1006,9 +1020,9 @@ export class Grid {
      * @param elem 
      * @returns 
      */
-    #getCellByElem(elem: Node | null) : Cell | undefined {
+    #getCellByElem(elem: HTMLElement | null) : Cell | undefined {
         while (elem) {
-            if (elem instanceof Element && elem.hasAttribute('pos')) 
+            if (elem.hasAttribute('pos')) 
                 return this.#getCellByPosition(JSON.parse(elem.getAttribute('pos') || '{"rowIndex":0,"columnIndex":0}'));
             elem = elem.parentElement;
         }
@@ -1054,7 +1068,7 @@ export class Grid {
             const oldFocus = this.#mode.selection.focus;
 
             // Shift the focus within the selection by the indicated direction
-            if (!(columnThenRow ? this.#mode.selection.shiftFocusByColumnThenRow : this.#mode.selection.shiftFocusByRowThenColumn)(delta)) {
+            if (!(columnThenRow ? this.#mode.selection.shiftFocusByColumnThenRow(delta) : this.#mode.selection.shiftFocusByRowThenColumn(delta))) {
                 // Only a single cell is selected, so shift the single cell that is selected
                 let newRowIndex: number = oldFocus.rowIndex;
                 let newColumnIndex: number = oldFocus.columnIndex;
@@ -1079,10 +1093,10 @@ export class Grid {
                         newRowIndex = 0;
                     }
                 }
-                this.#mode.selection.focus = {
+                this.#resetSelection({
                     rowIndex: newRowIndex,
                     columnIndex: newColumnIndex
-                };
+                });
             }
         }
     }
@@ -1105,20 +1119,29 @@ export class Grid {
         this.#mode = {
             selection: new GridSelection(pos, {
                 onSetFocus: (oldFocus, newFocus) => {
+                    console.debug(`onSetFocus: ${JSON.stringify(oldFocus)} -> ${JSON.stringify(newFocus)}`);
+                    console.trace();
                     const oldFocusedCell = this.#getCellByPosition(oldFocus);
-                    if (oldFocusedCell)
+                    if (oldFocusedCell) {
                         oldFocusedCell.elem.classList.remove('focused');
+                        if (this.#mode && this.#mode.state == 'editingFocus')
+                            oldFocusedCell.stopEditingAsync();
+                    }
 
                     const newFocusedCell = this.#getCellByPosition(newFocus);
                     if (newFocusedCell)
                         newFocusedCell.elem.classList.add('focused');
                 },
                 onAddSelection: (pos) => {
+                    console.debug(`onAddSelection: ${JSON.stringify(pos)}`);
+                    console.trace();
                     const cell = this.#getCellByPosition(pos);
                     if (cell)
                         cell.elem.classList.add('selected');
                 },
                 onRemoveSelection: (pos) => {
+                    console.debug(`onRemoveSelection: ${JSON.stringify(pos)}`);
+                    console.trace();
                     const cell = this.#getCellByPosition(pos);
                     if (cell)
                         cell.elem.classList.remove('selected');
@@ -1319,6 +1342,7 @@ export class Grid {
      */
     #eventListeners: {[key: string]: (e: any) => void} = {
         "cut": (e: ClipboardEvent) => {
+            /*
             const groupedSelectedPos = this.#getSelectedCellPositions();
             // Map the rows into nested arrays of clipboard data, then compile into JSON
             const data: ClipboardCellsData = groupedSelectedPos
@@ -1347,9 +1371,11 @@ export class Grid {
             groupedSelectedPos.flatMap(({ pos }) => pos).map(pos => this.#getCellByPosition(pos)).forEach(async (cell) => { 
                 await cell?.clearAsync();
             });
+            */
         },
 
         "copy": (e: ClipboardEvent) => {
+            /*
             // Group each position by its row index
             const groupedSelectedPos = this.#getSelectedCellPositions();
             // Map the rows into nested arrays of clipboard data, then compile into JSON
@@ -1374,6 +1400,7 @@ export class Grid {
 
             // Set stringified selection to clipboard
             e.clipboardData?.setData('text/plain', json);
+            */
         },
 
         "paste": async (e: ClipboardEvent) => {
@@ -1522,8 +1549,8 @@ export class Grid {
         },
 
         "mousedown": (e: MouseEvent) => {
-            if (e.button === 0) { // Main mouse button pressed
-                const highlightedCell = this.#getCellByElem(e.target as Node);
+            if (e.button === 0 && e.target instanceof this.#window.HTMLElement) { // Main mouse button pressed
+                const highlightedCell = this.#getCellByElem(e.target);
                 if (!highlightedCell)
                     return;
                 
@@ -1543,8 +1570,8 @@ export class Grid {
             }
         },
         "mouseenter": (e: MouseEvent) => {
-            if (this.#mode && this.#mode.state == 'draggingCurrentRegion' && e.target instanceof Node) {
-                const highlightedCell = this.#getCellByElem(e.target as Node);
+            if (this.#mode && this.#mode.state == 'draggingCurrentRegion' && e.target instanceof this.#window.HTMLElement) {
+                const highlightedCell = this.#getCellByElem(e.target as HTMLElement);
                 if (!highlightedCell)
                     return;
 

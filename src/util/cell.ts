@@ -993,7 +993,7 @@ export class Cell {
     /**
      * Applies callback functions when either the cell needs to be hot reloaded or the entire schema needs to be reloaded.
      */
-    async startListeningForReloadAsync({ hotReloadCallbackFn, fullReloadCallbackFn } : { hotReloadCallbackFn?: () => Promise<void>, fullReloadCallbackFn?: () => Promise<void> }): Promise<void> {
+    async startListeningForReloadAsync({ hotReloadCallbackFn, fullReloadCallbackFn } : { hotReloadCallbackFn?: (newCell: Cell) => Promise<void>, fullReloadCallbackFn?: () => Promise<void> }): Promise<void> {
         this.#unlistenForReload = await listen<CellIdentifier>('cell', async (event) => {
             const cellIdentifier = event.payload;
             if ('tableOid' in cellIdentifier) {
@@ -1003,8 +1003,12 @@ export class Cell {
                         && cellIdentifier.rowOid == this.cellIdentifier.rowOid
                     ) {
                         // Only a hot reload of this cell is required
-                        if (hotReloadCallbackFn)
-                            await hotReloadCallbackFn();
+                        if (hotReloadCallbackFn) {
+                            const newCell: Cell = await this.getReloadedCellAsync();
+                            this.elem.replaceWith(newCell.elem);
+                            this.destroy();
+                            await hotReloadCallbackFn(newCell);
+                        }
                     }
                 } else {
                     if (this.cellIdentifier.fullReloadCellDependencies.some(cellDependency => (
@@ -1021,8 +1025,12 @@ export class Cell {
                         && cellIdentifier.rowOid == cellDependency.rowOid
                     ))) {
                         // Only a hot reload of this cell is required
-                        if (hotReloadCallbackFn) 
-                            await hotReloadCallbackFn();
+                        if (hotReloadCallbackFn) {
+                            const newCell: Cell = await this.getReloadedCellAsync();
+                            this.elem.replaceWith(newCell.elem);
+                            this.destroy();
+                            await hotReloadCallbackFn(newCell);
+                        }
                     }
                 }
             }

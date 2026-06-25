@@ -15,7 +15,8 @@
   --text-color-neutral: #0f0f0f;
   --text-color-link: #646cff;
   --text-color-link-hover: #535bf2;
-  --accent-color: #396cd8;
+  --accent-color-dark: #396cd8;
+  --accent-color-light: #8aacf7;
   --main-color-error: #e996a0;
   --text-color-error: #800707;
 

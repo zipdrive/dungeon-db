@@ -91,7 +91,7 @@ td.checkbox[label="✘"] {
     color: var(--text-color-error);
 }
 
-td:has(input) {
+td:has(input), td:has(.jdropdown) {
     padding: 0;
 }
 input[type=text], input[type=number], input[type=date], input[type=datetime-local] {
@@ -102,4 +102,26 @@ input[type=text], input[type=number], input[type=date], input[type=datetime-loca
     padding: 0 1em;
 
     font-size: inherit;
+}
+.jdropdown {
+    width: 100%;
+    
+    .jdropdown-header {
+        border: none;
+    }
+}
+
+
+.selected.focused {
+    border-top: 1px solid var(--accent-color-dark);
+    border-left: 1px solid var(--accent-color-dark);
+    border-right: 1px solid var(--accent-color-dark);
+    border-bottom: 1px solid var(--accent-color-dark);
+}
+.selected:not(.focused) {
+    background-color: var(--accent-color-light);
+    border-top: 1px solid var(--accent-color-light);
+    border-left: 1px solid var(--accent-color-light);
+    border-right: 1px solid var(--accent-color-light);
+    border-bottom: 1px solid var(--accent-color-light);
 }
