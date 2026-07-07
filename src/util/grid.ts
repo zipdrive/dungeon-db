@@ -2,6 +2,9 @@ import { message } from "@tauri-apps/plugin-dialog";
 import { executeAsync } from "./action";
 import { CellContent, ClipboardCellsData, SchemaRow, Cell, isClipboardCellData, AddNewRowButton, ClipboardCellData } from "./cell";
 import { FullMetadata as ColumnFullMetadata, ColumnType } from "./column";
+import { Menu, Submenu } from "@tauri-apps/api/menu";
+import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { openDialogAsync } from "./dialog";
 
 /**
  * The index for a cell in the grid.
@@ -37,9 +40,24 @@ class GridRow {
  */
 class GridColumn {
     /**
+     * Set of all unique column identifiers.
+     */
+    static #ids: Set<string> = new Set();
+
+    /**
+     * A unique identifier for the column.
+     */
+    #id: string;
+
+    /**
      * The column's header element, listed at the head of the column.
      */
     header: HTMLElement;
+
+    /**
+     * The function that is fired when the header receives a contextmenu event.
+     */
+    #headerContextmenu: ((e: PointerEvent) => Promise<void>) | undefined;
 
     /**
      * The column's metadata.
@@ -52,6 +70,13 @@ class GridColumn {
     stylesheet: HTMLStyleElement;
 
     constructor(cwd: Document, metadata: ColumnFullMetadata) {
+        // Generate a random ID
+        do {
+            this.#id = Math.random().toString(); // This should be fine
+        } while (GridColumn.#ids.has(this.#id));
+        GridColumn.#ids.add(this.#id);
+
+        // Set the metadata
         this.metadata = metadata;
 
         // Construct the header element
@@ -77,21 +102,101 @@ class GridColumn {
             && metadata.hidden == this.metadata.hidden 
             && metadata.ordering == this.metadata.ordering
         ) {
-            // Swap out the column DOM class
-            for (const c of this.header.ownerDocument.getElementsByClassName(`column${this.metadata.oid}`)) {
-                c.classList.remove(`column${this.metadata.oid}`);
-                c.classList.add(`column${metadata.oid}`);
-            }
+            navigator.locks.request(`hotReloadColumn${this.#id}`, async () => {
+                // Swap out the column DOM class
+                for (const c of this.header.ownerDocument.getElementsByClassName(`column${this.metadata.oid}`)) {
+                    c.classList.remove(`column${this.metadata.oid}`);
+                    c.classList.add(`column${metadata.oid}`);
+                }
 
-            // Set the new column metadata
-            this.metadata = metadata;
+                // Set the new column metadata
+                this.metadata = metadata;
 
-            // Reload the column name
-            this.header.innerText = `${(this.metadata.isPrimaryKey ? '🔑 ' : '')}${this.metadata.name}`;
+                // Reload the column name
+                this.header.innerText = `${(this.metadata.isPrimaryKey ? '🔑 ' : '')}${this.metadata.name}`;
 
-            // Reload the stylesheet
-            this.stylesheet.innerText = `.column${this.metadata.oid} { ${this.metadata.style} }`;
-            
+                // Unload the previous column contextmenu event listener
+                if (this.#headerContextmenu) {
+                    this.header.removeEventListener('contextmenu', this.#headerContextmenu);
+                }
+
+                // Reload the column menu
+                const moveSubmenu = await Submenu.new({
+                    text: 'Move Column...',
+                    items: [
+                        {
+                            id: 'moveLeft',
+                            text: 'Move Left',
+                            action: () => {
+                                // TODO
+                            }
+                        },
+                        {
+                            id: 'moveRight',
+                            text: 'Move Right',
+                            action: () => {
+                                // TODO
+                            }
+                        }
+                    ]
+                });
+                const insertSubmenu = await Submenu.new({
+                    text: 'Insert...',
+                    items: [
+                        {
+                            id: 'insertLeft',
+                            text: 'Insert New Column to Left',
+                            action: async () => {
+                                // TODO
+                            }
+                        },
+                        {
+                            id: 'insertRight',
+                            text: 'Insert New Column to Right',
+                            action: () => {
+                                // TODO
+                            }
+                        }
+                    ]
+                });
+                const menu = await Menu.new({
+                    items: [
+                        {
+                            id: 'edit',
+                            text: 'Edit Column',
+                            action: async () => {
+                                await openDialogAsync({
+                                    editColumn: {
+                                        columnOid: this.metadata.oid
+                                    }
+                                });
+                            }
+                        },
+                        {
+                            id: 'delete',
+                            text: 'Delete Column',
+                            action: async () => {
+                                await executeAsync({
+                                    trashColumn: {
+                                        schemaOid: this.metadata.schema.oid,
+                                        columnOid: this.metadata.oid
+                                    }
+                                });
+                            }
+                        },
+                        moveSubmenu,
+                        insertSubmenu
+                    ]
+                });
+                this.#headerContextmenu = async (e: PointerEvent) => {
+                    e.preventDefault();
+                    await menu.popup(new LogicalPosition(e.x, e.y));
+                };
+                this.header.addEventListener('contextmenu', this.#headerContextmenu);
+
+                // Reload the stylesheet
+                this.stylesheet.innerText = `.column${this.metadata.oid} { ${this.metadata.style} }`;
+            });
             // Full reload is not necessary
             return true;
         } else {
