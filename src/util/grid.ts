@@ -895,6 +895,7 @@ export class Grid {
                             // Mark the position of the cell being edited
                             this.#mode.selection.focus = pos;
                         }
+                        (this.#mode as { selection: GridSelection, state: 'editingFocus' | 'draggingCurrentRegion' | null }).state = 'editingFocus';
                     });
                     cell.setStopEditingCallback(async () => {
                         // Unmark that the cell is being edited
@@ -1002,7 +1003,7 @@ export class Grid {
     /**
      * Builds the table, after all columns and cells have been inputted.
      */
-    build({ scrollTop, scrollLeft, constructAdditionalColumns }: { scrollTop: number, scrollLeft: number, constructAdditionalColumns: (cwd: Document) => HTMLElement[] }) {
+    build({ scrollTop, scrollLeft, rowIndex, columnIndex, constructAdditionalColumns }: { scrollTop: number, scrollLeft: number, rowIndex: number, columnIndex: number, constructAdditionalColumns: (cwd: Document) => HTMLElement[] }) {
         console.debug(this);
 
         // Build the table
@@ -1100,6 +1101,15 @@ export class Grid {
         if (this.#cwd.scrollingElement) {
             this.#cwd.scrollingElement.scrollTop = scrollTop;
             this.#cwd.scrollingElement.scrollLeft = scrollLeft;
+        }
+
+        // If there is any cell, select it
+        this.#iframe.contentWindow?.focus();
+        if (this.#columns.length > 0 && this.#rows.length > 0) {
+            this.#initSelection({
+                rowIndex: Math.max(0, Math.min(rowIndex, this.#rows.length - 1)),
+                columnIndex: Math.max(0, Math.min(columnIndex, this.#columns.length - 1))
+            });
         }
     }
 
@@ -1224,8 +1234,8 @@ export class Grid {
         this.#mode = {
             selection: new GridSelection(pos, {
                 onSetFocus: (oldFocus, newFocus) => {
-                    console.debug(`onSetFocus: ${JSON.stringify(oldFocus)} -> ${JSON.stringify(newFocus)}`);
-                    console.trace();
+                    //console.debug(`onSetFocus: ${JSON.stringify(oldFocus)} -> ${JSON.stringify(newFocus)}`);
+                    //console.trace();
                     const oldFocusedCell = this.#getCellByPosition(oldFocus);
                     if (oldFocusedCell) {
                         oldFocusedCell.elem.classList.remove('focused');
@@ -1238,15 +1248,15 @@ export class Grid {
                         newFocusedCell.elem.classList.add('focused');
                 },
                 onAddSelection: (pos) => {
-                    console.debug(`onAddSelection: ${JSON.stringify(pos)}`);
-                    console.trace();
+                    //console.debug(`onAddSelection: ${JSON.stringify(pos)}`);
+                    //console.trace();
                     const cell = this.#getCellByPosition(pos);
                     if (cell)
                         cell.elem.classList.add('selected');
                 },
                 onRemoveSelection: (pos) => {
-                    console.debug(`onRemoveSelection: ${JSON.stringify(pos)}`);
-                    console.trace();
+                    //console.debug(`onRemoveSelection: ${JSON.stringify(pos)}`);
+                    //console.trace();
                     const cell = this.#getCellByPosition(pos);
                     if (cell)
                         cell.elem.classList.remove('selected');
@@ -1573,6 +1583,7 @@ export class Grid {
                 || (e.ctrlKey && e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "ArrowLeft" && e.key !== "ArrowRight")) 
                 return;
 
+            console.debug(this.#mode);
             if (this.#mode) {
                 if (e.key === "Escape" && this.#mode && this.#mode.state === 'editingFocus') {
                     // Cancel changes and stop editing the cell

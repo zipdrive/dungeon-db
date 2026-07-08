@@ -28,7 +28,15 @@ if (urlParamSchemaOid) {
     // Get filters from query parameters
     const filters: [string, number][] = [];
     urlParams.forEach((urlParamValue, urlParamKey) => {
-        if (urlParamKey != 'schema_oid' && urlParamKey != 'page_num' && urlParamKey != 'page_size' && urlParamKey != 'scroll_top') {
+        if (new Set([
+            'schema_oid', 
+            'page_num', 
+            'page_size', 
+            'scroll_top', 
+            'scroll_left', 
+            'selected_row_index', 
+            'selected_column_index'
+        ]).has(urlParamKey)) {
             filters.push([urlParamKey, parseInt(urlParamValue)]);
         }
     });
@@ -174,9 +182,15 @@ if (urlParamSchemaOid) {
         const scrollTop: number = urlParamScrollTop ? parseInt(urlParamScrollTop) : 0;
         const urlParamScrollLeft: string | null = urlParams.get('scroll_left');
         const scrollLeft: number = urlParamScrollLeft ? parseInt(urlParamScrollLeft) : 0;
+        const urlParamRowIndex: string | null = urlParams.get('selected_row_index');
+        const rowIndex: number = urlParamRowIndex ? parseInt(urlParamRowIndex) : 0;
+        const urlParamColumnIndex: string | null = urlParams.get('selected_column_index');
+        const columnIndex: number = urlParamColumnIndex ? parseInt(urlParamColumnIndex) : 0;
         grid.build({
-            scrollTop: scrollTop,
-            scrollLeft: scrollLeft,
+            scrollTop,
+            scrollLeft,
+            rowIndex,
+            columnIndex,
             constructAdditionalColumns(cwd): HTMLElement[] {
                 const addNewColumn: HTMLElement = cwd.createElement('TH');
                 addNewColumn.classList.add('clickable-text', 'one-line');
