@@ -61,6 +61,7 @@ export type File = {
 export type SchemaRow = {
     rowIdentifier: [number, number] | null,
     index: number,
+    queryFilter: string,
     fixedParentDatasource: [number, number, ColumnFullMetadata] | null,
     validationFailures: ValidationFailures
 };

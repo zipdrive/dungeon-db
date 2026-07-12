@@ -19,6 +19,7 @@
     "@tauri-apps/plugin-http": "^2.5.9",
     "@tauri-apps/plugin-opener": "^2",
     "file-type": "^21.3.0",
+    "interactjs": "^1.10.27",
     "jsuites": "^6.4.2",
     "sortablejs": "^1.15.6"
   },

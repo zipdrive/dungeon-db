@@ -1379,6 +1379,7 @@ pub enum SchemaCellStream {
     /// Indicates the start of a new row in the schema.
     Row {
         index: i64,
+        row_identifier: Option<(i64, i64)>,
         query_filter: String,
         fixed_parent_datasource: Option<(i64, i64, column::FullMetadata)>,
         validation_failures: Vec<FailedValidation>,
@@ -1496,6 +1497,13 @@ impl SchemaCellStream {
             // Send indicator that a new row has started
             cell_sender.send(Self::Row {
                 index: index.clone(),
+                row_identifier: {
+                    if let Some(row_oid) = row.get::<_, Option<i64>>("OID")? {
+                        Some((row.get("TABLE_OID")?, row_oid))
+                    } else {
+                        None
+                    }
+                },
                 query_filter: query_filter.clone(),
                 fixed_parent_datasource: None, // TODO get fixed parent datasources
                 validation_failures: Vec::new(),

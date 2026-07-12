@@ -690,6 +690,10 @@ enum SchemaViewColumn {
         param_expr: String,
         param_ord: String,
     },
+    Subreport {
+        label_expr: String,
+        label_ord: String
+    }
 }
 
 impl SchemaViewColumn {
@@ -711,6 +715,12 @@ impl SchemaViewColumn {
                 param_ord,
             } => {
                 format!("{label_expr} AS {label_ord}, {value_expr} AS {value_ord}, {param_expr} AS {param_ord}")
+            }
+            Self::Subreport {
+                label_expr,
+                label_ord 
+            } => {
+                format!("{label_expr} AS {label_ord}")
             }
         })
     }
@@ -963,6 +973,7 @@ struct ParamCTE {
     datasource: Datasource,
     child_datasources: HashSet<Datasource>,
     columns: HashMap<String, ParamCTEColumn>,
+    is_grouped: bool
 }
 
 impl ParamCTE {
@@ -1135,8 +1146,19 @@ impl SchemaView {
             let mut from_expr: String = String::from("FROM");
 
             let mut root_datasource: HashSet<Datasource> = HashSet::new();
+            let mut all_1_to_1: bool = true;
             for (cte_datasource, cte) in self.param_cte.into_iter() {
-                let cte_root_datasource: Datasource = cte_datasource.seek_root();
+                // If the CTE is not being grouped, check if it has a 1-to-* relationship with its root
+                if (!cte.is_grouped) {
+                    match cte_datasource.seek_basis()? {
+                        Datasource::Table { .. } => {},
+                        _ => {
+                            // If basis datasource is not a root datasource, flag there as being a datasource which is not 1-to-1 with the root
+                            all_1_to_1 = false;
+                        }
+                    }
+                }
+                
                 root_datasource.insert(cte_datasource.seek_root());
 
                 let cte_datasource_alias: String = cte_datasource.get_alias();
@@ -1196,12 +1218,16 @@ impl SchemaView {
                         } else {
                             filter_expr
                         },
-                        if root_datasource.len() == 1 {
+                        if root_datasource.len() == 1 && all_1_to_1 {
                             let root_datasource: Datasource =
                                 root_datasource.into_iter().next().unwrap();
-                            format!(", {}_OID AS OID", root_datasource.get_alias())
+                            format!(
+                                ", {} AS TABLE_OID, {}_OID AS OID", 
+                                root_datasource.get_schema_oid()?,
+                                root_datasource.get_alias()
+                            )
                         } else {
-                            String::from(", NULL AS OID")
+                            String::from(", NULL AS TABLE_OID, NULL AS OID")
                         }
                     ),
                     |acc, e| format!("{acc}, {e}"),
@@ -1212,7 +1238,7 @@ impl SchemaView {
             (
                 String::from(""),
                 String::from(""),
-                String::from("'' AS QUERY_FILTER, NULL AS OID"),
+                String::from("'' AS QUERY_FILTER, NULL AS TABLE_OID, NULL AS OID"),
                 String::from(""),
             )
         };
@@ -1274,11 +1300,11 @@ impl SchemaView {
     }
 
     /// Adds a CTE for params from a datasource.
-    fn add_datasource_cte(&mut self, datasource: &Datasource) {
+    fn add_datasource_cte(&mut self, datasource: &Datasource, is_grouped: bool) {
         if !self.param_cte.contains_key(&datasource) {
             // Add the parent datasource
             if let Some(parent_datasource) = datasource.get_parent() {
-                self.add_datasource_cte(&parent_datasource);
+                self.add_datasource_cte(&parent_datasource, is_grouped.clone());
 
                 // Link the datasource to its parent
                 if let Some(parent_datasource_cte) = self.param_cte.get_mut(&parent_datasource) {
@@ -1295,8 +1321,11 @@ impl SchemaView {
                     datasource: datasource.clone(),
                     child_datasources: HashSet::new(),
                     columns: HashMap::new(),
+                    is_grouped
                 },
             );
+        } else if let Some(cte) = self.param_cte.get_mut(&datasource) {
+            cte.is_grouped = cte.is_grouped && is_grouped;
         }
     }
 
@@ -1318,7 +1347,7 @@ impl SchemaView {
                     let column_oid: i64 = column_metadata.oid.clone();
                     let column_datasource: Datasource =
                         root_datasource.append_path(datasource_path)?;
-                    let (_, access_param) = self.add_param(column_datasource, column_metadata)?;
+                    let (_, access_param) = self.add_param(column_datasource, column_metadata, false)?;
 
                     // Register the column to the query
                     self.columns.insert(
@@ -1350,6 +1379,7 @@ impl SchemaView {
                         None => Datasource::from_alias_transact(trans, datasource_path)?,
                     },
                     parsed_formula,
+                    false
                 )?;
 
                 // Turn into a column
@@ -1365,6 +1395,27 @@ impl SchemaView {
                     },
                 );
             }
+            column_type::ColumnType::Subreport { report_oid, .. } => {
+                // Iterate through key columns of the report
+                for key_column_result in trans.prepare("SELECT c.OID FROM METADATA_SCHEMA_COLUMN_VIEW sc INNER JOIN METADATA_COLUMN c ON c.OID = sc.COLUMN_OID WHERE sc.IS_REQUIRED AND c.IS_PRIMARY_KEY AND sc.SCHEMA_OID = ?1")?.query_map(params![report_oid], |row| row.get::<_, i64>("OID"))? {
+                    let key_column_oid: i64 = key_column_result?;
+                    let key_column_metadata: column::FullMetadata = column::FullMetadata::get_transact(trans, key_column_oid)?;
+
+                    // Compile the formula
+
+                }
+
+                let label_expr: String = format!("COALESCE(GROUP_CONCAT(), '')");
+
+                // Turn into a column
+                self.columns.insert(
+                    column_metadata.oid.clone(),
+                    SchemaViewColumn::Subreport { 
+                        label_expr, 
+                        label_ord: format!("COLUMN{}_LABEL", column_metadata.oid) 
+                    }
+                );
+            }
             _ => {
                 // Ignore other virtual column types
             }
@@ -1377,9 +1428,10 @@ impl SchemaView {
         &mut self,
         datasource: Datasource,
         column: column::FullMetadata,
+        is_grouped: bool
     ) -> Result<(Datasource, ParamCTEColumn), Error> {
         // Ensure the CTE for the datasource exists
-        self.add_datasource_cte(&datasource);
+        self.add_datasource_cte(&datasource, is_grouped);
 
         // Add the column to that CTE
         let column_path: String = format!("{}_COLUMN{}", datasource.get_alias(), column.oid);
@@ -1743,6 +1795,7 @@ impl SchemaView {
         root_oid: i64,
         root_datasource: Datasource,
         formula: Box<Formula>,
+        is_grouped: bool
     ) -> Result<ScalarExpression, Error> {
         Ok(match *formula {
             Formula::Null => ScalarExpression {
@@ -1844,7 +1897,7 @@ impl SchemaView {
                             _ => String::from("N/A"), // This case shouldn't happen
                         };
 
-                        let (_, param) = self.add_param(column_datasource, column_metadata)?;
+                        let (_, param) = self.add_param(column_datasource, column_metadata, is_grouped)?;
 
                         // Parameter expressions return a string in the form "{TABLE_OID}:{COLUMN_OID}:{ROW_OID}"
                         let param_expr: String = if let Some(param_cell) = param.cell {
@@ -1888,6 +1941,7 @@ impl SchemaView {
                             formula_root_oid,
                             column_datasource,
                             parsed_formula,
+                            is_grouped
                         )?
                     }
                     _ => {
@@ -1908,6 +1962,7 @@ impl SchemaView {
                         root_oid.clone(),
                         root_datasource.clone(),
                         Box::new(item),
+                        is_grouped.clone()
                     )?;
                     items_compiled.push(item_compiled);
                 }
@@ -1980,7 +2035,7 @@ impl SchemaView {
             Formula::Abs(inner) => {
                 let inner_name: String = inner.to_string();
                 let inner_compiled: ScalarExpression =
-                    self.compile_formula(trans, root_oid, root_datasource, inner)?;
+                    self.compile_formula(trans, root_oid, root_datasource, inner, is_grouped)?;
                 if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number)
                     .accepts_arg(&inner_compiled.arg_type)
                 {
@@ -2010,7 +2065,7 @@ impl SchemaView {
             Formula::Sign(inner) => {
                 let inner_name: String = inner.to_string();
                 let inner_compiled: ScalarExpression =
-                    self.compile_formula(trans, root_oid, root_datasource, inner)?;
+                    self.compile_formula(trans, root_oid, root_datasource, inner, is_grouped)?;
                 if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number)
                     .accepts_arg(&inner_compiled.arg_type)
                 {
@@ -2040,7 +2095,7 @@ impl SchemaView {
             Formula::Floor(inner) => {
                 let inner_name: String = inner.to_string();
                 let inner_compiled: ScalarExpression =
-                    self.compile_formula(trans, root_oid, root_datasource, inner)?;
+                    self.compile_formula(trans, root_oid, root_datasource, inner, is_grouped)?;
                 if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number)
                     .accepts_arg(&inner_compiled.arg_type)
                 {
@@ -2070,7 +2125,7 @@ impl SchemaView {
             Formula::Ceiling(inner) => {
                 let inner_name: String = inner.to_string();
                 let inner_compiled: ScalarExpression =
-                    self.compile_formula(trans, root_oid, root_datasource, inner)?;
+                    self.compile_formula(trans, root_oid, root_datasource, inner, is_grouped)?;
                 if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number)
                     .accepts_arg(&inner_compiled.arg_type)
                 {
@@ -2100,7 +2155,7 @@ impl SchemaView {
             Formula::Round(inner) => {
                 let inner_name: String = inner.to_string();
                 let inner_compiled: ScalarExpression =
-                    self.compile_formula(trans, root_oid, root_datasource, inner)?;
+                    self.compile_formula(trans, root_oid, root_datasource, inner, is_grouped)?;
                 if !ExpressionReturnType::new_primitive(PrimitiveScalarType::Number)
                     .accepts_arg(&inner_compiled.arg_type)
                 {
@@ -2132,6 +2187,18 @@ impl SchemaView {
             }
         })
     }
+
+    /// Compile a subreport label.
+    fn compile_subreport_label(
+        &mut self,
+        trans: &Transaction,
+        root_oid: i64,
+        root_datasource: Datasource,
+        formula: Box<Formula>,
+        is_grouped: bool
+    ) {
+        
+    }
 }
 
 /// Create a view for the table.
@@ -2149,7 +2216,7 @@ fn create_schema_view(trans: &Transaction, schema_oid: i64) -> Result<(), Error>
         .optional()?
     {
         let root_datasource: Datasource = Datasource::get_transact(trans, root_datasource_oid)?;
-        view.add_datasource_cte(&root_datasource);
+        view.add_datasource_cte(&root_datasource, false);
         Some(root_datasource)
     } else {
         None

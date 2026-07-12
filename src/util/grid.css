@@ -19,6 +19,8 @@ table {
     width: 0;
     border-spacing: 0;
     border-collapse: separate;
+    
+    padding-bottom: 5em;
 }
 
 th, td {

@@ -74,10 +74,10 @@ if (urlParamSchemaOid) {
         });
         function reload() {
             // Record the position that the grid has been scrolled from the top
-            const scrollTop: number = grid.getIframe().contentDocument?.scrollingElement?.scrollTop || 0;
+            const scrollTop: number = grid.scrollTop;
             urlParams.set('scroll_top', scrollTop.toString());
             // Record the position that the grid has been scrolled from the left
-            const scrollLeft: number = grid.getIframe().contentDocument?.scrollingElement?.scrollLeft || 0;
+            const scrollLeft: number = grid.scrollLeft;
             urlParams.set('scroll_left', scrollLeft.toString());
 
             // Reload the page
@@ -108,7 +108,16 @@ if (urlParamSchemaOid) {
 
         // Query for schema page data
         const columnChannel: Channel<ColumnFullMetadata> = new Channel<ColumnFullMetadata>((columnMetadata) => {
-            grid.addColumn(columnMetadata);
+            const column = grid.addColumn(schemaOid, columnMetadata);
+            listen<[number, ColumnFullMetadata]>('column', (e) => {
+                const [oldColumnOid, newMetadata] = e.payload;
+                if (oldColumnOid === column.metadata.oid) {
+                    if (!column.hotReload(newMetadata)) {
+                        // Column cannot be hot reloaded, needs entire schema to be refreshed
+                        reload();
+                    }
+                }
+            });
         });
         const cellChannel: Channel<CellStream> = new Channel<CellStream>((streamedCellContent) => {
             if ('maxIndex' in streamedCellContent) {

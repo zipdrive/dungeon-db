@@ -5,6 +5,10 @@ import { FullMetadata as ColumnFullMetadata, ColumnType } from "./column";
 import { Menu, Submenu } from "@tauri-apps/api/menu";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { openDialogAsync } from "./dialog";
+import '@interactjs/auto-start';
+import '@interactjs/actions/resize';
+import interact from "@interactjs/interact";
+import { ResizeEvent } from "@interactjs/actions/resize/plugin";
 
 /**
  * The index for a cell in the grid.
@@ -18,6 +22,8 @@ type GridPosition = {
  * A row of cells in the grid.
  */
 class GridRow {
+    #row: SchemaRow;
+
     /**
      * The row's index element, listed at the start of the row.
      */
@@ -29,9 +35,91 @@ class GridRow {
     cells: Cell[] = [];
 
     constructor(cwd: Document, row: SchemaRow) {
+        this.#row = row;
         // Construct the index element
         this.index = cwd.createElement('th');
         this.index.innerText = `${row.index}`;
+
+        // Set up context menu
+        this.#setupContextMenu();
+    }
+
+    /**
+     * Set up the context menu for the index cell.
+     */
+    async #setupContextMenu() {
+        if (this.#row.rowIdentifier) {
+            const [tableOid, rowOid] = this.#row.rowIdentifier;
+
+            const insertSubmenu = await Submenu.new({
+                text: 'Insert New Row...',
+                items: [
+                    {
+                        text: 'Insert Above',
+                        action: async () => {
+                            await executeAsync({
+                                createRow: {
+                                    tableOid,
+                                    rowOid,
+                                    fixedParentDatasource: this.#row.fixedParentDatasource
+                                }
+                            })
+                            .catch(async (e) => {
+                                await message(e, {
+                                    title: 'An error occurred while inserting row.',
+                                    kind: 'error'
+                                });
+                            });
+                        }
+                    },
+                    {
+                        text: 'Insert Below',
+                        action: async () => {
+                            await executeAsync({
+                                createRow: {
+                                    tableOid,
+                                    rowOid: rowOid + 1,
+                                    fixedParentDatasource: this.#row.fixedParentDatasource
+                                }
+                            })
+                            .catch(async (e) => {
+                                await message(e, {
+                                    title: 'An error occurred while inserting row.',
+                                    kind: 'error'
+                                });
+                            });
+                        }
+                    }
+                ]
+            })
+            const menu = await Menu.new({
+                items: [
+                    {
+                        text: 'Delete Row',
+                        action: async () => {
+                            await executeAsync({
+                                trashRow: {
+                                    tableOid,
+                                    rowOid
+                                }
+                            })
+                            .catch(async (e) => {
+                                await message(e, {
+                                    title: 'An error occurred while deleting row.',
+                                    kind: 'error'
+                                });
+                            });
+                        }
+                    },
+                    insertSubmenu
+                ]
+            });
+
+            this.index.addEventListener('contextmenu', async (e) => {
+                e.preventDefault();
+                await menu.popup(new LogicalPosition(e.x, e.y));
+            });
+        }
     }
 };
 
@@ -48,6 +136,11 @@ class GridColumn {
      * A unique identifier for the column.
      */
     #id: string;
+
+    /**
+     * The OID of the schema.
+     */
+    #schemaOid: number;
 
     /**
      * The column's header element, listed at the head of the column.
@@ -69,7 +162,7 @@ class GridColumn {
      */
     stylesheet: HTMLStyleElement;
 
-    constructor(cwd: Document, metadata: ColumnFullMetadata) {
+    constructor(cwd: Document, schemaOid: number, metadata: ColumnFullMetadata) {
         // Generate a random ID
         do {
             this.#id = Math.random().toString(); // This should be fine
@@ -77,6 +170,7 @@ class GridColumn {
         GridColumn.#ids.add(this.#id);
 
         // Set the metadata
+        this.#schemaOid = schemaOid;
         this.metadata = metadata;
 
         // Construct the header element
@@ -95,7 +189,7 @@ class GridColumn {
     /**
      * Attempts to hot reload the column.
      * @param metadata The new metadata for the column.
-     * @returns 
+     * @returns True if a full reload is not necessary. False if a full reload is necessary.
      */
     hotReload(metadata: ColumnFullMetadata): boolean {
         if (metadata.columnType == this.metadata.columnType 
@@ -104,7 +198,7 @@ class GridColumn {
         ) {
             navigator.locks.request(`hotReloadColumn${this.#id}`, async () => {
                 // Swap out the column DOM class
-                for (const c of this.header.ownerDocument.getElementsByClassName(`column${this.metadata.oid}`)) {
+                for (const c of [...this.header.ownerDocument.getElementsByClassName(`column${this.metadata.oid}`)]) {
                     c.classList.remove(`column${this.metadata.oid}`);
                     c.classList.add(`column${metadata.oid}`);
                 }
@@ -147,14 +241,24 @@ class GridColumn {
                             id: 'insertLeft',
                             text: 'Insert New Column to Left',
                             action: async () => {
-                                // TODO
+                                await openDialogAsync({
+                                    createColumn: {
+                                        schemaOid: this.#schemaOid,
+                                        columnOrdering: this.metadata.ordering
+                                    }
+                                });
                             }
                         },
                         {
                             id: 'insertRight',
                             text: 'Insert New Column to Right',
-                            action: () => {
-                                // TODO
+                            action: async () => {
+                                await openDialogAsync({
+                                    createColumn: {
+                                        schemaOid: this.#schemaOid,
+                                        columnOrdering: this.metadata.ordering + 1
+                                    }
+                                });
                             }
                         }
                     ]
@@ -184,7 +288,7 @@ class GridColumn {
                                 });
                             }
                         },
-                        moveSubmenu,
+                        //moveSubmenu,
                         insertSubmenu
                     ]
                 });
@@ -193,6 +297,34 @@ class GridColumn {
                     await menu.popup(new LogicalPosition(e.x, e.y));
                 };
                 this.header.addEventListener('contextmenu', this.#headerContextmenu);
+
+                // Set up the resizing
+                console.debug(interact(`.column${this.metadata.oid}`));
+                interact(`.column${this.metadata.oid}`).resizable({
+                    edges: { right: true },
+                    onmove: (event: ResizeEvent) => {
+                        this.header.style.width = `${Math.round(event.rect.width)}px`;
+                    },
+                    onend: (event: ResizeEvent) => {
+                        // Replace the width property in the CSS style
+                        const widthRe: RegExp = /(?<!\{[^\}]*)(?<=^|[;\{\}])(\s*width\s*:\s*)(?:[^;]|"(?:[^\\"]|\\"|\\\\)*")*;/;
+                        let newColumnStyle: string = this.metadata.style.replace(widthRe, `$1${Math.round(event.rect.width)}px;`);
+
+                        // Update the CSS style in the database
+                        executeAsync({
+                            editColumnStyle: {
+                                metadata: this.metadata,
+                                newColumnStyle: newColumnStyle
+                            }
+                        })
+                        .catch(async (e) => {
+                            await message(e, {
+                                title: 'An error occurred while updating column width.',
+                                kind: 'error'
+                            });
+                        });
+                    }
+                });
 
                 // Reload the stylesheet
                 this.stylesheet.innerText = `.column${this.metadata.oid} { ${this.metadata.style} }`;
@@ -815,6 +947,19 @@ export class Grid {
      */
     #cwd: Document;
 
+    /**
+     * The DIV containing the content.
+     */
+    #div: HTMLDivElement | undefined;
+
+    get scrollLeft(): number {
+        return this.#div?.scrollLeft || 0;
+    }
+
+    get scrollTop(): number {
+        return this.#div?.scrollTop || 0;
+    }
+
 
     /**
      * The columns of the grid.
@@ -823,11 +968,13 @@ export class Grid {
 
     /**
      * Adds a column to the grid.
+     * @param schemaOid The OID of the schema.
      * @param metadata The column to add.
      */
-    addColumn(metadata: ColumnFullMetadata) {
-        const column: GridColumn = new GridColumn(this.#cwd, metadata);
+    addColumn(schemaOid: number, metadata: ColumnFullMetadata): GridColumn {
+        const column: GridColumn = new GridColumn(this.#cwd, schemaOid, metadata);
         this.#columns.push(column);
+        return column;
     }
 
     /**
@@ -965,9 +1112,8 @@ export class Grid {
 
     /**
      * Code blatantly lifted (and slightly modified) from https://github.com/renanlecaro/importabular/blob/master/src/index.js
-     * @param columns The columns of the grid.
      */
-    constructor({ iframe, columns }: { iframe: HTMLIFrameElement, columns?: ColumnFullMetadata[] }) {
+    constructor({ iframe }: { iframe: HTMLIFrameElement }) {
         /**
          * First, set up the DOM container.
          */
@@ -992,7 +1138,7 @@ export class Grid {
 
 
         // Set up initial columns
-        this.#columns = columns?.map(c => new GridColumn(cwd, c)) || [];
+        this.#columns = [];
 
         // Set up event listeners within the IFrame
         for (const eventName in this.#eventListeners) {
@@ -1009,6 +1155,7 @@ export class Grid {
         // Build the table
         const div = document.createElement("div");
         this.#cwd.body.appendChild(div);
+        this.#div = div;
         const table = document.createElement("table");
         div.appendChild(table);
 
@@ -1098,10 +1245,8 @@ export class Grid {
         }
 
         // Scroll the grid to the specified position
-        if (this.#cwd.scrollingElement) {
-            this.#cwd.scrollingElement.scrollTop = scrollTop;
-            this.#cwd.scrollingElement.scrollLeft = scrollLeft;
-        }
+        div.scrollTop = scrollTop;
+        div.scrollLeft = scrollLeft;
 
         // If there is any cell, select it
         this.#iframe.contentWindow?.focus();
