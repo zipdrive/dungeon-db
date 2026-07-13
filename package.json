@@ -21,7 +21,8 @@
     "file-type": "^21.3.0",
     "interactjs": "^1.10.27",
     "jsuites": "^6.4.2",
-    "sortablejs": "^1.15.6"
+    "sortablejs": "^1.15.6",
+    "tauri": "^0.15.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.6",

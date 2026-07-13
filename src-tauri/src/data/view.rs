@@ -1,10 +1,1231 @@
 use crate::{
-    data::{column, column_type, datasource::Datasource, schema, table},
-    util::{error::Error, formula::Formula},
+    data::{column, column_type, datasource::Datasource, schema, table}, util::{error::Error, formula::Formula},
 };
 use bitflags::bitflags;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::collections::{HashMap, HashSet};
+
+
+#[derive(Clone)]
+struct DatasourceCteColumn {
+    /// The expression for the column label.
+    label_expr: String,
+
+    /// The ordinal for the column label.
+    label_ord: String,
+
+    /// The expression for the column value.
+    value_expr: String,
+
+    /// The ordinal for the column value.
+    value_ord: String
+}
+
+/// A constructor for a CTE that pulls columns from a datasource.
+struct DatasourceCteConstructor {
+    /// The main datasource.
+    datasource: Datasource,
+
+    /// The columns queried in this CTE.
+    columns: HashMap<i64, DatasourceCteColumn>,
+
+    /// Datasources that are dependent on this one.
+    child_datasources: HashSet<Datasource>
+}
+
+impl DatasourceCteConstructor {
+    /// Builds the SQL statement for this CTE.
+    fn build(&self) -> Result<String, Error> {
+        Ok(format!(
+            "
+            SELECT
+                t.OID AS {}_OID
+                -- Columns from this datasource 
+                {}
+                -- Parent datasource OID, if applicable
+                {}
+                -- Columns from child datasources
+                {}
+            FROM TABLE{} t
+            -- Join to multiselect table, if applicable
+            {}
+            -- Joins to child datasources
+            {}
+            WHERE NOT t.TRASH
+            ",
+            self.datasource.get_alias(),
+
+            // Columns from this datasource
+            self.columns.iter()
+                .map(|(_, col)| format!("{} AS {}, {} AS {}", col.label_expr, col.label_ord, col.value_expr, col.value_ord))
+                .fold(String::from(""), |acc, e| format!("{acc}, {e}")),
+            
+            // Parent datasource OID, if applicable
+            match &self.datasource {
+                Datasource::Table { .. }
+                | Datasource::InheritorTable { .. } => String::from(""),
+                Datasource::MasterTable { parent_datasource, table_oid } => 
+                    format!(", t.MASTER{table_oid}_OID AS PARENT_{}_OID", parent_datasource.get_alias()),
+                Datasource::Column { parent_datasource, column } => {
+                    match column.column_type {
+                        column_type::ColumnType::Object { table_oid, .. }
+                        | column_type::ColumnType::Select { table_oid, .. } => {
+                            if self.datasource.get_schema_oid()? == column.schema.oid {
+                                // Inverted direction
+                                format!(
+                                    ", t.COLUMN{} AS PARENT_{}_OID",
+                                    column.oid,
+                                    parent_datasource.get_alias()
+                                )
+                            } else {
+                                // Normal direction
+                                String::from("")
+                            }
+                        }
+                        column_type::ColumnType::Multiselect { table_oid, .. } => {
+                            format!(
+                                ", m.TABLE{}_OID AS PARENT_{}_OID", 
+                                parent_datasource.get_schema_oid()?, 
+                                parent_datasource.get_alias()
+                            )
+                        }
+                        _ => {
+                            return Err(Error::AdhocError("Datasource cannot be derived from a non-Select, non-Object, non-Multiselect column!"));
+                        }
+                    }
+                }
+            },
+
+            // Columns from child datasources
+            self.child_datasources.iter().map(|child_datasource| child_datasource.get_alias()).fold(String::from(""), |acc, e| format!("{acc}, {e}.*")),
+
+            self.datasource.get_schema_oid()?,
+
+            // Join to multiselect table, if applicable
+            match &self.datasource {
+                Datasource::Column { column, .. } => {
+                    match column.column_type {
+                        column_type::ColumnType::Multiselect { .. } => 
+                            format!(
+                                "INNER JOIN MULTISELECT{} m ON m.TABLE{}_OID = t.OID", 
+                                column.oid, 
+                                self.datasource.get_schema_oid()?
+                            ),
+                        _ => String::from("")
+                    }
+                }
+                _ => String::from("")
+            },
+
+            // Joins to child datasources
+            {
+                let mut child_datasource_joins: String = String::from("");
+                for child_datasource in self.child_datasources.iter() {
+                    let child_datasource_alias: String = child_datasource.get_alias();
+                    match child_datasource {
+                        Datasource::MasterTable { .. } => {
+                            child_datasource_joins = format!(
+                                "{child_datasource_joins} INNER JOIN {child_datasource_alias} ON {child_datasource_alias}.PARENT_{}_OID = t.OID",
+                                self.datasource.get_alias()
+                            );
+                        }
+                        Datasource::InheritorTable { table_oid, .. } => {
+                            child_datasource_joins = format!(
+                                "{child_datasource_joins} LEFT JOIN {child_datasource_alias} ON {child_datasource_alias}.{child_datasource_alias}_OID = t.MASTER{table_oid}_OID"
+                            );
+                        }
+                        Datasource::Column { column, .. } => {
+                            child_datasource_joins = format!(
+                                "{child_datasource_joins} LEFT JOIN {} ON {}",
+                                child_datasource.get_alias(),
+                                match column.column_type {
+                                    column_type::ColumnType::Multiselect { .. } => format!(
+                                        "{child_datasource_alias}.PARENT_{}_OID = t.OID",
+                                        self.datasource.get_alias()
+                                    ),
+                                    column_type::ColumnType::Object { table_oid, .. }
+                                    | column_type::ColumnType::Select { table_oid, .. } => {
+                                        if column.schema.oid == self.datasource.get_schema_oid()? {
+                                            // Normal direction
+                                            format!(
+                                                "{child_datasource_alias}.{child_datasource_alias}_OID = t.COLUMN{}",
+                                                column.oid
+                                            )
+                                        } else {
+                                            // Inverted direction
+                                            format!(
+                                                "{child_datasource_alias}.PARENT_{}_OID = t.OID",
+                                                self.datasource.get_alias()
+                                            )
+                                        }
+                                    }
+                                    _ => {
+                                        return Err(Error::AdhocError("Datasource cannot be derived from a non-Select, non-Object, non-Multiselect column!"));
+                                    }
+                                }
+                            );
+                        }
+                        _ => {
+                            return Err(Error::AdhocError("Child datasource cannot be a root table!"));
+                        }
+                    }
+                }
+                child_datasource_joins
+            }
+        ))
+    }
+
+    /// Adds a primitive column to the CTE.
+    /// Assumes that the column is owned by the schema of this datasource.
+    fn add_primitive_column(&mut self, column_oid: i64, prim: column_type::Primitive) -> DatasourceCteColumn {
+        if !self.columns.contains_key(&column_oid) {
+            let datasource_alias: String = self.datasource.get_alias();
+            match prim {
+                column_type::Primitive::Text
+                | column_type::Primitive::JSON => {
+                    self.columns.insert(column_oid, DatasourceCteColumn {
+                        label_expr: format!("t.COLUMN{column_oid}"),
+                        label_ord: format!("{datasource_alias}_COLUMN{column_oid}_LABEL"),
+                        value_expr: format!("t.COLUMN{column_oid}"),
+                        value_ord: format!("{datasource_alias}_COLUMN{column_oid}_VALUE")
+                    });
+                }
+                column_type::Primitive::Integer
+                | column_type::Primitive::Number => {
+                    self.columns.insert(column_oid, DatasourceCteColumn {
+                        label_expr: format!("CAST(t.COLUMN{column_oid} AS TEXT)"),
+                        label_ord: format!("{datasource_alias}_COLUMN{column_oid}_LABEL"),
+                        value_expr: format!("t.COLUMN{column_oid}"),
+                        value_ord: format!("{datasource_alias}_COLUMN{column_oid}_VALUE")
+                    });
+                }
+                column_type::Primitive::Checkbox => {
+                    self.columns.insert(column_oid, DatasourceCteColumn {
+                        label_expr: format!("CASE WHEN t.COLUMN{column_oid} IS NULL THEN NULL WHEN t.COLUMN{column_oid} THEN 'true' ELSE 'false' END"),
+                        label_ord: format!("{datasource_alias}_COLUMN{column_oid}_LABEL"),
+                        value_expr: format!("t.COLUMN{column_oid}"),
+                        value_ord: format!("{datasource_alias}_COLUMN{column_oid}_VALUE")
+                    });
+                }
+                column_type::Primitive::Date => {
+                    self.columns.insert(column_oid, DatasourceCteColumn {
+                        label_expr: format!("DATE(t.COLUMN{column_oid}, 'julianday')"),
+                        label_ord: format!("{datasource_alias}_COLUMN{column_oid}_LABEL"),
+                        value_expr: format!("t.COLUMN{column_oid}"),
+                        value_ord: format!("{datasource_alias}_COLUMN{column_oid}_VALUE")
+                    });
+                }
+                column_type::Primitive::Datetime => {
+                    self.columns.insert(column_oid, DatasourceCteColumn {
+                        label_expr: format!("STRFTIME('%FT%TZ', t.COLUMN{column_oid}, 'julianday')"),
+                        label_ord: format!("{datasource_alias}_COLUMN{column_oid}_LABEL"),
+                        value_expr: format!("t.COLUMN{column_oid}"),
+                        value_ord: format!("{datasource_alias}_COLUMN{column_oid}_VALUE")
+                    });
+                }
+                column_type::Primitive::File
+                | column_type::Primitive::Image => {
+                    self.columns.insert(column_oid, DatasourceCteColumn {
+                        label_expr: format!("(SELECT f.LABEL FROM METADATA_FILE_VIEW f WHERE f.OID = t.COLUMN{column_oid})"),
+                        label_ord: format!("{datasource_alias}_COLUMN{column_oid}_LABEL"),
+                        value_expr: format!("t.COLUMN{column_oid}"),
+                        value_ord: format!("{datasource_alias}_COLUMN{column_oid}_VALUE")
+                    });
+                }
+            }
+        }
+        return self.columns[&column_oid].clone();
+    }
+
+    /// Adds an object column to the CTE.
+    fn add_object_column(&mut self, column_oid: i64, object_label_expr: String) -> DatasourceCteColumn {
+        if !self.columns.contains_key(&column_oid) {
+            let datasource_alias: String = self.datasource.get_alias();
+            self.columns.insert(column_oid, DatasourceCteColumn {
+                label_expr: object_label_expr,
+                label_ord: format!("{datasource_alias}_COLUMN{column_oid}_LABEL"),
+                value_expr: format!("t.COLUMN{column_oid}"),
+                value_ord: format!("{datasource_alias}_COLUMN{column_oid}_VALUE")
+            });
+        }
+        return self.columns[&column_oid].clone();
+    }
+
+    /// Adds a select column to the CTE.
+    fn add_select_column(&mut self, column_oid: i64, select_label_expr: String) -> DatasourceCteColumn {
+        if !self.columns.contains_key(&column_oid) {
+            let datasource_alias: String = self.datasource.get_alias();
+            self.columns.insert(column_oid, DatasourceCteColumn {
+                label_expr: select_label_expr,
+                label_ord: format!("{datasource_alias}_COLUMN{column_oid}_LABEL"),
+                value_expr: format!("t.COLUMN{column_oid}"),
+                value_ord: format!("{datasource_alias}_COLUMN{column_oid}_VALUE")
+            });
+        }
+        return self.columns[&column_oid].clone();
+    }
+
+    /// Adds a multiselect column to the CTE.
+    fn add_multiselect_column(&mut self, column_oid: i64, json_label_expr: String) -> DatasourceCteColumn {
+        if !self.columns.contains_key(&column_oid) {
+            let datasource_alias: String = self.datasource.get_alias();
+            self.columns.insert(column_oid, DatasourceCteColumn {
+                label_expr: format!("NULLIF('[ ' || GROUP_CONCAT(COALESCE({json_label_expr}, '{{}}'), ', ') || ' ]', '[  ]')"),
+                label_ord: format!("{datasource_alias}_COLUMN{column_oid}_LABEL"),
+                value_expr: format!("GROUP_CONCAT(CAST({datasource_alias}_COLUMN{column_oid}_OID AS TEXT), ',')"),
+                value_ord: format!("{datasource_alias}_COLUMN{column_oid}_VALUE")
+            });
+        }
+        return self.columns[&column_oid].clone();
+    }
+}
+
+
+struct SelectParameterType {
+    /// The primitive types that the parameter can conform to.
+    primitive_types: HashSet<column_type::Primitive>
+}
+
+impl SelectParameterType {
+    /// 
+    fn from(prim: column_type::Primitive) -> Self {
+        Self {
+            primitive_types: HashSet::from_iter(match &prim {
+                column_type::Primitive::Date
+                | column_type::Primitive::Datetime => vec![column_type::Primitive::Date, column_type::Primitive::Datetime],
+                column_type::Primitive::Text => vec![column_type::Primitive::JSON, prim],
+                column_type::Primitive::Number => vec![column_type::Primitive::Integer, prim],
+                column_type::Primitive::File => vec![column_type::Primitive::Image, prim],
+                _ => vec![prim]
+            })
+        }
+    }
+
+    /// Constructs a type that represents the most specific type that encompasses both this type and the given type.
+    fn generalize(&self, other: &Self) -> Self {
+        Self {
+            primitive_types: HashSet::from_iter(self.primitive_types.union(&(other.primitive_types)).map(|p| p.clone()))
+        }
+    }
+
+    /// Constructs a type that represents the most general type that conforms to both this type and the given type.
+    fn specialize(&self, other: &Self) -> Self {
+        Self {
+            primitive_types: HashSet::from_iter(self.primitive_types.intersection(&(other.primitive_types)).map(|p| p.clone()))
+        }
+    }
+
+    /// Returns true if an instance of the given type can always be passed as a value of this type.
+    fn encompasses(&self, other: &Self) -> bool {
+        self.primitive_types.is_superset(&(other.primitive_types))
+    }
+
+    /// Describes the type.
+    fn to_string(&self) -> String {
+        let mut temp = self.primitive_types.clone();
+        if temp.contains(&column_type::Primitive::Datetime) {
+            temp.remove(&column_type::Primitive::Date);
+        }
+        if temp.contains(&column_type::Primitive::Text) {
+            temp.remove(&column_type::Primitive::JSON);
+        }
+        if temp.contains(&column_type::Primitive::Number) {
+            temp.remove(&column_type::Primitive::Integer);
+        }
+        if temp.contains(&column_type::Primitive::File) {
+            temp.remove(&column_type::Primitive::Image);
+        }
+        temp.into_iter()
+            .map(|prim| String::from(prim.to_str()))
+            .reduce(|acc, e| format!("{acc} | {e}"))
+            .unwrap_or(String::from("null"))
+    }
+}
+
+struct SelectParameter {
+    label_expr: String,
+    value_expr: String,
+    scalar_type: SelectParameterType
+}
+
+/// The constructor for a SELECT statement.
+struct SelectConstructor {
+    /// The CTEs pulling data from a datasource.
+    cte_datasource: HashMap<String, DatasourceCteConstructor>
+}
+
+impl SelectConstructor {
+    /// Builds the SQL syntax for this SELECT statement.
+    fn build(&self) -> Result<String, Error> {
+        let cte_list: Vec<String> = {
+            let mut cte_list: Vec<String> = Vec::new();
+            for (cte_name, cte) in self.cte_datasource.iter() {
+                cte_list.push(format!("{cte_name} AS ({})", cte.build()?));
+            }
+            cte_list
+        };
+
+        Ok(format!(
+            "{}",
+            if cte_list.len() > 0 {
+                format!("WITH {}", cte_list.join(", "))
+            } else {
+                String::from("")
+            }
+        ))
+    }
+
+    /// Adds a CTE for a datasource to the SELECT statement.
+    fn add_datasource(&mut self, datasource: Datasource) {
+        if let Some(parent_datasource) = datasource.get_parent() {
+            let parent_datasource_alias: String = parent_datasource.get_alias();
+            if !self.cte_datasource.contains_key(&parent_datasource_alias) {
+                self.add_datasource(parent_datasource);
+            }
+            if let Some(parent_datasource_cte) = self.cte_datasource.get_mut(&parent_datasource_alias) {
+                parent_datasource_cte.child_datasources.insert(datasource.clone());
+            }
+        }
+
+        let datasource_alias: String = datasource.get_alias();
+        if !self.cte_datasource.contains_key(&datasource_alias) {
+            self.cte_datasource.insert(datasource_alias, DatasourceCteConstructor { 
+                datasource, 
+                columns: HashMap::new(), 
+                child_datasources: HashSet::new() 
+            });
+        }
+    }
+
+    /// Adds a column on a datasource as a parameter to this SELECT statement.
+    fn add_parameter(&mut self, trans: &Transaction, datasource: Datasource, column: column::FullMetadata) -> Result<SelectParameter, Error> {
+        self.add_datasource(datasource.clone());
+        match column.column_type {
+            column_type::ColumnType::Primitive(prim) => {
+                if let Some(cte) = self.cte_datasource.get_mut(&datasource.get_alias()) {
+                    let cte_column = cte.add_primitive_column(column.oid, prim.clone());
+                    return Ok(SelectParameter {
+                        label_expr: cte_column.label_ord,
+                        value_expr: cte_column.value_ord,
+                        scalar_type: SelectParameterType::from(prim)
+                    });
+                }
+            }
+            column_type::ColumnType::Object { table_oid, .. } => {
+                let object_label_expr: String = self.construct_object_label_expr(trans, table_oid)?;
+                if let Some(cte) = self.cte_datasource.get_mut(&datasource.get_alias()) {
+                    let cte_column = cte.add_object_column(column.oid, object_label_expr);
+                    return Ok(SelectParameter {
+                        label_expr: cte_column.label_ord,
+                        value_expr: cte_column.value_ord,
+                        scalar_type: SelectParameterType {
+                            primitive_types: HashSet::new()
+                        }
+                    });
+                }
+            }
+            column_type::ColumnType::Select { table_oid, .. } => {
+                let select_label_expr: String = self.construct_select_label_expr(trans, table_oid)?;
+                if let Some(cte) = self.cte_datasource.get_mut(&datasource.get_alias()) {
+                    let cte_column = cte.add_select_column(column.oid, select_label_expr);
+                    return Ok(SelectParameter {
+                        label_expr: cte_column.label_ord,
+                        value_expr: cte_column.value_ord,
+                        scalar_type: SelectParameterType {
+                            primitive_types: HashSet::new()
+                        }
+                    });
+                }
+            }
+            column_type::ColumnType::Multiselect { table_oid, .. } => {
+                let json_label_expr: String = self.construct_json_label_expr(trans, table_oid)?;
+                if let Some(cte) = self.cte_datasource.get_mut(&datasource.get_alias()) {
+                    let cte_column = cte.add_multiselect_column(column.oid, json_label_expr);
+                    return Ok(SelectParameter {
+                        label_expr: cte_column.label_ord,
+                        value_expr: cte_column.value_ord,
+                        scalar_type: SelectParameterType {
+                            primitive_types: HashSet::new()
+                        }
+                    });
+                }
+            }
+            column_type::ColumnType::Formula { formula, .. } => {
+                // Parse the formula
+                let parsed_formula: Box<Formula> = Box::new(Formula::parse(formula.clone())?);
+
+                // Compile the formula into SQL
+                return self.construct_formula(
+                    trans,
+                    {
+                        if let Datasource::Table { oid, .. } = Datasource::get_default_datasource_transact(trans, datasource.get_schema_oid()?)? {
+                            (oid, datasource)
+                        } else {
+                            return Err(Error::AdhocError("No default datasource for table."));
+                        }
+                    },
+                    parsed_formula
+                );
+            }
+            column_type::ColumnType::Subreport { report_oid, .. } => {
+                let json_label_expr: String = self.construct_json_label_expr(trans, report_oid)?;
+                return Ok(SelectParameter {
+                    label_expr: json_label_expr.clone(),
+                    value_expr: json_label_expr,
+                    scalar_type: SelectParameterType {
+                        primitive_types: HashSet::new()
+                    }
+                });
+            }
+        }
+        return Err(Error::AdhocError("Unable to add parameter."));
+    }
+
+    /// Construct a label for a Select column.
+    fn construct_select_label_expr(&mut self, trans: &Transaction, schema_oid: i64) -> Result<String, Error> {
+
+    }
+
+    /// Construct a JSON label.
+    fn construct_json_label_expr(&mut self, trans: &Transaction, schema_oid: i64) -> Result<String, Error> {
+
+    }
+
+    /// Construct a label for an Object column.
+    /// This label is in JSON format.
+    fn construct_object_label_expr(&mut self, trans: &Transaction, schema_oid: i64) -> Result<String, Error> {
+
+    }
+
+    fn construct_formula(&mut self, trans: &Transaction, root_datasource: (i64, Datasource), formula: Box<Formula>) -> Result<SelectParameter, Error> {
+        Ok(match *formula {
+            Formula::Abs(inner) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Number);
+                let inner_name: String = inner.to_string();
+                let inner_param = self.construct_formula(trans, root_datasource, inner)?;
+                if inner_expected_type.encompasses(&inner_param.scalar_type) {
+                    SelectParameter {
+                        label_expr: format!("CAST(ABS({}) AS TEXT)", inner_param.value_expr),
+                        value_expr: format!("ABS({})", inner_param.value_expr),
+                        scalar_type: inner_param.scalar_type
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "ABS(x)", 
+                        inner_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: inner_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Add(lhs, rhs) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Number);
+                let lhs_name: String = lhs.to_string();
+                let lhs_param = self.construct_formula(trans, root_datasource, lhs)?;
+                if inner_expected_type.encompasses(&lhs_param.scalar_type) {
+                    let rhs_name: String = rhs.to_string();
+                    let rhs_param = self.construct_formula(trans, root_datasource, rhs)?;
+                    if inner_expected_type.encompasses(&rhs_param.scalar_type) {
+                        SelectParameter {
+                            label_expr: format!("CAST(({} + {}) AS TEXT)", lhs_param.value_expr, rhs_param.value_expr),
+                            value_expr: format!("({} + {})", lhs_param.value_expr, rhs_param.value_expr),
+                            scalar_type: lhs_param.scalar_type.generalize(&rhs_param.scalar_type)
+                        }
+                    } else {
+                        return Err(Error::FormulaTypeValidationError { 
+                            outer_name: "_ + rhs", 
+                            inner_name: rhs_name,
+                            expected_type: inner_expected_type.to_string(), 
+                            received_type: rhs_param.scalar_type.to_string()
+                        });
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "lhs + _", 
+                        inner_name: lhs_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: lhs_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::And(lhs, rhs) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Checkbox);
+                let lhs_name: String = lhs.to_string();
+                let lhs_param = self.construct_formula(trans, root_datasource, lhs)?;
+                if inner_expected_type.encompasses(&lhs_param.scalar_type) {
+                    let rhs_name: String = rhs.to_string();
+                    let rhs_param = self.construct_formula(trans, root_datasource, rhs)?;
+                    if inner_expected_type.encompasses(&rhs_param.scalar_type) {
+                        SelectParameter {
+                            label_expr: format!("CASE WHEN ({} AND {}) IS NULL THEN NULL WHEN ({} AND {}) THEN 'true' ELSE 'false' END", lhs_param.value_expr, rhs_param.value_expr, lhs_param.value_expr, rhs_param.value_expr),
+                            value_expr: format!("({} AND {})", lhs_param.value_expr, rhs_param.value_expr),
+                            scalar_type: SelectParameterType::from(column_type::Primitive::Checkbox)
+                        }
+                    } else {
+                        return Err(Error::FormulaTypeValidationError { 
+                            outer_name: "_ AND rhs", 
+                            inner_name: rhs_name,
+                            expected_type: inner_expected_type.to_string(), 
+                            received_type: rhs_param.scalar_type.to_string()
+                        });
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "lhs AND _", 
+                        inner_name: lhs_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: lhs_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Argmax(inners) => {
+
+            }
+            Formula::Argmin(inners) => {
+
+            }
+            Formula::Average(collection) => {
+                let collection_expected_type = SelectParameterType::from(column_type::Primitive::Number);
+                let collection_name: String = collection.to_string();
+                let collection_param = self.construct_formula(trans, root_datasource, collection)?;
+                if collection_expected_type.encompasses(&collection_param.scalar_type) {
+                    SelectParameter {
+                        label_expr: format!("CAST(AVG({}) AS TEXT)", collection_param.value_expr),
+                        value_expr: format!("AVG({})", collection_param.value_expr),
+                        scalar_type: collection_param.scalar_type
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "AVERAGE(x)", 
+                        inner_name: collection_name,
+                        expected_type: collection_expected_type.to_string(), 
+                        received_type: collection_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Ceiling(inner) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Number);
+                let inner_name: String = inner.to_string();
+                let inner_param = self.construct_formula(trans, root_datasource, inner)?;
+                if inner_expected_type.encompasses(&inner_param.scalar_type) {
+                    SelectParameter {
+                        label_expr: format!("CAST(CEILING({}) AS TEXT)", inner_param.value_expr),
+                        value_expr: format!("CEILING({})", inner_param.value_expr),
+                        scalar_type: SelectParameterType::from(column_type::Primitive::Integer)
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "CEILING(x)", 
+                        inner_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: inner_param.scalar_type.to_string()
+                    });
+                }
+
+            }
+            Formula::Coalesce(inners) => {
+
+            }
+            Formula::Concat(lhs, rhs) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Text);
+                let lhs_name: String = lhs.to_string();
+                let lhs_param = self.construct_formula(trans, root_datasource, lhs)?;
+                if inner_expected_type.encompasses(&lhs_param.scalar_type) {
+                    let rhs_name: String = rhs.to_string();
+                    let rhs_param = self.construct_formula(trans, root_datasource, rhs)?;
+                    if inner_expected_type.encompasses(&rhs_param.scalar_type) {
+                        SelectParameter {
+                            label_expr: format!("CONCAT({}, {})", lhs_param.value_expr, rhs_param.value_expr),
+                            value_expr: format!("CONCAT({}, {})", lhs_param.value_expr, rhs_param.value_expr),
+                            scalar_type: lhs_param.scalar_type.generalize(&rhs_param.scalar_type)
+                        }
+                    } else {
+                        return Err(Error::FormulaTypeValidationError { 
+                            outer_name: "_ & rhs", 
+                            inner_name: rhs_name,
+                            expected_type: inner_expected_type.to_string(), 
+                            received_type: rhs_param.scalar_type.to_string()
+                        });
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "lhs & _", 
+                        inner_name: lhs_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: lhs_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Conditional { condition, formula_if_true, formula_if_false } => {
+                let condition_expected_type = SelectParameterType::from(column_type::Primitive::Checkbox);
+                let condition_name: String = condition.to_string();
+                let condition_param = self.construct_formula(trans, root_datasource, condition)?;
+                if condition_expected_type.encompasses(&condition_param.scalar_type) {
+                    let if_true_param = self.construct_formula(trans, root_datasource, formula_if_true)?;
+                    let if_false_param = self.construct_formula(trans, root_datasource, formula_if_false)?;
+                    SelectParameter {
+                        label_expr: format!("IF({}, {}, {})", condition_param.value_expr, if_true_param.label_expr, if_false_param.label_expr),
+                        value_expr: format!("IF({}, {}, {})", condition_param.value_expr, if_true_param.value_expr, if_false_param.value_expr),
+                        scalar_type: if_true_param.scalar_type.generalize(&if_false_param.scalar_type)
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "IF(x, _, _)", 
+                        inner_name: condition_name,
+                        expected_type: condition_expected_type.to_string(), 
+                        received_type: condition_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Count(collection) => {
+                let collection_name: String = collection.to_string();
+                let collection_param = self.construct_formula(trans, root_datasource, collection)?;
+                SelectParameter {
+                    label_expr: format!("CAST(COUNT({}) AS TEXT)", collection_param.value_expr),
+                    value_expr: format!("COUNT({})", collection_param.value_expr),
+                    scalar_type: collection_param.scalar_type
+                }
+            }
+            Formula::Divide(lhs, rhs) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Number);
+                let lhs_name: String = lhs.to_string();
+                let lhs_param = self.construct_formula(trans, root_datasource, lhs)?;
+                if inner_expected_type.encompasses(&lhs_param.scalar_type) {
+                    let rhs_name: String = rhs.to_string();
+                    let rhs_param = self.construct_formula(trans, root_datasource, rhs)?;
+                    if inner_expected_type.encompasses(&rhs_param.scalar_type) {
+                        SelectParameter {
+                            label_expr: format!("CAST(({} / {}) AS TEXT)", lhs_param.value_expr, rhs_param.value_expr),
+                            value_expr: format!("({} / {})", lhs_param.value_expr, rhs_param.value_expr),
+                            scalar_type: SelectParameterType::from(column_type::Primitive::Number)
+                        }
+                    } else {
+                        return Err(Error::FormulaTypeValidationError { 
+                            outer_name: "_ / rhs", 
+                            inner_name: rhs_name,
+                            expected_type: inner_expected_type.to_string(), 
+                            received_type: rhs_param.scalar_type.to_string()
+                        });
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "lhs / _", 
+                        inner_name: lhs_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: lhs_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Eq(lhs, rhs) => {
+                let lhs_name: String = lhs.to_string();
+                let lhs_param = self.construct_formula(trans, root_datasource, lhs)?;
+                let rhs_name: String = rhs.to_string();
+                let rhs_param = self.construct_formula(trans, root_datasource, rhs)?;
+                SelectParameter {
+                    label_expr: format!("CASE WHEN ({} IS {}) IS NULL THEN NULL WHEN ({} IS {}) THEN 'true' ELSE 'false' END", lhs_param.value_expr, rhs_param.value_expr, lhs_param.value_expr, rhs_param.value_expr),
+                    value_expr: format!("({} IS {})", lhs_param.value_expr, rhs_param.value_expr),
+                    scalar_type: SelectParameterType::from(column_type::Primitive::Checkbox)
+                }
+            }
+            Formula::Exponent(lhs, rhs) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Number);
+                let lhs_name: String = lhs.to_string();
+                let lhs_param = self.construct_formula(trans, root_datasource, lhs)?;
+                if inner_expected_type.encompasses(&lhs_param.scalar_type) {
+                    let rhs_name: String = rhs.to_string();
+                    let rhs_param = self.construct_formula(trans, root_datasource, rhs)?;
+                    if inner_expected_type.encompasses(&rhs_param.scalar_type) {
+                        SelectParameter {
+                            label_expr: format!("CAST(POW({}, {}) AS TEXT)", lhs_param.value_expr, rhs_param.value_expr),
+                            value_expr: format!("POW({}, {})", lhs_param.value_expr, rhs_param.value_expr),
+                            scalar_type: lhs_param.scalar_type.generalize(&rhs_param.scalar_type)
+                        }
+                    } else {
+                        return Err(Error::FormulaTypeValidationError { 
+                            outer_name: "POW(_, y)", 
+                            inner_name: rhs_name,
+                            expected_type: inner_expected_type.to_string(), 
+                            received_type: rhs_param.scalar_type.to_string()
+                        });
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "POW(x, _)", 
+                        inner_name: lhs_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: lhs_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Floor(inner) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Number);
+                let inner_name: String = inner.to_string();
+                let inner_param = self.construct_formula(trans, root_datasource, inner)?;
+                if inner_expected_type.encompasses(&inner_param.scalar_type) {
+                    SelectParameter {
+                        label_expr: format!("CAST(FLOOR({}) AS TEXT)", inner_param.value_expr),
+                        value_expr: format!("FLOOR({})", inner_param.value_expr),
+                        scalar_type: SelectParameterType::from(column_type::Primitive::Integer)
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "FLOOR(x)", 
+                        inner_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: inner_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Format { format, format_params } => {
+
+            }
+            Formula::Glob { str, pattern } => {
+
+            }
+            Formula::In { value, collection } => {
+
+            }
+            Formula::Join { collection, delimiter } => {
+
+            }
+            Formula::Length(inner) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Text);
+                let inner_name: String = inner.to_string();
+                let inner_param = self.construct_formula(trans, root_datasource, inner)?;
+                if inner_expected_type.encompasses(&inner_param.scalar_type) {
+                    SelectParameter {
+                        label_expr: format!("LENGTH({})", inner_param.value_expr),
+                        value_expr: format!("LENGTH({})", inner_param.value_expr),
+                        scalar_type: SelectParameterType::from(column_type::Primitive::Integer)
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "LENGTH(x)", 
+                        inner_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: inner_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::LessThan(lhs, rhs) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Number);
+                let lhs_name: String = lhs.to_string();
+                let lhs_param = self.construct_formula(trans, root_datasource, lhs)?;
+                if inner_expected_type.encompasses(&lhs_param.scalar_type) {
+                    let rhs_name: String = rhs.to_string();
+                    let rhs_param = self.construct_formula(trans, root_datasource, rhs)?;
+                    if inner_expected_type.encompasses(&rhs_param.scalar_type) {
+                        SelectParameter {
+                            label_expr: format!("CASE WHEN ({} < {}) IS NULL THEN NULL WHEN ({} < {}) THEN 'true' ELSE 'false' END", lhs_param.value_expr, rhs_param.value_expr, lhs_param.value_expr, rhs_param.value_expr),
+                            value_expr: format!("({} < {})", lhs_param.value_expr, rhs_param.value_expr),
+                            scalar_type: SelectParameterType::from(column_type::Primitive::Checkbox)
+                        }
+                    } else {
+                        return Err(Error::FormulaTypeValidationError { 
+                            outer_name: "_ < rhs", 
+                            inner_name: rhs_name,
+                            expected_type: inner_expected_type.to_string(), 
+                            received_type: rhs_param.scalar_type.to_string()
+                        });
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "lhs < _", 
+                        inner_name: lhs_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: lhs_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::LessThanOrEq(lhs, rhs) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Number);
+                let lhs_name: String = lhs.to_string();
+                let lhs_param = self.construct_formula(trans, root_datasource, lhs)?;
+                if inner_expected_type.encompasses(&lhs_param.scalar_type) {
+                    let rhs_name: String = rhs.to_string();
+                    let rhs_param = self.construct_formula(trans, root_datasource, rhs)?;
+                    if inner_expected_type.encompasses(&rhs_param.scalar_type) {
+                        SelectParameter {
+                            label_expr: format!("CASE WHEN ({} <= {}) IS NULL THEN NULL WHEN ({} <= {}) THEN 'true' ELSE 'false' END", lhs_param.value_expr, rhs_param.value_expr, lhs_param.value_expr, rhs_param.value_expr),
+                            value_expr: format!("({} <= {})", lhs_param.value_expr, rhs_param.value_expr),
+                            scalar_type: SelectParameterType::from(column_type::Primitive::Checkbox)
+                        }
+                    } else {
+                        return Err(Error::FormulaTypeValidationError { 
+                            outer_name: "_ <= rhs", 
+                            inner_name: rhs_name,
+                            expected_type: inner_expected_type.to_string(), 
+                            received_type: rhs_param.scalar_type.to_string()
+                        });
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "lhs <= _", 
+                        inner_name: lhs_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: lhs_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::LiteralArray(inners) => {
+
+            }
+            Formula::LiteralBool(value) => {
+                if value {
+                    SelectParameter { 
+                        label_expr: String::from("'true'"),
+                        value_expr: String::from("TRUE"),
+                        scalar_type: SelectParameterType::from(column_type::Primitive::Checkbox)
+                    }
+                } else {
+                    SelectParameter { 
+                        label_expr: String::from("'false'"), 
+                        value_expr: String::from("FALSE"),
+                        scalar_type: SelectParameterType::from(column_type::Primitive::Checkbox)
+                    }
+                }
+            }
+            Formula::LiteralFloat(value) => {
+                SelectParameter {
+                    label_expr: format!("CAST({value} AS TEXT)"),
+                    value_expr: format!("{value}"),
+                    scalar_type: SelectParameterType::from(column_type::Primitive::Number)
+                }
+            }
+            Formula::LiteralInt(value) => {
+                SelectParameter { 
+                    label_expr: format!("CAST({value} AS TEXT)"), 
+                    value_expr: format!("{value}"),
+                    scalar_type: SelectParameterType::from(column_type::Primitive::Integer)
+                }
+            }
+            Formula::LiteralString(value) => {
+                let sql_value: String = format!("'{}'", value.replace("'", "''"));
+                SelectParameter {
+                    label_expr: sql_value.clone(),
+                    value_expr: sql_value,
+                    scalar_type: SelectParameterType::from(column_type::Primitive::Text)
+                }
+            }
+            Formula::Lowercase(inner) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Text);
+                let inner_name: String = inner.to_string();
+                let inner_param = self.construct_formula(trans, root_datasource, inner)?;
+                if inner_expected_type.encompasses(&inner_param.scalar_type) {
+                    SelectParameter {
+                        label_expr: format!("LOWER({})", inner_param.value_expr),
+                        value_expr: format!("LOWER({})", inner_param.value_expr),
+                        scalar_type: inner_param.scalar_type
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "LOWER(x)", 
+                        inner_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: inner_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Max(collection) => {
+                let collection_expected_type = SelectParameterType::from(column_type::Primitive::Number).generalize(SelectParameterType::from(column_type::Primitive::Text));
+                let collection_name: String = collection.to_string();
+                let collection_param = self.construct_formula(trans, root_datasource, collection)?;
+                if collection_expected_type.encompasses(&collection_param.scalar_type) {
+                    SelectParameter {
+                        label_expr: format!("CAST(MAX({}) AS TEXT)", collection_param.value_expr),
+                        value_expr: format!("MAX({})", collection_param.value_expr),
+                        scalar_type: collection_param.scalar_type
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "MAX(x)", 
+                        inner_name: collection_name,
+                        expected_type: collection_expected_type.to_string(), 
+                        received_type: collection_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Min(collection) => {
+                let collection_expected_type = SelectParameterType::from(column_type::Primitive::Number).generalize(SelectParameterType::from(column_type::Primitive::Text));
+                let collection_name: String = collection.to_string();
+                let collection_param = self.construct_formula(trans, root_datasource, collection)?;
+                if collection_expected_type.encompasses(&collection_param.scalar_type) {
+                    SelectParameter {
+                        label_expr: format!("CAST(MIN({}) AS TEXT)", collection_param.value_expr),
+                        value_expr: format!("MIN({})", collection_param.value_expr),
+                        scalar_type: collection_param.scalar_type
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "MIN(x)", 
+                        inner_name: collection_name,
+                        expected_type: collection_expected_type.to_string(), 
+                        received_type: collection_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Modulo(lhs, rhs) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Number);
+                let lhs_name: String = lhs.to_string();
+                let lhs_param = self.construct_formula(trans, root_datasource, lhs)?;
+                if inner_expected_type.encompasses(&lhs_param.scalar_type) {
+                    let rhs_name: String = rhs.to_string();
+                    let rhs_param = self.construct_formula(trans, root_datasource, rhs)?;
+                    if inner_expected_type.encompasses(&rhs_param.scalar_type) {
+                        SelectParameter {
+                            label_expr: format!("CAST(({} % {}) AS TEXT)", lhs_param.value_expr, rhs_param.value_expr),
+                            value_expr: format!("({} % {})", lhs_param.value_expr, rhs_param.value_expr),
+                            scalar_type: lhs_param.scalar_type.generalize(&rhs_param.scalar_type)
+                        }
+                    } else {
+                        return Err(Error::FormulaTypeValidationError { 
+                            outer_name: "_ % rhs", 
+                            inner_name: rhs_name,
+                            expected_type: inner_expected_type.to_string(), 
+                            received_type: rhs_param.scalar_type.to_string()
+                        });
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "lhs % _", 
+                        inner_name: lhs_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: lhs_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Multiply(lhs, rhs) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Number);
+                let lhs_name: String = lhs.to_string();
+                let lhs_param = self.construct_formula(trans, root_datasource, lhs)?;
+                if inner_expected_type.encompasses(&lhs_param.scalar_type) {
+                    let rhs_name: String = rhs.to_string();
+                    let rhs_param = self.construct_formula(trans, root_datasource, rhs)?;
+                    if inner_expected_type.encompasses(&rhs_param.scalar_type) {
+                        SelectParameter {
+                            label_expr: format!("CAST(({} * {}) AS TEXT)", lhs_param.value_expr, rhs_param.value_expr),
+                            value_expr: format!("({} * {})", lhs_param.value_expr, rhs_param.value_expr),
+                            scalar_type: lhs_param.scalar_type.generalize(&rhs_param.scalar_type)
+                        }
+                    } else {
+                        return Err(Error::FormulaTypeValidationError { 
+                            outer_name: "_ * rhs", 
+                            inner_name: rhs_name,
+                            expected_type: inner_expected_type.to_string(), 
+                            received_type: rhs_param.scalar_type.to_string()
+                        });
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "lhs * _", 
+                        inner_name: lhs_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: lhs_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Not(inner) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Checkbox);
+                let inner_name: String = inner.to_string();
+                let inner_param = self.construct_formula(trans, root_datasource, inner)?;
+                if inner_expected_type.encompasses(&inner_param.scalar_type) {
+                    SelectParameter {
+                        label_expr: format!("CASE WHEN {} IS NULL THEN NULL WHEN {} IS FALSE THEN 'true' ELSE 'false' END", inner_param.value_expr, inner_param.value_expr),
+                        value_expr: format!("(NOT {})", inner_param.value_expr),
+                        scalar_type: inner_param.scalar_type
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "NOT(x)", 
+                        inner_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: inner_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Null => {
+                SelectParameter { 
+                    label_expr: String::from("NULL"),
+                    value_expr: String::from("NULL"),
+                    scalar_type: SelectParameterType {
+                        primitive_types: HashSet::new()
+                    }
+                }
+            }
+            Formula::NullIf { value, null_if_match } => {
+                let lhs_param = self.construct_formula(trans, root_datasource, value)?;
+                let rhs_param = self.construct_formula(trans, root_datasource, null_if_match)?;
+                SelectParameter {
+                    label_expr: format!("CASE WHEN ({} IS {}) THEN NULL ELSE {} END", lhs_param.value_expr, rhs_param.value_expr, lhs_param.label_expr),
+                    value_expr: format!("NULLIF({}, {})", lhs_param.value_expr, rhs_param.value_expr),
+                    scalar_type: lhs_param.scalar_type
+                }
+            }
+            Formula::Or(lhs, rhs) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Checkbox);
+                let lhs_name: String = lhs.to_string();
+                let lhs_param = self.construct_formula(trans, root_datasource, lhs)?;
+                if inner_expected_type.encompasses(&lhs_param.scalar_type) {
+                    let rhs_name: String = rhs.to_string();
+                    let rhs_param = self.construct_formula(trans, root_datasource, rhs)?;
+                    if inner_expected_type.encompasses(&rhs_param.scalar_type) {
+                        SelectParameter {
+                            label_expr: format!("CASE WHEN ({} OR {}) IS NULL THEN NULL WHEN ({} OR {}) THEN 'true' ELSE 'false' END", lhs_param.value_expr, rhs_param.value_expr, lhs_param.value_expr, rhs_param.value_expr),
+                            value_expr: format!("({} OR {})", lhs_param.value_expr, rhs_param.value_expr),
+                            scalar_type: SelectParameterType::from(column_type::Primitive::Checkbox)
+                        }
+                    } else {
+                        return Err(Error::FormulaTypeValidationError { 
+                            outer_name: "_ OR rhs", 
+                            inner_name: rhs_name,
+                            expected_type: inner_expected_type.to_string(), 
+                            received_type: rhs_param.scalar_type.to_string()
+                        });
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "lhs OR _", 
+                        inner_name: lhs_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: lhs_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Param { datasource_alias, column_oid } => {
+                let datasource: Datasource = Datasource::from_alias_transact(trans, datasource_alias)?.substitute_root(root_datasource.0, root_datasource.1);
+                let column: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
+                self.add_parameter(trans, datasource, column)?
+            }
+            Formula::RandomInt => {
+
+            }
+            Formula::Replace { original, pattern, replacement } => {
+
+            }
+            Formula::Round(inner) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Number);
+                let inner_name: String = inner.to_string();
+                let inner_param = self.construct_formula(trans, root_datasource, inner)?;
+                if inner_expected_type.encompasses(&inner_param.scalar_type) {
+                    SelectParameter {
+                        label_expr: format!("ROUND({})", inner_param.value_expr),
+                        value_expr: format!("ROUND({})", inner_param.value_expr),
+                        scalar_type: SelectParameterType::from(column_type::Primitive::Integer)
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "ROUND(x)", 
+                        inner_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: inner_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Sign(inner) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Number);
+                let inner_name: String = inner.to_string();
+                let inner_param = self.construct_formula(trans, root_datasource, inner)?;
+                if inner_expected_type.encompasses(&inner_param.scalar_type) {
+                    SelectParameter {
+                        label_expr: format!("SIGN({})", inner_param.value_expr),
+                        value_expr: format!("SIGN({})", inner_param.value_expr),
+                        scalar_type: SelectParameterType::from(column_type::Primitive::Integer)
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "SIGN(x)", 
+                        inner_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: inner_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Slice { collection, start, length } => {
+
+            }
+            Formula::Substring { str, start, length } => {
+
+            }
+            Formula::Subtract(lhs, rhs) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Number);
+                let lhs_name: String = lhs.to_string();
+                let lhs_param = self.construct_formula(trans, root_datasource, lhs)?;
+                if inner_expected_type.encompasses(&lhs_param.scalar_type) {
+                    let rhs_name: String = rhs.to_string();
+                    let rhs_param = self.construct_formula(trans, root_datasource, rhs)?;
+                    if inner_expected_type.encompasses(&rhs_param.scalar_type) {
+                        SelectParameter {
+                            label_expr: format!("CAST(({} - {}) AS TEXT)", lhs_param.value_expr, rhs_param.value_expr),
+                            value_expr: format!("({} - {})", lhs_param.value_expr, rhs_param.value_expr),
+                            scalar_type: lhs_param.scalar_type.generalize(&rhs_param.scalar_type)
+                        }
+                    } else {
+                        return Err(Error::FormulaTypeValidationError { 
+                            outer_name: "_ - rhs", 
+                            inner_name: rhs_name,
+                            expected_type: inner_expected_type.to_string(), 
+                            received_type: rhs_param.scalar_type.to_string()
+                        });
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "lhs - _", 
+                        inner_name: lhs_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: lhs_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Sum(collection) => {
+                let collection_expected_type = SelectParameterType::from(column_type::Primitive::Number);
+                let collection_name: String = collection.to_string();
+                let collection_param = self.construct_formula(trans, root_datasource, collection)?;
+                if collection_expected_type.encompasses(&collection_param.scalar_type) {
+                    SelectParameter {
+                        label_expr: format!("CAST(SUM({}) AS TEXT)", collection_param.value_expr),
+                        value_expr: format!("SUM({})", collection_param.value_expr),
+                        scalar_type: collection_param.scalar_type
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "SUM(x)", 
+                        inner_name: collection_name,
+                        expected_type: collection_expected_type.to_string(), 
+                        received_type: collection_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Switch { value, matches, formula_if_no_match } => {
+
+            }
+            Formula::Uppercase(inner) => {
+                let inner_expected_type = SelectParameterType::from(column_type::Primitive::Text);
+                let inner_name: String = inner.to_string();
+                let inner_param = self.construct_formula(trans, root_datasource, inner)?;
+                if inner_expected_type.encompasses(&inner_param.scalar_type) {
+                    SelectParameter {
+                        label_expr: format!("UPPER({})", inner_param.value_expr),
+                        value_expr: format!("UPPER({})", inner_param.value_expr),
+                        scalar_type: inner_param.scalar_type
+                    }
+                } else {
+                    return Err(Error::FormulaTypeValidationError { 
+                        outer_name: "UPPER(x)", 
+                        inner_name,
+                        expected_type: inner_expected_type.to_string(), 
+                        received_type: inner_param.scalar_type.to_string()
+                    });
+                }
+            }
+            Formula::Wrap(inner) => {
+                self.construct_formula(trans, root_datasource, inner)?
+            }
+        })
+    }
+}
+
+
+
 
 struct ViewsToCreate {
     /// The OID of the schema to create views for.
