@@ -393,9 +393,9 @@ impl FullMetadata {
                     self.schema.oid,
                     self.oid,
                     match prim {
-                        column_type::Primitive::Text
-                        | column_type::Primitive::JSON => "TEXT",
-                        column_type::Primitive::Checkbox
+                        column_type::Primitive::PlainText
+                        | column_type::Primitive::JsonText => "TEXT",
+                        column_type::Primitive::Boolean
                         | column_type::Primitive::Integer => "INTEGER",
                         column_type::Primitive::Number
                         | column_type::Primitive::Date
@@ -524,7 +524,7 @@ impl FullMetadata {
             if let Some(sql_update) = match &self.column_type {
                 column_type::ColumnType::Primitive(prim) => {
                     match prim {
-                        column_type::Primitive::Text | column_type::Primitive::JSON => {
+                        column_type::Primitive::PlainText | column_type::Primitive::JsonText => {
                             if let Some(label_expr) = match &old_column.column_type {
                                 column_type::ColumnType::Primitive(old_prim) => {
                                     let old_column_label: String =
@@ -538,7 +538,7 @@ impl FullMetadata {
                                         column_type::Primitive::Datetime => Some(format!(
                                             r#"STRFTIME('%FT%TZ', {old_column_label}, 'julianday')"#
                                         )),
-                                        column_type::Primitive::Checkbox => Some(format!(
+                                        column_type::Primitive::Boolean => Some(format!(
                                             r#"CASE WHEN {old_column_label} IS NULL THEN NULL WHEN {old_column_label} THEN 'True' ELSE 'False' END"#
                                         )),
                                         _ => Some(format!(r#"CAST({old_column_label} AS TEXT)"#)),
@@ -643,15 +643,15 @@ impl FullMetadata {
                                         | column_type::Primitive::Datetime => {
                                             Some(format!(r#"CAST({old_column_label} AS INTEGER)"#))
                                         }
-                                        column_type::Primitive::Checkbox
+                                        column_type::Primitive::Boolean
                                         | column_type::Primitive::Integer => {
                                             Some(format!(r#"{old_column_label}"#))
                                         }
                                         column_type::Primitive::Number => {
                                             Some(format!("ROUND({old_column_label})"))
                                         }
-                                        column_type::Primitive::Text
-                                        | column_type::Primitive::JSON => {
+                                        column_type::Primitive::PlainText
+                                        | column_type::Primitive::JsonText => {
                                             Some(format!(r#"{old_column_label}"#))
                                         }
                                     }
@@ -765,13 +765,13 @@ impl FullMetadata {
                                         | column_type::Primitive::Image => None,
                                         column_type::Primitive::Date
                                         | column_type::Primitive::Datetime
-                                        | column_type::Primitive::Checkbox
+                                        | column_type::Primitive::Boolean
                                         | column_type::Primitive::Integer
                                         | column_type::Primitive::Number => {
                                             Some(format!(r#"{old_column_label}"#))
                                         }
-                                        column_type::Primitive::Text
-                                        | column_type::Primitive::JSON => {
+                                        column_type::Primitive::PlainText
+                                        | column_type::Primitive::JsonText => {
                                             Some(format!(r#"{old_column_label}"#))
                                         }
                                     }
@@ -882,15 +882,15 @@ impl FullMetadata {
                                     match old_prim {
                                         column_type::Primitive::File
                                         | column_type::Primitive::Image
-                                        | column_type::Primitive::Checkbox => None,
+                                        | column_type::Primitive::Boolean => None,
                                         column_type::Primitive::Date
                                         | column_type::Primitive::Datetime
                                         | column_type::Primitive::Integer
                                         | column_type::Primitive::Number => Some(format!(
                                             r#"CAST(CAST({old_column_label} AS INTEGER) AS REAL)"#
                                         )),
-                                        column_type::Primitive::Text
-                                        | column_type::Primitive::JSON => {
+                                        column_type::Primitive::PlainText
+                                        | column_type::Primitive::JsonText => {
                                             Some(format!(r#"JULIANDAY({old_column_label})"#))
                                         }
                                     }
@@ -1000,15 +1000,15 @@ impl FullMetadata {
                                     match old_prim {
                                         column_type::Primitive::File
                                         | column_type::Primitive::Image
-                                        | column_type::Primitive::Checkbox => None,
+                                        | column_type::Primitive::Boolean => None,
                                         column_type::Primitive::Date
                                         | column_type::Primitive::Datetime
                                         | column_type::Primitive::Integer
                                         | column_type::Primitive::Number => {
                                             Some(format!(r#"{old_column_label}"#))
                                         }
-                                        column_type::Primitive::Text
-                                        | column_type::Primitive::JSON => {
+                                        column_type::Primitive::PlainText
+                                        | column_type::Primitive::JsonText => {
                                             Some(format!(r#"JULIANDAY({old_column_label})"#))
                                         }
                                     }
@@ -1110,7 +1110,7 @@ impl FullMetadata {
                             // No need to update individually
                             None
                         }
-                        column_type::Primitive::Checkbox => {
+                        column_type::Primitive::Boolean => {
                             if let Some(bool_expr) = match &old_column.column_type {
                                 column_type::ColumnType::Primitive(old_prim) => {
                                     let old_column_label: String =
@@ -1118,7 +1118,7 @@ impl FullMetadata {
                                     match old_prim {
                                         column_type::Primitive::File
                                         | column_type::Primitive::Image => None,
-                                        column_type::Primitive::Checkbox
+                                        column_type::Primitive::Boolean
                                         | column_type::Primitive::Date
                                         | column_type::Primitive::Datetime
                                         | column_type::Primitive::Integer
@@ -1131,8 +1131,8 @@ impl FullMetadata {
                                         END
                                         "#
                                         )),
-                                        column_type::Primitive::Text
-                                        | column_type::Primitive::JSON => Some(format!(
+                                        column_type::Primitive::PlainText
+                                        | column_type::Primitive::JsonText => Some(format!(
                                             r#"
                                         CASE 
                                             WHEN {old_column_label} LIKE 'TRUE' OR CAST({old_column_label} AS INTEGER) IS NOT 0 THEN 1
@@ -1261,13 +1261,13 @@ impl FullMetadata {
                                     match old_prim {
                                         column_type::Primitive::File
                                         | column_type::Primitive::Image => Some(old_column_label),
-                                        column_type::Primitive::Checkbox
+                                        column_type::Primitive::Boolean
                                         | column_type::Primitive::Date
                                         | column_type::Primitive::Datetime
                                         | column_type::Primitive::Integer
                                         | column_type::Primitive::Number
-                                        | column_type::Primitive::Text
-                                        | column_type::Primitive::JSON => None, // No conversion from other primitive to File
+                                        | column_type::Primitive::PlainText
+                                        | column_type::Primitive::JsonText => None, // No conversion from other primitive to File
                                     }
                                 }
                                 _ => None, // No data to transfer to File column
@@ -1301,7 +1301,7 @@ impl FullMetadata {
                                 column_type::Primitive::Datetime => Some(format!(
                                     r#"COALESCE('"' || STRFTIME('%FT%TZ', {old_column_label}, 'julianday') || '"', 'null')"#
                                 )),
-                                column_type::Primitive::Checkbox => Some(format!(
+                                column_type::Primitive::Boolean => Some(format!(
                                     r#"CASE WHEN {old_column_label} IS NULL THEN 'null' WHEN {old_column_label} THEN 'true' ELSE 'false' END"#
                                 )),
                                 _ => Some(format!(
@@ -1466,7 +1466,7 @@ impl FullMetadata {
                                 | column_type::Primitive::Image => None,
                                 column_type::Primitive::Date => Some(format!(r#"COALESCE('"' || DATE({old_column_label}, 'julianday') || '"', 'null')"#)),
                                 column_type::Primitive::Datetime => Some(format!(r#"COALESCE('"' || STRFTIME('%FT%TZ', {old_column_label}, 'julianday') || '"', 'null')"#)),
-                                column_type::Primitive::Checkbox => Some(format!(r#"CASE WHEN {old_column_label} IS NULL THEN 'null' WHEN {old_column_label} THEN 'true' ELSE 'false' END"#)),
+                                column_type::Primitive::Boolean => Some(format!(r#"CASE WHEN {old_column_label} IS NULL THEN 'null' WHEN {old_column_label} THEN 'true' ELSE 'false' END"#)),
                                 _ => Some(format!(r#"COALESCE('"' || CAST({old_column_label} AS TEXT) || '"', 'null')"#))
                             } {
                                 let mut surrogate_query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;

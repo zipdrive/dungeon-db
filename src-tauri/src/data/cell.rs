@@ -281,7 +281,7 @@ impl Cell {
 
                 match column_metadata.column_type {
                     column_type::ColumnType::Primitive(prim) => match prim {
-                        column_type::Primitive::Checkbox => {
+                        column_type::Primitive::Boolean => {
                             let is_checked_sql: String = format!("SELECT COLUMN{column_oid}_VALUE AS IS_CHECKED FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
                             let (is_checked, is_checked_e) =
                                 match conn.query_one(&is_checked_sql, params![row_oid], |row| {
@@ -378,7 +378,7 @@ impl Cell {
                                 },
                             }
                         }
-                        column_type::Primitive::Text | column_type::Primitive::JSON => {
+                        column_type::Primitive::PlainText | column_type::Primitive::JsonText => {
                             let label_sql: String = format!("SELECT COLUMN{column_oid}_LABEL AS LABEL FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
                             let (label, label_e) =
                                 match conn.query_one(&label_sql, params![row_oid], |row| {
@@ -394,7 +394,7 @@ impl Cell {
                                 data_row_oid: row_oid.clone(),
                                 label,
                                 format: match prim {
-                                    column_type::Primitive::JSON => CellTextFormat::JSON,
+                                    column_type::Primitive::JsonText => CellTextFormat::JSON,
                                     _ => CellTextFormat::Plain,
                                 },
                                 cell_identifier: CellIdentifier::DataCell {
@@ -872,7 +872,7 @@ impl Cell {
                                 // Return the data cell referenced by the formula
                                 return match data_column_metadata.column_type {
                                     column_type::ColumnType::Primitive(prim) => match prim {
-                                        column_type::Primitive::Checkbox => {
+                                        column_type::Primitive::Boolean => {
                                             let (is_checked, is_checked_e) =
                                                 if let Some(value) = value {
                                                     match i64::from_str_radix(&value, 10) {
@@ -963,7 +963,7 @@ impl Cell {
                                                 }
                                             },
                                         },
-                                        column_type::Primitive::Text => Self::TextEntry {
+                                        column_type::Primitive::PlainText => Self::TextEntry {
                                             data_table_oid,
                                             data_column_oid,
                                             data_row_oid,
@@ -985,7 +985,7 @@ impl Cell {
                                                 }
                                             },
                                         },
-                                        column_type::Primitive::JSON => Self::TextEntry {
+                                        column_type::Primitive::JsonText => Self::TextEntry {
                                             data_table_oid,
                                             data_column_oid,
                                             data_row_oid,
@@ -1538,7 +1538,7 @@ impl SchemaCellStream {
                         };
 
                         match prim {
-                            column_type::Primitive::Checkbox => {
+                            column_type::Primitive::Boolean => {
                                 let (is_checked, is_checked_e) = match row.get::<&str, Option<bool>>(&value_ord) {
                                     Ok(is_checked) => (is_checked, None),
                                     Err(e) => (None, Some(e))
@@ -1609,8 +1609,8 @@ impl SchemaCellStream {
                                     }
                                 }
                             }
-                            column_type::Primitive::Text
-                            | column_type::Primitive::JSON => {
+                            column_type::Primitive::PlainText
+                            | column_type::Primitive::JsonText => {
                                 let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
                                     Ok(label) => (label, None),
                                     Err(e) => (None, Some(e))
@@ -1622,7 +1622,7 @@ impl SchemaCellStream {
                                     data_row_oid,
                                     label,
                                     format: match prim {
-                                        column_type::Primitive::JSON => CellTextFormat::JSON,
+                                        column_type::Primitive::JsonText => CellTextFormat::JSON,
                                         _ => CellTextFormat::Plain
                                     },
                                     cell_identifier,
@@ -2022,7 +2022,7 @@ impl SchemaCellStream {
                                     Ok(data_column_metadata) => match data_column_metadata.column_type {
                                         column_type::ColumnType::Primitive(prim) => {
                                             match prim {
-                                                column_type::Primitive::Checkbox => {
+                                                column_type::Primitive::Boolean => {
                                                     let (is_checked, is_checked_e) = if let Some(value) = value {
                                                         match i64::from_str_radix(&value, 10) {
                                                             Ok(i) => (i != 0, None),
@@ -2050,8 +2050,8 @@ impl SchemaCellStream {
                                                 }
                                                 column_type::Primitive::Integer
                                                 | column_type::Primitive::Number
-                                                | column_type::Primitive::Text
-                                                | column_type::Primitive::JSON
+                                                | column_type::Primitive::PlainText
+                                                | column_type::Primitive::JsonText
                                                 | column_type::Primitive::Date
                                                 | column_type::Primitive::Datetime => {
                                                     Cell::TextEntry  {
@@ -2060,7 +2060,7 @@ impl SchemaCellStream {
                                                         data_row_oid,
                                                         label,
                                                         format: match prim {
-                                                            column_type::Primitive::JSON => CellTextFormat::JSON,
+                                                            column_type::Primitive::JsonText => CellTextFormat::JSON,
                                                             _ => CellTextFormat::Plain
                                                         },
                                                         cell_identifier,
@@ -2430,8 +2430,8 @@ impl DataCellEntry {
                 value: match col.column_type {
                     column_type::ColumnType::Primitive(prim) => {
                         match prim {
-                            column_type::Primitive::Text
-                            | column_type::Primitive::JSON => DataCellValue::Text( 
+                            column_type::Primitive::PlainText
+                            | column_type::Primitive::JsonText => DataCellValue::Text( 
                                 row.get::<&str, _>(&value_ord)?
                             ),
                             column_type::Primitive::Integer => DataCellValue::Integer( 
@@ -2446,7 +2446,7 @@ impl DataCellEntry {
                             column_type::Primitive::Datetime => DataCellValue::Datetime { 
                                 label: row.get::<&str, _>(&label_ord)?
                             },
-                            column_type::Primitive::Checkbox => DataCellValue::Boolean(
+                            column_type::Primitive::Boolean => DataCellValue::Boolean(
                                 row.get::<&str, _>(&value_ord)?
                             ),
                             column_type::Primitive::File

@@ -298,15 +298,15 @@ impl QueryBuilderColumn {
         match self {
             Self::Primitive { primitive_type, value_expr, label_expr, .. } => {
                 match primitive_type {
-                    column_type::Primitive::Text
+                    column_type::Primitive::PlainText
                     | column_type::Primitive::File
                     | column_type::Primitive::Image => format!(r#"CASE WHEN {value_expr} IS NULL THEN {expr_when_null} ELSE '"' || REPLACE(REPLACE({label_expr}, '\', '\\'), '"', '\"') || '"' END"#),
                     column_type::Primitive::Integer
                     | column_type::Primitive::Number
-                    | column_type::Primitive::JSON => format!("CASE WHEN {value_expr} IS NULL THEN {expr_when_null} ELSE {value_expr} END"),
+                    | column_type::Primitive::JsonText => format!("CASE WHEN {value_expr} IS NULL THEN {expr_when_null} ELSE {value_expr} END"),
                     column_type::Primitive::Date
                     | column_type::Primitive::Datetime => format!(r#"CASE WHEN {value_expr} IS NULL THEN {expr_when_null} ELSE '"' || {label_expr} || '"' END"#),
-                    column_type::Primitive::Checkbox => format!("CASE WHEN {value_expr} IS NULL THEN {expr_when_null} WHEN {value_expr} THEN 'true' ELSE 'false' END")
+                    column_type::Primitive::Boolean => format!("CASE WHEN {value_expr} IS NULL THEN {expr_when_null} WHEN {value_expr} THEN 'true' ELSE 'false' END")
                 }
             }
             Self::File { label_expr, file_expr, .. } => 
@@ -1034,8 +1034,8 @@ impl QueryBuilder {
                         schema_row_ord: format!("{datasource_alias}_OID"),
                         column_oid: column_metadata.oid
                     },
-                    column_type::Primitive::Text
-                    | column_type::Primitive::JSON => QueryBuilderColumn::Primitive { 
+                    column_type::Primitive::PlainText
+                    | column_type::Primitive::JsonText => QueryBuilderColumn::Primitive { 
                         label_expr: format!("{primitive_value_alias}"),
                         value_expr: primitive_value_alias,
                         primitive_type: prim, 
@@ -1046,7 +1046,7 @@ impl QueryBuilder {
                     },
                     column_type::Primitive::Integer
                     | column_type::Primitive::Number 
-                    | column_type::Primitive::Checkbox => QueryBuilderColumn::Primitive { 
+                    | column_type::Primitive::Boolean => QueryBuilderColumn::Primitive { 
                         label_expr: format!("CAST({primitive_value_alias} AS TEXT)"),
                         value_expr: primitive_value_alias,
                         primitive_type: prim, 
@@ -1343,11 +1343,11 @@ impl QueryBuilder {
                     } => ScalarExpression {
                         arg_expr: value_expr.clone(),
                         arg_return_type: match primitive_type {
-                            column_type::Primitive::Text => ScalarType::Text,
-                            column_type::Primitive::JSON => ScalarType::JSON,
+                            column_type::Primitive::PlainText => ScalarType::Text,
+                            column_type::Primitive::JsonText => ScalarType::JSON,
                             column_type::Primitive::Integer => ScalarType::Integer,
                             column_type::Primitive::Number => ScalarType::Number,
-                            column_type::Primitive::Checkbox => ScalarType::Boolean,
+                            column_type::Primitive::Boolean => ScalarType::Boolean,
                             column_type::Primitive::Date => ScalarType::Date,
                             column_type::Primitive::Datetime => ScalarType::Datetime,
                             column_type::Primitive::File | column_type::Primitive::Image => {

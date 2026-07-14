@@ -6,45 +6,51 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Primitive {
-    Text,
+    PlainText,
     Integer,
     Number,
-    Checkbox,
+    Boolean,
     Date,
     Datetime,
     File,
     Image,
-    JSON,
+    JsonText,
+    MarkdownText,
+    XmlText
 }
 
 impl Primitive {
     /// Gets the OID of the primitive type.
     fn get_oid(&self) -> i64 {
         match self {
-            Self::Text => -1,
+            Self::PlainText => -1,
             Self::Integer => -2,
             Self::Number => -3,
-            Self::Checkbox => -4,
+            Self::Boolean => -4,
             Self::Date => -5,
             Self::Datetime => -6,
             Self::File => -7,
             Self::Image => -8,
-            Self::JSON => -9,
+            Self::JsonText => -9,
+            Self::MarkdownText => -10,
+            Self::XmlText => -11
         }
     }
 
     /// Returns a static str representing the column type.
     pub fn to_str(&self) -> &'static str {
         match self {
-            Self::Checkbox => "Checkbox",
+            Self::Boolean => "Boolean",
             Self::Date => "Date",
             Self::Datetime => "Datetime",
             Self::File => "File",
             Self::Image => "Image",
             Self::Integer => "Integer",
-            Self::JSON => "JSON",
+            Self::JsonText => "TextJson",
             Self::Number => "Number",
-            Self::Text => "Text",
+            Self::PlainText => "TextPlain",
+            Self::MarkdownText => "TextMarkdown",
+            Self::XmlText => "TextXml"
         }
     }
 }
@@ -161,7 +167,7 @@ impl ColumnType {
                 } else if mode == "number" {
                     Ok(Self::Primitive(Primitive::Number))
                 } else if mode == "checkbox" {
-                    Ok(Self::Primitive(Primitive::Checkbox))
+                    Ok(Self::Primitive(Primitive::Boolean))
                 } else if mode == "date" {
                     Ok(Self::Primitive(Primitive::Date))
                 } else if mode == "datetime" {
@@ -171,9 +177,9 @@ impl ColumnType {
                 } else if mode == "image" {
                     Ok(Self::Primitive(Primitive::Image))
                 } else if mode == "JSON" {
-                    Ok(Self::Primitive(Primitive::JSON))
+                    Ok(Self::Primitive(Primitive::JsonText))
                 } else {
-                    Ok(Self::Primitive(Primitive::Text))
+                    Ok(Self::Primitive(Primitive::PlainText))
                 }
             },
         )?)

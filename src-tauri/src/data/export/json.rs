@@ -109,13 +109,13 @@ fn construct_row_object(
                                 None => Value::Null,
                             }
                         }
-                        column_type::Primitive::Text => {
+                        column_type::Primitive::PlainText => {
                             match row.get::<&str, Option<String>>(&value_ord)? {
                                 Some(value) => json!(value),
                                 None => Value::Null,
                             }
                         }
-                        column_type::Primitive::JSON => {
+                        column_type::Primitive::JsonText => {
                             match row.get::<&str, Option<String>>(&value_ord)? {
                                 Some(value) => {
                                     todo!("Parse the JSON string into a Value")
@@ -131,7 +131,7 @@ fn construct_row_object(
                                 None => Value::Null,
                             }
                         }
-                        column_type::Primitive::Checkbox => {
+                        column_type::Primitive::Boolean => {
                             match row.get::<&str, Option<bool>>(&value_ord)? {
                                 Some(value) => json!(value),
                                 None => Value::Null,

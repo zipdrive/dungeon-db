@@ -61,10 +61,9 @@ pub enum Formula {
         format_params: Vec<Formula>,
     },
 
-    Slice {
+    Index {
         collection: Box<Formula>,
-        start: i64,
-        length: i64,
+        index: Box<Formula>
     },
 
     Wrap(Box<Formula>),
