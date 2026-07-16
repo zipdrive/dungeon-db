@@ -7,6 +7,14 @@ use std::collections::{HashMap, HashSet};
 use regex::Regex;
 
 
+/// Encodes a string to make it safe for inserting into a JSON string inside an SQL statement.
+fn json_encode_string(str: &String) -> String {
+    str.replace("'", "''")
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+}
+
+
 
 #[derive(Clone)]
 struct DatasourceCteColumn {
@@ -357,7 +365,7 @@ impl SelectParameterType {
     }
 
 
-    /// Constructs an expression for a label.
+    /// Constructs an expression for a value's label.
     /// This should be used in cases where an operation combines two or more values, and not in cases where a value is selected from a list.
     fn construct_plain_label_expr(&self, value_expr: &String) -> String {
         // Check if pure file
@@ -389,6 +397,8 @@ impl SelectParameterType {
         return format!("CAST({value_expr} AS TEXT)");
     }
 
+    /// Constructs an expression for a value's label.
+    /// This should be used in cases where an operation combines two or more values, and not in cases where a value is selected from a list.
     fn construct_json_label_expr(&self, value_expr: &String) -> String {
         // Check if pure file
         if self.is_file_type() && !self.is_text_type() && !self.is_numeric_type() {
@@ -397,7 +407,11 @@ impl SelectParameterType {
 
         // Check if pure text
         if self.is_text_type() && !self.is_file_type() && !self.is_numeric_type() {
-            return format!("'\"' || REPLACE(REPLACE({value_expr}, '\\', '\\\\'), '\"', '\\\"') || '\"'");
+            if self.primitive_types.contains(&column_type::Primitive::JsonText) && !self.primitive_types.contains(&column_type::Primitive::PlainText) {
+                return value_expr.clone();
+            } else {
+                return format!("'\"' || REPLACE(REPLACE({value_expr}, '\\', '\\\\'), '\"', '\\\"') || '\"'");
+            }
         }
         
         // Check if pure number
@@ -442,8 +456,10 @@ impl SelectParameterType {
 }
 
 struct SelectParameter {
-    label_expr_norecursion: String,
-    label_expr_recursion: String,
+    plain_label_expr_norecursion: String,
+    plain_label_expr_recursion: String,
+    json_label_expr_norecursion: String,
+    json_label_expr_recursion: String,
     value_expr_norecursion: String,
     value_expr_recursion: String,
     cell_expr_norecursion: String,
@@ -454,10 +470,12 @@ struct SelectParameter {
 
 impl SelectParameter {
     /// Constructs a new scalar parameter with no recursion.
-    fn new_norecursion(label_expr: String, value_expr: String, cell_expr: String, scalar_type: SelectParameterType, context: SelectParameterContext) -> Self {
+    fn new_norecursion(plain_label_expr: String, json_label_expr: String, value_expr: String, cell_expr: String, scalar_type: SelectParameterType, context: SelectParameterContext) -> Self {
         Self {
-            label_expr_norecursion: label_expr.clone(),
-            label_expr_recursion: label_expr,
+            plain_label_expr_norecursion: plain_label_expr.clone(),
+            plain_label_expr_recursion: plain_label_expr,
+            json_label_expr_norecursion: json_label_expr.clone(),
+            json_label_expr_recursion: json_label_expr,
             value_expr_norecursion: value_expr.clone(),
             value_expr_recursion: value_expr,
             cell_expr_norecursion: cell_expr.clone(),
@@ -858,9 +876,15 @@ impl SelectConstructorType {
     }
 }
 
+
+#[derive(Clone)]
 struct SelectDatasource {
     /// The datasource being selected from.
     datasource: Datasource,
+
+    /// Replaces the root datasource with the given OID by the provided datasource. 
+    /// Used if a formula uses another formula as a parameter, etc.
+    replace_root: Option<i64>,
 
     /// The alias of the CTE being pulled from.
     /// Recursive if not "w".
@@ -869,17 +893,19 @@ struct SelectDatasource {
 
 impl SelectDatasource {
     /// Constructs a new non-recursive datasource.
-    fn new_norecursion(datasource: Datasource) -> Self {
+    fn new_norecursion(datasource: Datasource, replace_root: Option<i64>) -> Self {
         Self {
             datasource,
+            replace_root,
             alias: String::from("w")
         }
     }
 
     /// Constructs a new recursive datasource.
-    fn new_recursion(datasource: Datasource, alias: String) -> Self {
+    fn new_recursion(datasource: Datasource, replace_root: Option<i64>, alias: String) -> Self {
         Self {
             datasource,
+            replace_root,
             alias 
         }
     }
@@ -892,6 +918,11 @@ impl SelectDatasource {
     /// Constructs an expression to get the OID of the datasource.
     fn get_oid_expr(&self) -> String {
         format!("{}.{}_OID", self.alias, self.datasource.get_alias())
+    }
+
+    /// Constructs an expression to get the table OID (accounting for inheritance) of the datasource.
+    fn get_schema_expr(&self) -> String {
+        format!("{}.{}_SCHEMA", self.alias, self.datasource.get_alias())
     }
 }
 
@@ -939,15 +970,17 @@ impl SelectConstructor {
         for row_result in trans.prepare("SELECT COLUMN_OID, ORDERING, IS_REQUIRED FROM METADATA_SCHEMA_COLUMN_VIEW WHERE SCHEMA_OID = ?1 AND IS_PRIMARY_KEY ORDER BY IS_SUBREPORT ASC")?.query_map(params![schema_oid], |row| Ok((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, i64>("ORDERING")?, row.get::<_, bool>("IS_REQUIRED")?)))? {
             let (column_oid, ordering, is_required) = row_result?;
             let column: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
+            let json_safe_column_name: String = column.name.replace("'", "''").replace("\\", "\\\\").replace("\"", "\\\"");
             match &root_datasource {
                 Some(root_datasource) => {
-                    let param = select_constructor.add_parameter(trans, root_datasource.clone(), column, SelectParameterContext::Scalar)?;
+                    let root_datasource: SelectDatasource = SelectDatasource::new_norecursion(root_datasource.clone(), None);
+                    let param = select_constructor.add_parameter(trans, root_datasource, column, SelectParameterContext::Scalar)?;
                     if let SelectConstructorType::SelectLabelConstructor { columns, .. } = &mut select_constructor.constructor_type {
                         columns.push(SelectLabelColumn { 
-                            plain_expr_norecursion: param.label_expr_norecursion, 
-                            plain_expr_recursion: param.label_expr_recursion, 
-                            json_expr_norecursion: param.scalar_type.construct_json_label_expr(&param.value_expr_norecursion), 
-                            json_expr_recursion: param.scalar_type.construct_json_label_expr(&param.value_expr_recursion), 
+                            plain_expr_norecursion: param.plain_label_expr_norecursion, 
+                            plain_expr_recursion: param.plain_label_expr_recursion, 
+                            json_expr_norecursion: format!("'\"{json_safe_column_name}\": ' || {}", param.json_label_expr_norecursion), 
+                            json_expr_recursion: format!("'\"{json_safe_column_name}\": ' || {}", param.json_label_expr_recursion), 
                             ordering, 
                             is_required
                         });
@@ -1061,85 +1094,127 @@ impl SelectConstructor {
             }
         }
         
+        let cell_expr: String = format!(
+            "('{}:{}:' || CAST({} AS TEXT))",
+            column.schema.oid,
+            column.oid,
+            datasource.get_oid_expr()
+        );
+        
         match column.column_type {
             column_type::ColumnType::Primitive(prim) => {
-                if let Some(cte) = self.cte_datasource.get_mut(&datasource.get_alias()) {
+                if let Some(cte) = self.cte_datasource.get_mut(&datasource.datasource.get_alias()) {
                     let cte_column = cte.add_primitive_column(column.oid, prim.clone());
                     let scalar_type = SelectParameterType::from(prim);
                     
                     let value_expr: String = format!("w.{}", cte_column.value_ord);
-                    let label_expr: String = scalar_type.construct_plain_label_expr(&cte_column.value_ord);
-                    let cell_expr: String = format!(
-                        "('{}:{}:' || CAST({} AS TEXT))",
-                        column.schema.oid,
-                        column.oid,
-                        datasource.get_oid_expr()
-                    );
+                    let plain_label_expr: String = scalar_type.construct_plain_label_expr(&value_expr);
+                    let json_label_expr: String = scalar_type.construct_json_label_expr(&value_expr);
                     
                     return Ok(SelectParameter::new_norecursion(label_expr, value_expr, cell_expr, scalar_type, context));
                 }
             }
             column_type::ColumnType::Object { table_oid, .. } => {
-                if let Some(cte) = self.cte_datasource.get_mut(&datasource.get_alias()) {
+                if let Some(cte) = self.cte_datasource.get_mut(&datasource.datasource.get_alias()) {
                     let cte_column = cte.add_object_column(column.oid, table_oid);
+
+                    let value_expr: String = format!("w.{}", cte_column.value_ord);
+                    match &mut self.constructor_type {
+                        SelectConstructorType::SelectMainConstructor { .. } => {
+                            // If constructing the main view, select label from the LABEL view
+                            let label_expr: String = format!("(SELECT l.OBJECT_LABEL FROM SCHEMA{table_oid}_LABEL l WHERE l.OID = {value_expr})");
+                            return Ok(SelectParameter::new_norecursion(String::from("NULL"), label_expr, value_expr, cell_expr, SelectParameterType::new(), context));
+                        }
+                        SelectConstructorType::SelectLabelConstructor { recursions, .. } => {
+                            // First, check if the Object label is recursive
+                            
+
+                        }
+                    }
+                }
+            }
+            column_type::ColumnType::Select { table_oid, .. } => {
+                if let Some(cte) = self.cte_datasource.get_mut(&datasource.datasource.get_alias()) {
+                    let cte_column = cte.add_select_column(column.oid, table_oid);
 
                     let value_expr: String = format!("w.{}", cte_column.value_ord);
                     let cell_expr: String = format!(
                         "('{}:{}:' || CAST(w.{}_OID AS TEXT))",
                         column.schema.oid,
                         column.oid,
-                        datasource.get_alias()
+                        datasource.datasource.get_alias()
                     );
                     match &mut self.constructor_type {
                         SelectConstructorType::SelectMainConstructor { .. } => {
-                            let label_expr: String = format!("(SELECT l.OBJECT_LABEL FROM SCHEMA{table_oid}_LABEL l WHERE l.OID = {value_expr})");
+                            let label_expr: String = format!("(SELECT COALESCE(l.PLAIN_LABEL, l.JSON_LABEL) FROM SCHEMA{table_oid}_LABEL l WHERE l.OID = {value_expr})");
                             return Ok(SelectParameter::new_norecursion(label_expr, value_expr, cell_expr, SelectParameterType::new(), context));
                         }
                         SelectConstructorType::SelectLabelConstructor { recursions, .. } => {
                             // First, ensure that the Object label does not cause recursion
-                            for looped_datasource in datasource.linearize() {
+                            for looped_datasource in datasource.datasource.linearize() {
                                 let looped_datasource_schema_oid: i64 = looped_datasource.get_schema_oid()?;
                                 if looped_datasource_schema_oid == table_oid {
-                                    recursions.push((value_expr.clone(), format!("{}_COLUMN{}.{}_OID", datasource.get_alias(), column.oid, looped_datasource.get_alias())));
+                                    // If it does cause recursion, note where the recursion occurred and construct recursive expression
+                                    let recursive_datasource: SelectDatasource = SelectDatasource::new_recursion(
+                                        looped_datasource, 
+                                        match Datasource::get_default_datasource_transact(trans, table_oid)? {
+                                            Some(Datasource::Table { oid, .. }) => Some(oid),
+                                            _ => None
+                                        }, 
+                                        datasource.datasource.get_alias()
+                                    );
+                                    recursions.push((value_expr.clone(), recursive_datasource.get_oid_expr()));
 
-                                    // Construct recursive Object label for table with OID {table_oid}
-                                    let mut object_columns: Vec<SelectLabelColumn> = Vec::new();
+                                    // Construct recursive Plain/JSON label for table with OID {table_oid}
+                                    let mut select_columns: Vec<SelectLabelColumn> = Vec::new();
                                     for row_result in trans.prepare("SELECT COLUMN_OID, ORDERING, IS_REQUIRED FROM METADATA_SCHEMA_COLUMN_VIEW WHERE SCHEMA_OID = ?1 AND IS_PRIMARY_KEY ORDER BY IS_SUBREPORT ASC")?.query_map(params![table_oid], |row| Ok((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, i64>("ORDERING")?, row.get::<_, bool>("IS_REQUIRED")?)))? {
                                         let (column_oid, ordering, is_required) = row_result?;
                                         let column: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
                                         
-                                        let param = self.add_parameter(trans, datasource.clone(), column, SelectParameterContext::Scalar)?;
-                                        object_columns.push(SelectLabelColumn { 
-                                            plain_expr_norecursion: param.label_expr_norecursion, 
-                                            plain_expr_recursion: param.label_expr_recursion, 
+                                        let param = self.add_parameter(trans, recursive_datasource.clone(), column, SelectParameterContext::Scalar)?;
+                                        select_columns.push(SelectLabelColumn { 
+                                            plain_expr_norecursion: param.plain_label_expr_norecursion, 
+                                            plain_expr_recursion: param.plain_label_expr_recursion, 
                                             json_expr_norecursion: param.scalar_type.construct_json_label_expr(&param.value_expr_norecursion), 
                                             json_expr_recursion: param.scalar_type.construct_json_label_expr(&param.value_expr_recursion), 
                                             ordering, 
                                             is_required
                                         });
                                     }
-                                    return SelectParameter {
-                                        label_expr_norecursion: format!(
-                                            "IF({value_expr} IS NOT NULL, '{{}}', NULL)"
-                                        ),
-                                        label_expr_recursion: format!(
-                                            "'{{ \"' || (SELECT REPLACE(REPLACE(s.NAME, '\\', '\\\\'), '\"', '\\\"') FROM METADATA_SCHEMA s WHERE s.OID = {}) || '\": ' || COALESCE(GROUP_CONCAT(({}), ', '), '{{ }}') || ' }}'",
-
-                                            // The OID of the schema
-                                            // If the schema is a table, this is the inheritor schema OID
-                                            // If the schema is a report, this is the report's schema OID
-                                            schema_oid,
-
+                                    return Ok(SelectParameter {
+                                        plain_label_expr_norecursion: if select_columns.len() == 1 {
+                                            format!(
+                                                "IF({value_expr} IS NOT NULL, '...', NULL)"
+                                            )
+                                        } else {
+                                            format!(
+                                                "IF({value_expr} IS NOT NULL, '{{}}', NULL)"
+                                            )
+                                        },
+                                        plain_label_expr_recursion: if select_columns.len() == 1 {
                                             // The key columns of the schema
-                                            object_columns.iter()
-                                                .map(|col| format!("SELECT {}", col.json_expr_recursion))
-                                                .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
+                                            select_columns.iter()
+                                                .map(|col| format!("COALESCE({}, '{{ ' || {} || ' }}')", col.plain_expr_recursion, col.json_expr_recursion))
+                                                .next()
                                                 .unwrap()
-                                        )
+                                        } else {
+                                            format!(
+                                                "'{{ ' || GROUP_CONCAT(({}), ', ') || ' }}'",
+
+                                                // The key columns of the schema
+                                                select_columns.iter()
+                                                    .map(|col| format!("SELECT {}", col.json_expr_recursion))
+                                                    .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
+                                                    .unwrap()
+                                            )
+                                        },
                                         value_expr_norecursion: value_expr.clone(),
                                         value_expr_recursion: value_expr,
-
-                                    };
+                                        cell_expr_norecursion: cell_expr.clone(),
+                                        cell_expr_recursion: cell_expr,
+                                        scalar_type: SelectParameterType::new(),
+                                        context
+                                    });
                                 }
                             }
                             // Construct non-recursive Object label for table with OID {table_oid}
@@ -1150,19 +1225,59 @@ impl SelectConstructor {
                                 
                                 let param = self.add_parameter(trans, datasource.clone(), column, SelectParameterContext::Scalar)?;
                                 object_columns.push(SelectLabelColumn { 
-                                    plain_expr_norecursion: param.label_expr_norecursion, 
-                                    plain_expr_recursion: param.label_expr_recursion, 
+                                    plain_expr_norecursion: param.plain_label_expr_norecursion, 
+                                    plain_expr_recursion: param.plain_label_expr_recursion, 
                                     json_expr_norecursion: param.scalar_type.construct_json_label_expr(&param.value_expr_norecursion), 
                                     json_expr_recursion: param.scalar_type.construct_json_label_expr(&param.value_expr_recursion), 
                                     ordering, 
                                     is_required
                                 });
-                            }                            
+                            }
+                            return Ok(SelectParameter { 
+                                plain_label_expr_norecursion: if select_columns.len() == 1 {
+                                    // The key columns of the schema
+                                    select_columns.iter()
+                                        .map(|col| format!("COALESCE({}, '{{ ' || {} || ' }}')", col.plain_expr_norecursion, col.json_expr_norecursion))
+                                        .next()
+                                        .unwrap()
+                                } else {
+                                    format!(
+                                        "'{{ ' || GROUP_CONCAT(({}), ', ') || ' }}'",
+
+                                        // The key columns of the schema
+                                        select_columns.iter()
+                                            .map(|col| format!("SELECT {}", col.json_expr_norecursion))
+                                            .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
+                                            .unwrap()
+                                    )
+                                }, 
+                                plain_label_expr_recursion: if select_columns.len() == 1 {
+                                    // The key columns of the schema
+                                    select_columns.iter()
+                                        .map(|col| format!("COALESCE({}, '{{ ' || {} || ' }}')", col.plain_expr_recursion, col.json_expr_recursion))
+                                        .next()
+                                        .unwrap()
+                                } else {
+                                    format!(
+                                        "'{{ ' || GROUP_CONCAT(({}), ', ') || ' }}'",
+
+                                        // The key columns of the schema
+                                        select_columns.iter()
+                                            .map(|col| format!("SELECT {}", col.json_expr_recursion))
+                                            .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
+                                            .unwrap()
+                                    )
+                                }, 
+                                value_expr_norecursion: value_expr.clone(), 
+                                value_expr_recursion: value_expr, 
+                                cell_expr_norecursion: cell_expr.clone(), 
+                                cell_expr_recursion: cell_expr, 
+                                scalar_type: SelectParameterType::new(),
+                                context 
+                            });                  
                         }
                     }
                 }
-            }
-            column_type::ColumnType::Select { table_oid, .. } => {
                 if let Some(cte) = self.cte_datasource.get_mut(&datasource.get_alias()) {
                     let cte_column = cte.add_select_column(column.oid, table_oid);
 
@@ -1282,13 +1397,492 @@ impl SelectConstructor {
         return Err(Error::AdhocError("Unable to add parameter."));
     }
 
+
+    /// Constructs a label for an Object column.
+    /// The first item of the returned tuple is the non-recursive plain label. (Always NULL, since the label for an Object is always JSON.)
+    /// The second item of the returned tuple is the recursive plain label. (Always NULL, since the label for an Object is always JSON.)
+    /// The third item of the returned tuple is the non-recursive JSON label.
+    /// The fourth item of the returned tuple is the recursive JSON label.
+    fn construct_object_label(&mut self, trans: &Transaction, datasource: SelectDatasource, object_column_oid: i64, object_table_oid: i64, value_expr: &String, is_collection: bool) -> Result<(String, String, String, String), Error> {
+        match &mut self.constructor_type {
+            SelectConstructorType::SelectMainConstructor { .. } => {
+                // MAIN views are allowed to select the label from the LABEL view
+                return Ok((
+                    String::from("NULL"),
+                    String::from("NULL"),
+                    format!("(SELECT l.OBJECT_LABEL FROM SCHEMA{object_table_oid}_LABEL l WHERE l.OID = {value_expr})"),
+                    format!("(SELECT l.OBJECT_LABEL FROM SCHEMA{object_table_oid}_LABEL l WHERE l.OID = {value_expr})")
+                ));
+            }
+
+            SelectConstructorType::SelectLabelConstructor { recursions, .. } => {
+                //
+                // First, we need to check if the label for this Object column would induce recursion
+                // We do this by checking each parent datasource to see if it has the same table_oid as the table the Object column points to
+                //
+                
+                for looped_datasource in datasource.datasource.linearize() {
+                    let looped_datasource_schema_oid: i64 = looped_datasource.get_schema_oid()?;
+                    if looped_datasource_schema_oid == object_table_oid {
+                        //
+                        // This meets the condition set above, so we have confirmed the Object column induces recursion in the label
+                        // 
+
+                        // First, we note where the recursion occurred, and where it should loop backwards to
+                        let recursive_datasource: SelectDatasource = SelectDatasource::new_recursion(
+                            looped_datasource, 
+                            match Datasource::get_default_datasource_transact(trans, object_table_oid)? {
+                                Some(Datasource::Table { oid, .. }) => Some(oid),
+                                _ => None
+                            }, 
+                            datasource.datasource.get_alias()
+                        );
+                        recursions.push((value_expr.clone(), recursive_datasource.get_oid_expr()));
+                        
+                        // Add datasource for each inheritor table
+                        for row_result in trans.prepare("SELECT INHERITOR_DATASOURCE_PATH FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW WHERE MASTER_SCHEMA_OID = ?1")?.query_map(params![object_table_oid], |row| row.get("INHERITOR_DATASOURCE_PATH"))? {
+                            let inheritor_datasource_path: String = row_result?;
+                            self.add_datasource(
+                                recursive_datasource.datasource.append_path(inheritor_datasource_path)?, 
+                                is_collection
+                            );
+                        }
+
+                        // Construct labels for each key column on table referenced by Object, including non-required columns
+                        let mut key_columns: Vec<(String, SelectParameter, i64)> = Vec::new();
+                        for row_result in trans.prepare("SELECT COLUMN_OID, ORDERING, IS_REQUIRED FROM METADATA_SCHEMA_COLUMN_VIEW WHERE SCHEMA_OID = ?1 AND IS_PRIMARY_KEY ORDER BY IS_SUBREPORT ASC")?.query_map(params![object_table_oid], |row| Ok((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, i64>("ORDERING")?, row.get::<_, bool>("IS_REQUIRED")?)))? {
+                            let (column_oid, ordering, is_required) = row_result?;
+                            let column: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
+                            let json_safe_column_name: String = json_encode_string(&column.name);
+                            
+                            let param = self.add_parameter(trans, recursive_datasource.clone(), column, SelectParameterContext::Scalar)?;
+                            key_columns.push((json_safe_column_name, param, ordering));
+                        }
+                        key_columns.sort_by_key(|(_, _, ordering)| ordering);
+
+                        // Construct the Object label
+                        return Ok((
+                            String::from("NULL"),
+                            String::from("NULL"),
+                            
+                            // Non-recursive JSON label
+                            format!(
+                                "IF({value_expr} IS NOT NULL, '{{ }}', NULL)"
+                            ),
+
+                            // Recursive JSON label
+                            format!(
+                                "
+                                ('{{ \"' 
+                                    || (SELECT REPLACE(REPLACE(s.NAME, '\\', '\\\\'), '\"', '\\\"') FROM METADATA_SCHEMA s WHERE s.OID = {}) 
+                                    || '\": ' 
+                                    || COALESCE(GROUP_CONCAT(({}), ', '), '{{ }}') 
+                                    || ' }}')
+                                ",
+
+                                // The OID of the schema
+                                recursive_datasource.get_schema_expr(),
+
+                                // The key columns of the schema
+                                key_columns.iter()
+                                    .map(|col| format!("SELECT {}", col.json_expr_recursion))
+                                    .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
+                                    .unwrap()
+                            )
+                        ));
+                    }
+                }
+
+                //
+                // We have now confirmed that the Object column does not induce recursion.
+                // To construct the label for the Object column, we follow a similar procedure to the above
+                // 
+
+                let object_datasource = SelectDatasource {
+                    datasource: datasource.datasource.append_path(format!("_COLUMN{object_column_oid}"))?,
+                    replace_root: match Datasource::get_default_datasource_transact(trans, object_table_oid)? {
+                        Some(Datasource::Table { oid, .. }) => Some(oid),
+                        _ => None
+                    },
+                    alias: datasource.alias 
+                };
+
+                // Add datasource for each inheritor table
+                for row_result in trans.prepare("SELECT INHERITOR_DATASOURCE_PATH FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW WHERE MASTER_SCHEMA_OID = ?1")?.query_map(params![object_table_oid], |row| row.get("INHERITOR_DATASOURCE_PATH"))? {
+                    let inheritor_datasource_path: String = row_result?;
+                    self.add_datasource(
+                        datasource.datasource.append_path(inheritor_datasource_path)?, 
+                        is_collection
+                    );
+                }
+
+                // Construct labels for each key column on table referenced by Object, including non-required columns
+                let mut key_columns: Vec<SelectLabelColumn> = Vec::new();
+                for row_result in trans.prepare("SELECT COLUMN_OID, ORDERING, IS_REQUIRED FROM METADATA_SCHEMA_COLUMN_VIEW WHERE SCHEMA_OID = ?1 AND IS_PRIMARY_KEY ORDER BY IS_SUBREPORT ASC")?.query_map(params![object_table_oid], |row| Ok((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, i64>("ORDERING")?, row.get::<_, bool>("IS_REQUIRED")?)))? {
+                    let (column_oid, ordering, is_required) = row_result?;
+                    let column: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
+                    let json_safe_column_name: String = json_encode_string(&column.name);
+                    
+                    let param = self.add_parameter(trans, object_datasource.clone(), column, SelectParameterContext::Scalar)?;
+                    key_columns.push(SelectLabelColumn { 
+                        plain_expr_norecursion: param.plain_label_expr_norecursion, 
+                        plain_expr_recursion: param.plain_label_expr_recursion, 
+                        json_expr_norecursion: format!("('\"{json_safe_column_name}\": ' || {})", param.json_label_expr_norecursion), 
+                        json_expr_recursion: format!("('\"{json_safe_column_name}\": ' || {})", param.json_label_expr_recursion), 
+                        ordering, 
+                        is_required
+                    });
+                }
+                key_columns.sort_by_key(|col| col.ordering);
+
+                // Construct the Object label
+                return Ok((
+                    String::from("NULL"),
+                    String::from("NULL"),
+                    
+                    // Non-recursive JSON label
+                    if key_columns.len() == 1 {
+                        format!(
+                            "
+                            ('{{ \"' 
+                                || (
+                                    SELECT 
+                                        REPLACE(REPLACE(s.NAME, '\\', '\\\\'), '\"', '\\\"') 
+                                    FROM METADATA_SCHEMA s 
+                                    WHERE s.OID = {}
+                                    )
+                                || '\": ' 
+                                || COALESCE({}, 'null') 
+                                || ' }}')
+                            ",
+
+                            // The OID of the schema
+                            object_datasource.get_schema_expr(),
+
+                            // The key columns of the schema
+                            key_columns.iter()
+                                .map(|col| format!("SELECT {}", col.json_expr_recursion))
+                                .next()
+                                .unwrap()
+                        )
+                    } else {
+                        format!(
+                            "
+                            ('{{ \"' 
+                                || (
+                                    SELECT 
+                                        REPLACE(REPLACE(s.NAME, '\\', '\\\\'), '\"', '\\\"') 
+                                    FROM METADATA_SCHEMA s 
+                                    WHERE s.OID = {}
+                                    ) 
+                                || '\": {{ ' 
+                                || COALESCE(GROUP_CONCAT(({}), ', ') || ' ', '') 
+                                || '}} }}')
+                            ",
+
+                            // The OID of the schema
+                            object_datasource.get_schema_expr(),
+
+                            // The key columns of the schema
+                            key_columns.iter()
+                                .map(|col| format!("SELECT {}", col.json_expr_recursion))
+                                .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
+                                .unwrap()
+                        )
+                    },
+
+                    // Recursive JSON label
+                    if key_columns.len() == 1 {
+                        format!(
+                            "
+                            ('{{ \"' 
+                                || (
+                                    SELECT 
+                                        REPLACE(REPLACE(s.NAME, '\\', '\\\\'), '\"', '\\\"') 
+                                    FROM METADATA_SCHEMA s 
+                                    WHERE s.OID = {}
+                                    ) 
+                                || '\": ' 
+                                || COALESCE({}, '{{ }}') 
+                                || ' }}')
+                            ",
+
+                            // The OID of the schema
+                            object_datasource.get_schema_expr(),
+
+                            // The key columns of the schema
+                            key_columns.iter()
+                                .map(|col| format!("SELECT {}", col.json_expr_recursion))
+                                .next()
+                                .unwrap()
+                        )
+                    } else {
+                        format!(
+                            "
+                            ('{{ \"' 
+                                || (
+                                    SELECT 
+                                        REPLACE(REPLACE(s.NAME, '\\', '\\\\'), '\"', '\\\"') 
+                                    FROM METADATA_SCHEMA s 
+                                    WHERE s.OID = {}
+                                    ) 
+                                || '\": {{ ' 
+                                || COALESCE(GROUP_CONCAT(({}), ', ') || ' ', '') 
+                                || '}} }}')
+                            ",
+
+                            // The OID of the schema
+                            object_datasource.get_schema_expr(),
+
+                            // The key columns of the schema
+                            key_columns.iter()
+                                .map(|col| format!("SELECT {}", col.json_expr_recursion))
+                                .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
+                                .unwrap()
+                        )
+                    }
+                ));
+            }
+        }
+    }
+
+    /// Constructs a label for a non-Object column.
+    /// The first item of the returned tuple is the non-recursive plain label.
+    /// The second item of the returned tuple is the recursive plain label.
+    /// The third item of the returned tuple is the non-recursive JSON label.
+    /// The fourth item of the returned tuple is the recursive JSON label.
+    fn construct_flat_label(&mut self, trans: &Transaction, datasource: SelectDatasource, object_column_oid: i64, object_table_oid: i64, value_expr: &String, is_collection: bool) -> Result<(String, String, String, String), Error> {
+        match &mut self.constructor_type {
+            SelectConstructorType::SelectMainConstructor { .. } => {
+                // MAIN views are allowed to select the label from the LABEL view
+                return Ok((
+                    format!("(SELECT l.PLAIN_LABEL FROM SCHEMA{object_table_oid}_LABEL l WHERE l.OID = {value_expr})"),
+                    format!("(SELECT l.PLAIN_LABEL FROM SCHEMA{object_table_oid}_LABEL l WHERE l.OID = {value_expr})"),
+                    format!("(SELECT l.JSON_LABEL FROM SCHEMA{object_table_oid}_LABEL l WHERE l.OID = {value_expr})"),
+                    format!("(SELECT l.JSON_LABEL FROM SCHEMA{object_table_oid}_LABEL l WHERE l.OID = {value_expr})")
+                ));
+            }
+
+            SelectConstructorType::SelectLabelConstructor { recursions, .. } => {
+                //
+                // First, we need to check if the label for this Object column would induce recursion
+                // We do this by checking each parent datasource to see if it has the same table_oid as the table the Object column points to
+                //
+                
+                for looped_datasource in datasource.datasource.linearize() {
+                    let looped_datasource_schema_oid: i64 = looped_datasource.get_schema_oid()?;
+                    if looped_datasource_schema_oid == object_table_oid {
+                        //
+                        // This meets the condition set above, so we have confirmed the Object column induces recursion in the label
+                        // 
+
+                        // First, we note where the recursion occurred, and where it should loop backwards to
+                        let recursive_datasource: SelectDatasource = SelectDatasource::new_recursion(
+                            looped_datasource, 
+                            match Datasource::get_default_datasource_transact(trans, object_table_oid)? {
+                                Some(Datasource::Table { oid, .. }) => Some(oid),
+                                _ => None
+                            }, 
+                            datasource.datasource.get_alias()
+                        );
+                        recursions.push((value_expr.clone(), recursive_datasource.get_oid_expr()));
+
+                        // Construct labels for each key column on table referenced, excluding non-required columns
+                        let mut key_columns: Vec<SelectLabelColumn> = Vec::new();
+                        for row_result in trans.prepare("SELECT COLUMN_OID, ORDERING FROM METADATA_SCHEMA_COLUMN_VIEW WHERE SCHEMA_OID = ?1 AND IS_PRIMARY_KEY AND IS_REQUIRED ORDER BY IS_SUBREPORT ASC")?.query_map(params![object_table_oid], |row| Ok((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, i64>("ORDERING")?)))? {
+                            let (column_oid, ordering) = row_result?;
+                            let column: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
+                            let json_safe_column_name: String = json_encode_string(&column.name);
+                            
+                            let param = self.add_parameter(trans, recursive_datasource.clone(), column, SelectParameterContext::Scalar)?;
+                            key_columns.push(SelectLabelColumn { 
+                                plain_expr_norecursion: param.plain_label_expr_norecursion, 
+                                plain_expr_recursion: param.plain_label_expr_recursion, 
+                                json_expr_norecursion: format!("('\"{json_safe_column_name}\": ' || {})", param.json_label_expr_norecursion), 
+                                json_expr_recursion: format!("('\"{json_safe_column_name}\": ' || {})", param.json_label_expr_recursion), 
+                                ordering, 
+                                true
+                            });
+                        }
+                        key_columns.sort_by_key(|col| col.ordering);
+
+                        // Construct the Object label
+                        return Ok((
+                            String::from("NULL"),
+                            String::from("NULL"),
+                            
+                            // Non-recursive JSON label
+                            format!(
+                                "IF({value_expr} IS NOT NULL, '{{ }}', NULL)"
+                            ),
+
+                            // Recursive JSON label
+                            format!(
+                                "
+                                ('{{ \"' 
+                                    || (SELECT REPLACE(REPLACE(s.NAME, '\\', '\\\\'), '\"', '\\\"') FROM METADATA_SCHEMA s WHERE s.OID = {}) 
+                                    || '\": ' 
+                                    || COALESCE(GROUP_CONCAT(({}), ', '), '{{ }}') 
+                                    || ' }}')
+                                ",
+
+                                // The OID of the schema
+                                recursive_datasource.get_schema_expr(),
+
+                                // The key columns of the schema
+                                key_columns.iter()
+                                    .map(|col| format!("SELECT {}", col.json_expr_recursion))
+                                    .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
+                                    .unwrap()
+                            )
+                        ));
+                    }
+                }
+
+                //
+                // We have now confirmed that the Object column does not induce recursion.
+                // To construct the label for the Object column, we follow a similar procedure to the above
+                // 
+
+                let object_datasource = SelectDatasource {
+                    datasource: datasource.datasource.append_path(format!("_COLUMN{object_column_oid}"))?,
+                    replace_root: match Datasource::get_default_datasource_transact(trans, object_table_oid)? {
+                        Some(Datasource::Table { oid, .. }) => Some(oid),
+                        _ => None
+                    },
+                    alias: datasource.alias 
+                };
+
+                // Add datasource for each inheritor table
+                for row_result in trans.prepare("SELECT INHERITOR_DATASOURCE_PATH FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW WHERE MASTER_SCHEMA_OID = ?1")?.query_map(params![object_table_oid], |row| row.get("INHERITOR_DATASOURCE_PATH"))? {
+                    let inheritor_datasource_path: String = row_result?;
+                    self.add_datasource(
+                        datasource.datasource.append_path(inheritor_datasource_path)?, 
+                        is_collection
+                    );
+                }
+
+                // Construct labels for each key column on table referenced by Object, including non-required columns
+                let mut key_columns: Vec<SelectLabelColumn> = Vec::new();
+                for row_result in trans.prepare("SELECT COLUMN_OID, ORDERING FROM METADATA_SCHEMA_COLUMN_VIEW WHERE SCHEMA_OID = ?1 AND IS_PRIMARY_KEY AND IS_REQUIRED ORDER BY IS_SUBREPORT ASC")?.query_map(params![object_table_oid], |row| Ok((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, i64>("ORDERING")?)))? {
+                    let (column_oid, ordering) = row_result?;
+                    let column: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
+                    let json_safe_column_name: String = json_encode_string(&column.name);
+                    
+                    let param = self.add_parameter(trans, object_datasource.clone(), column, SelectParameterContext::Scalar)?;
+                    key_columns.push(SelectLabelColumn { 
+                        plain_expr_norecursion: param.plain_label_expr_norecursion, 
+                        plain_expr_recursion: param.plain_label_expr_recursion, 
+                        json_expr_norecursion: format!("('\"{json_safe_column_name}\": ' || {})", param.json_label_expr_norecursion), 
+                        json_expr_recursion: format!("('\"{json_safe_column_name}\": ' || {})", param.json_label_expr_recursion), 
+                        ordering, 
+                        true
+                    });
+                }
+                key_columns.sort_by_key(|col| col.ordering);
+
+                // Construct the Object label
+                return Ok((
+                    String::from("NULL"),
+                    String::from("NULL"),
+                    
+                    // Non-recursive JSON label
+                    if key_columns.len() == 1 {
+                        format!(
+                            "
+                            ('{{ \"' 
+                                || (
+                                    SELECT 
+                                        REPLACE(REPLACE(s.NAME, '\\', '\\\\'), '\"', '\\\"') 
+                                    FROM METADATA_SCHEMA s 
+                                    WHERE s.OID = {}
+                                    )
+                                || '\": ' 
+                                || COALESCE({}, 'null') 
+                                || ' }}')
+                            ",
+
+                            // The OID of the schema
+                            object_datasource.get_schema_expr(),
+
+                            // The key columns of the schema
+                            key_columns.iter()
+                                .map(|col| format!("SELECT {}", col.json_expr_recursion))
+                                .next()
+                                .unwrap()
+                        )
+                    } else {
+                        format!(
+                            "
+                            ('{{ \"' 
+                                || (
+                                    SELECT 
+                                        REPLACE(REPLACE(s.NAME, '\\', '\\\\'), '\"', '\\\"') 
+                                    FROM METADATA_SCHEMA s 
+                                    WHERE s.OID = {}
+                                    ) 
+                                || '\": {{ ' 
+                                || COALESCE(GROUP_CONCAT(({}), ', ') || ' ', '') 
+                                || '}} }}')
+                            ",
+
+                            // The OID of the schema
+                            object_datasource.get_schema_expr(),
+
+                            // The key columns of the schema
+                            key_columns.iter()
+                                .map(|col| format!("SELECT {}", col.json_expr_recursion))
+                                .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
+                                .unwrap()
+                        )
+                    },
+
+                    // Recursive JSON label
+                    if key_columns.len() == 1 {
+                        format!(
+                            "
+                            COALESCE({}, 'null') 
+                            ",
+
+                            // The OID of the schema
+                            object_datasource.get_schema_expr(),
+
+                            // The key columns of the schema
+                            key_columns.iter()
+                                .map(|col| format!("SELECT {}", col.json_expr_recursion))
+                                .next()
+                                .unwrap()
+                        )
+                    } else {
+                        format!(
+                            "
+                            ('{{ ' 
+                                || COALESCE(GROUP_CONCAT(({}), ', ') || ' ', '') 
+                                || '}}')
+                            ",
+
+                            // The OID of the schema
+                            object_datasource.get_schema_expr(),
+
+                            // The key columns of the schema
+                            key_columns.iter()
+                                .map(|col| format!("SELECT {}", col.json_expr_recursion))
+                                .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
+                                .unwrap()
+                        )
+                    }
+                ));
+            }
+        }
+    }
+
     /// Constructs the SQL expression corresponding to a Formula object.
     fn construct_formula(&mut self, trans: &Transaction, root_datasource: (i64, Datasource), formula: Box<Formula>, mut context: SelectParameterContext) -> Result<SelectParameter, Error> {
         Ok(match *formula {
             Formula::Null => {
                 SelectParameter { 
-                    label_expr_norecursion: String::from("NULL"),
-                    label_expr_recursion: String::from("NULL"),
+                    plain_label_expr_norecursion: String::from("NULL"),
+                    plain_label_expr_recursion: String::from("NULL"),
                     value_expr_norecursion: String::from("NULL"),
                     value_expr_recursion: String::from("NULL"),
                     cell_expr_norecursion: String::from("NULL"),
@@ -1302,8 +1896,8 @@ impl SelectConstructor {
                     let label_expr: String = format!("'true'");
                     let value_expr: String = format!("TRUE");
                     SelectParameter { 
-                        label_expr_norecursion: label_expr.clone(),
-                        label_expr_recursion: label_expr, 
+                        plain_label_expr_norecursion: label_expr.clone(),
+                        plain_label_expr_recursion: label_expr, 
                         value_expr_norecursion: value_expr.clone(),
                         value_expr_recursion: value_expr,
                         cell_expr_norecursion: String::from("NULL"),
@@ -1315,8 +1909,8 @@ impl SelectConstructor {
                     let label_expr: String = format!("'false'");
                     let value_expr: String = format!("FALSE");
                     SelectParameter { 
-                        label_expr_norecursion: label_expr.clone(),
-                        label_expr_recursion: label_expr, 
+                        plain_label_expr_norecursion: label_expr.clone(),
+                        plain_label_expr_recursion: label_expr, 
                         value_expr_norecursion: value_expr.clone(),
                         value_expr_recursion: value_expr,
                         cell_expr_norecursion: String::from("NULL"),
@@ -1330,8 +1924,8 @@ impl SelectConstructor {
                 let label_expr: String = format!("'{value}'");
                 let value_expr: String = format!("{value}");
                 SelectParameter { 
-                    label_expr_norecursion: label_expr.clone(),
-                    label_expr_recursion: label_expr, 
+                    plain_label_expr_norecursion: label_expr.clone(),
+                    plain_label_expr_recursion: label_expr, 
                     value_expr_norecursion: value_expr.clone(),
                     value_expr_recursion: value_expr,
                     cell_expr_norecursion: String::from("NULL"),
@@ -1344,8 +1938,8 @@ impl SelectConstructor {
                 let label_expr: String = format!("'{value}'");
                 let value_expr: String = format!("{value}");
                 SelectParameter { 
-                    label_expr_norecursion: label_expr.clone(),
-                    label_expr_recursion: label_expr, 
+                    plain_label_expr_norecursion: label_expr.clone(),
+                    plain_label_expr_recursion: label_expr, 
                     value_expr_norecursion: value_expr.clone(),
                     value_expr_recursion: value_expr,
                     cell_expr_norecursion: String::from("NULL"),
@@ -1357,8 +1951,8 @@ impl SelectConstructor {
             Formula::LiteralString(value) => {
                 let sql_value: String = format!("'{}'", value.replace("'", "''"));
                 SelectParameter {
-                    label_expr_norecursion: sql_value.clone(),
-                    label_expr_recursion: sql_value.clone(),
+                    plain_label_expr_norecursion: sql_value.clone(),
+                    plain_label_expr_recursion: sql_value.clone(),
                     value_expr_norecursion: sql_value.clone(),
                     value_expr_recursion: sql_value,
                     cell_expr_norecursion: String::from("NULL"),
@@ -1378,8 +1972,8 @@ impl SelectConstructor {
                     let value_expr_norecursion: String = format!("ABS({})", inner_param.value_expr_norecursion);
                     let value_expr_recursion: String = format!("ABS({})", inner_param.value_expr_recursion);
                     SelectParameter {
-                        label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                        label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                        plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                        plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
                         cell_expr_norecursion: String::from("NULL"),
@@ -1406,8 +2000,8 @@ impl SelectConstructor {
                     let value_expr_norecursion: String = format!("CEILING({})", inner_param.value_expr_norecursion);
                     let value_expr_recursion: String = format!("CEILING({})", inner_param.value_expr_recursion);
                     SelectParameter {
-                        label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                        label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                        plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                        plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
                         cell_expr_norecursion: String::from("NULL"),
@@ -1434,8 +2028,8 @@ impl SelectConstructor {
                     let value_expr_norecursion: String = format!("FLOOR({})", inner_param.value_expr_norecursion);
                     let value_expr_recursion: String = format!("FLOOR({})", inner_param.value_expr_recursion);
                     SelectParameter {
-                        label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                        label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                        plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                        plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
                         cell_expr_norecursion: String::from("NULL"),
@@ -1461,8 +2055,8 @@ impl SelectConstructor {
                     let value_expr_norecursion: String = format!("LENGTH({})", inner_param.value_expr_norecursion);
                     let value_expr_recursion: String = format!("LENGTH({})", inner_param.value_expr_recursion);
                     SelectParameter {
-                        label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                        label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                        plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                        plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
                         cell_expr_norecursion: String::from("NULL"),
@@ -1488,8 +2082,8 @@ impl SelectConstructor {
                     let value_expr_norecursion: String = format!("LOWER({})", inner_param.value_expr_norecursion);
                     let value_expr_recursion: String = format!("LOWER({})", inner_param.value_expr_recursion);
                     SelectParameter {
-                        label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                        label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                        plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                        plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
                         cell_expr_norecursion: String::from("NULL"),
@@ -1516,8 +2110,8 @@ impl SelectConstructor {
                     let value_expr_norecursion: String = format!("(NOT {})", inner_param.value_expr_norecursion);
                     let value_expr_recursion: String = format!("(NOT {})", inner_param.value_expr_recursion);
                     SelectParameter {
-                        label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                        label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                        plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                        plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
                         cell_expr_norecursion: String::from("NULL"),
@@ -1544,8 +2138,8 @@ impl SelectConstructor {
                     let value_expr_norecursion: String = format!("ROUND({})", inner_param.value_expr_norecursion);
                     let value_expr_recursion: String = format!("ROUND({})", inner_param.value_expr_recursion);
                     SelectParameter {
-                        label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                        label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                        plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                        plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
                         cell_expr_norecursion: String::from("NULL"),
@@ -1572,8 +2166,8 @@ impl SelectConstructor {
                     let value_expr_norecursion: String = format!("SIGN({})", inner_param.value_expr_norecursion);
                     let value_expr_recursion: String = format!("SIGN({})", inner_param.value_expr_recursion);
                     SelectParameter {
-                        label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                        label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                        plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                        plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
                         cell_expr_norecursion: String::from("NULL"),
@@ -1599,8 +2193,8 @@ impl SelectConstructor {
                     let value_expr_norecursion: String = format!("UPPER({})", inner_param.value_expr_norecursion);
                     let value_expr_recursion: String = format!("UPPER({})", inner_param.value_expr_recursion);
                     SelectParameter {
-                        label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                        label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                        plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                        plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
                         cell_expr_norecursion: String::from("NULL"),
@@ -1634,8 +2228,8 @@ impl SelectConstructor {
                         let value_expr_norecursion: String = format!("({} + {})", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion);
                         let value_expr_recursion: String = format!("({} + {})", lhs_param.value_expr_recursion, rhs_param.value_expr_recursion);
                         SelectParameter {
-                            label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                            label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                            plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                            plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
                             cell_expr_norecursion: String::from("NULL"),
@@ -1673,8 +2267,8 @@ impl SelectConstructor {
                         let value_expr_norecursion: String = format!("({} AND {})", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion);
                         let value_expr_recursion: String = format!("({} AND {})", lhs_param.value_expr_recursion, rhs_param.value_expr_recursion);
                         SelectParameter {
-                            label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                            label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                            plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                            plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
                             cell_expr_norecursion: String::from("NULL"),
@@ -1712,8 +2306,8 @@ impl SelectConstructor {
                         let value_expr_norecursion: String = format!("({} || {})", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion);
                         let value_expr_recursion: String = format!("({} || {})", lhs_param.value_expr_recursion, rhs_param.value_expr_recursion);
                         SelectParameter {
-                            label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                            label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                            plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                            plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
                             cell_expr_norecursion: String::from("NULL"),
@@ -1751,8 +2345,8 @@ impl SelectConstructor {
                         let value_expr_norecursion: String = format!("({} / {})", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion);
                         let value_expr_recursion: String = format!("({} / {})", lhs_param.value_expr_recursion, rhs_param.value_expr_recursion);
                         SelectParameter {
-                            label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                            label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                            plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                            plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
                             cell_expr_norecursion: String::from("NULL"),
@@ -1786,8 +2380,8 @@ impl SelectConstructor {
                 let value_expr_norecursion: String = format!("({} IS {})", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion);
                 let value_expr_recursion: String = format!("({} IS {})", lhs_param.value_expr_recursion, rhs_param.value_expr_recursion);
                 SelectParameter {
-                    label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                    label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                    plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                    plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                     value_expr_norecursion,
                     value_expr_recursion,
                     cell_expr_norecursion: String::from("NULL"),
@@ -1809,8 +2403,8 @@ impl SelectConstructor {
                         let value_expr_norecursion: String = format!("POW({}, {})", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion);
                         let value_expr_recursion: String = format!("POW({}, {})", lhs_param.value_expr_recursion, rhs_param.value_expr_recursion);
                         SelectParameter {
-                            label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                            label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                            plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                            plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
                             cell_expr_norecursion: String::from("NULL"),
@@ -1847,8 +2441,8 @@ impl SelectConstructor {
                         let value_expr_norecursion: String = format!("({} < {})", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion);
                         let value_expr_recursion: String = format!("({} < {})", lhs_param.value_expr_recursion, rhs_param.value_expr_recursion);
                         SelectParameter {
-                            label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                            label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                            plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                            plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
                             cell_expr_norecursion: String::from("NULL"),
@@ -1885,8 +2479,8 @@ impl SelectConstructor {
                         let value_expr_norecursion: String = format!("({} <= {})", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion);
                         let value_expr_recursion: String = format!("({} <= {})", lhs_param.value_expr_recursion, rhs_param.value_expr_recursion);
                         SelectParameter {
-                            label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                            label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                            plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                            plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
                             cell_expr_norecursion: String::from("NULL"),
@@ -1924,8 +2518,8 @@ impl SelectConstructor {
                         let value_expr_norecursion: String = format!("({} % {})", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion);
                         let value_expr_recursion: String = format!("({} % {})", lhs_param.value_expr_recursion, rhs_param.value_expr_recursion);
                         SelectParameter {
-                            label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                            label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                            plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                            plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
                             cell_expr_norecursion: String::from("NULL"),
@@ -1963,8 +2557,8 @@ impl SelectConstructor {
                         let value_expr_norecursion: String = format!("({} * {})", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion);
                         let value_expr_recursion: String = format!("({} * {})", lhs_param.value_expr_recursion, rhs_param.value_expr_recursion);
                         SelectParameter {
-                            label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                            label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                            plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                            plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
                             cell_expr_norecursion: String::from("NULL"),
@@ -2002,8 +2596,8 @@ impl SelectConstructor {
                         let value_expr_norecursion: String = format!("({} OR {})", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion);
                         let value_expr_recursion: String = format!("({} OR {})", lhs_param.value_expr_recursion, rhs_param.value_expr_recursion);
                         SelectParameter {
-                            label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                            label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                            plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                            plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
                             cell_expr_norecursion: String::from("NULL"),
@@ -2041,8 +2635,8 @@ impl SelectConstructor {
                         let value_expr_norecursion: String = format!("({} - {})", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion);
                         let value_expr_recursion: String = format!("({} - {})", lhs_param.value_expr_recursion, rhs_param.value_expr_recursion);
                         SelectParameter {
-                            label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                            label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                            plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                            plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
                             cell_expr_norecursion: String::from("NULL"),
@@ -2081,8 +2675,8 @@ impl SelectConstructor {
 
                 if params.len() == 0 {
                     SelectParameter { 
-                        label_expr_norecursion: String::from("NULL"),
-                        label_expr_recursion: String::from("NULL"),
+                        plain_label_expr_norecursion: String::from("NULL"),
+                        plain_label_expr_recursion: String::from("NULL"),
                         value_expr_norecursion: String::from("NULL"),
                         value_expr_recursion: String::from("NULL"),
                         cell_expr_norecursion: String::from("NULL"),
@@ -2102,8 +2696,8 @@ impl SelectConstructor {
                         params.iter().map(|param| param.value_expr_recursion.clone()).reduce(|acc, e| format!("{acc}, {e}")).unwrap()
                     );
                     SelectParameter {
-                        label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                        label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                        plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                        plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
                         cell_expr_norecursion: match params.iter().enumerate().filter_map(|(param_lhs_idx, param_lhs)| {
@@ -2176,8 +2770,8 @@ impl SelectConstructor {
 
                 if params.len() == 0 {
                     SelectParameter { 
-                        label_expr_norecursion: String::from("NULL"),
-                        label_expr_recursion: String::from("NULL"),
+                        plain_label_expr_norecursion: String::from("NULL"),
+                        plain_label_expr_recursion: String::from("NULL"),
                         value_expr_norecursion: String::from("NULL"),
                         value_expr_recursion: String::from("NULL"),
                         cell_expr_norecursion: String::from("NULL"),
@@ -2197,8 +2791,8 @@ impl SelectConstructor {
                         params.iter().map(|param| param.value_expr_recursion.clone()).reduce(|acc, e| format!("{acc}, {e}")).unwrap()
                     );
                     SelectParameter {
-                        label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                        label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                        plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                        plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
                         cell_expr_norecursion: match params.iter().enumerate().filter_map(|(param_lhs_idx, param_lhs)| {
@@ -2271,8 +2865,8 @@ impl SelectConstructor {
 
                 if params.len() == 0 {
                     SelectParameter { 
-                        label_expr_norecursion: String::from("NULL"),
-                        label_expr_recursion: String::from("NULL"),
+                        plain_label_expr_norecursion: String::from("NULL"),
+                        plain_label_expr_recursion: String::from("NULL"),
                         value_expr_norecursion: String::from("NULL"),
                         value_expr_recursion: String::from("NULL"),
                         cell_expr_norecursion: String::from("NULL"),
@@ -2284,21 +2878,21 @@ impl SelectConstructor {
                     params.pop().unwrap()
                 } else {
                     SelectParameter {
-                        label_expr_norecursion: match params.iter().map(|param| {
+                        plain_label_expr_norecursion: match params.iter().map(|param| {
                             format!(
                                 "WHEN {} IS NOT NULL THEN {}",
                                 param.value_expr_norecursion,
-                                param.label_expr_norecursion
+                                param.plain_label_expr_norecursion
                             )
                         }).reduce(|acc, e| format!("{acc} {e}")) {
                             Some(when_conditions) => format!("CASE {when_conditions} ELSE NULL END"),
                             None => String::from("NULL")
                         },
-                        label_expr_recursion: match params.iter().map(|param| {
+                        plain_label_expr_recursion: match params.iter().map(|param| {
                             format!(
                                 "WHEN {} IS NOT NULL THEN {}",
                                 param.value_expr_recursion,
-                                param.label_expr_recursion
+                                param.plain_label_expr_recursion
                             )
                         }).reduce(|acc, e| format!("{acc} {e}")) {
                             Some(when_conditions) => format!("CASE {when_conditions} ELSE NULL END"),
@@ -2355,8 +2949,8 @@ impl SelectConstructor {
 
                 if params.len() == 0 {
                     SelectParameter { 
-                        label_expr_norecursion: String::from("NULL"),
-                        label_expr_recursion: String::from("NULL"),
+                        plain_label_expr_norecursion: String::from("NULL"),
+                        plain_label_expr_recursion: String::from("NULL"),
                         value_expr_norecursion: String::from("NULL"),
                         value_expr_recursion: String::from("NULL"),
                         cell_expr_norecursion: String::from("NULL"),
@@ -2368,16 +2962,16 @@ impl SelectConstructor {
                     params.pop().unwrap()
                 } else {
                     SelectParameter {
-                        label_expr_norecursion: format!(
+                        plain_label_expr_norecursion: format!(
                             "({})",
                             params.iter()
-                                .map(|param| format!("SELECT {}", param.label_expr_norecursion))
+                                .map(|param| format!("SELECT {}", param.plain_label_expr_norecursion))
                                 .reduce(|acc, e| format!("{acc} UNION ALL {e}")).unwrap()
                         ),
-                        label_expr_recursion: format!(
+                        plain_label_expr_recursion: format!(
                             "({})",
                             params.iter()
-                                .map(|param| format!("SELECT {}", param.label_expr_recursion))
+                                .map(|param| format!("SELECT {}", param.plain_label_expr_recursion))
                                 .reduce(|acc, e| format!("{acc} UNION ALL {e}")).unwrap()
                         ),
                         value_expr_norecursion: format!(
@@ -2430,8 +3024,8 @@ impl SelectConstructor {
                         format!("AVG({})", collection_param.value_expr_recursion)
                     );
                     SelectParameter {
-                        label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                        label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                        plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                        plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
                         cell_expr_norecursion: String::from("NULL"),
@@ -2465,8 +3059,8 @@ impl SelectConstructor {
                     format!("COUNT({})", collection_param.value_expr_recursion)
                 );
                 SelectParameter {
-                    label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                    label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                    plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                    plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                     value_expr_norecursion,
                     value_expr_recursion,
                     cell_expr_norecursion: String::from("NULL"),
@@ -2499,8 +3093,8 @@ impl SelectConstructor {
                             format!("GROUP_CONCAT({}, {})", collection_param.value_expr_recursion, delimiter_param.value_expr_recursion)
                         );
                         SelectParameter {
-                            label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                            label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                            plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                            plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
                             cell_expr_norecursion: String::from("NULL"),
@@ -2545,8 +3139,8 @@ impl SelectConstructor {
                         format!("MAX({})", collection_param.value_expr_recursion)
                     );
                     SelectParameter {
-                        label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                        label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                        plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                        plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
                         cell_expr_norecursion: String::from("NULL"),
@@ -2583,8 +3177,8 @@ impl SelectConstructor {
                         format!("MIN({})", collection_param.value_expr_recursion)
                     );
                     SelectParameter {
-                        label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                        label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                        plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                        plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
                         cell_expr_norecursion: String::from("NULL"),
@@ -2621,8 +3215,8 @@ impl SelectConstructor {
                         format!("SUM({})", collection_param.value_expr_recursion)
                     );
                     SelectParameter {
-                        label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                        label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                        plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                        plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
                         cell_expr_norecursion: String::from("NULL"),
@@ -2648,8 +3242,8 @@ impl SelectConstructor {
                 let value_expr: String = format!("RANDOM{}", self.random_values);
                 let label_expr: String = scalar_type.construct_plain_label_expr(&value_expr);
                 SelectParameter {
-                    label_expr_norecursion: label_expr.clone(),
-                    label_expr_recursion: label_expr,
+                    plain_label_expr_norecursion: label_expr.clone(),
+                    plain_label_expr_recursion: label_expr,
                     value_expr_norecursion: value_expr.clone(),
                     value_expr_recursion: value_expr,
                     cell_expr_norecursion: String::from("NULL"),
@@ -2676,17 +3270,17 @@ impl SelectConstructor {
 
                     let scalar_type = if_true_param.scalar_type.generalize(&if_false_param.scalar_type);
                     SelectParameter {
-                        label_expr_norecursion: format!(
+                        plain_label_expr_norecursion: format!(
                             "IF({}, {}, {})", 
                             condition_param.value_expr_norecursion, 
-                            if_true_param.label_expr_norecursion, 
-                            if_false_param.label_expr_norecursion
+                            if_true_param.plain_label_expr_norecursion, 
+                            if_false_param.plain_label_expr_norecursion
                         ),
-                        label_expr_recursion: format!(
+                        plain_label_expr_recursion: format!(
                             "IF({}, {}, {})", 
                             condition_param.value_expr_recursion, 
-                            if_true_param.label_expr_recursion, 
-                            if_false_param.label_expr_recursion
+                            if_true_param.plain_label_expr_recursion, 
+                            if_false_param.plain_label_expr_recursion
                         ),
                         value_expr_norecursion: format!(
                             "IF({}, {}, {})", 
@@ -2757,8 +3351,8 @@ impl SelectConstructor {
                             )
                     );
                     SelectParameter {
-                        label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                        label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                        plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                        plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
                         cell_expr_norecursion: String::from("NULL"),
@@ -2787,8 +3381,8 @@ impl SelectConstructor {
                         let value_expr_norecursion: String = format!("({} GLOB {})", str_param.value_expr_norecursion, pattern_param.value_expr_norecursion);
                         let value_expr_recursion: String = format!("({} GLOB {})", str_param.value_expr_recursion, pattern_param.value_expr_recursion);
                         SelectParameter {
-                            label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                            label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                            plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                            plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
                             cell_expr_norecursion: String::from("NULL"),
@@ -2830,8 +3424,8 @@ impl SelectConstructor {
                 let value_expr_norecursion: String = format!("({} IN {})", value_param.value_expr_norecursion, collection_param.value_expr_norecursion);
                 let value_expr_recursion: String = format!("({} IN {})", value_param.value_expr_recursion, collection_param.value_expr_recursion);
                 SelectParameter {
-                    label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                    label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
+                    plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                    plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion),
                     value_expr_norecursion,
                     value_expr_recursion,
                     cell_expr_norecursion: String::from("NULL"),
@@ -2862,8 +3456,8 @@ impl SelectConstructor {
                         collection_param.value_expr_recursion
                     );
                     SelectParameter { 
-                        label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                        label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion), 
+                        plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                        plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion), 
                         value_expr_norecursion,
                         value_expr_recursion, 
                         cell_expr_norecursion: String::from("NULL"), 
@@ -2887,8 +3481,8 @@ impl SelectConstructor {
 
                 let scalar_type = lhs_param.scalar_type;
                 SelectParameter {
-                    label_expr_norecursion: format!("CASE WHEN ({} IS {}) THEN NULL ELSE {} END", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion, lhs_param.label_expr_norecursion),
-                    label_expr_recursion: format!("CASE WHEN ({} IS {}) THEN NULL ELSE {} END", lhs_param.value_expr_recursion, rhs_param.value_expr_recursion, lhs_param.label_expr_recursion),
+                    plain_label_expr_norecursion: format!("CASE WHEN ({} IS {}) THEN NULL ELSE {} END", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion, lhs_param.plain_label_expr_norecursion),
+                    plain_label_expr_recursion: format!("CASE WHEN ({} IS {}) THEN NULL ELSE {} END", lhs_param.value_expr_recursion, rhs_param.value_expr_recursion, lhs_param.plain_label_expr_recursion),
                     value_expr_norecursion: format!("NULLIF({}, {})", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion),
                     value_expr_recursion: format!("NULLIF({}, {})", lhs_param.value_expr_recursion, rhs_param.value_expr_recursion),
                     cell_expr_norecursion: format!("CASE WHEN ({} IS {}) THEN NULL ELSE {} END", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion, lhs_param.cell_expr_norecursion),
@@ -2913,8 +3507,8 @@ impl SelectConstructor {
                             let value_expr_norecursion: String = format!("REPLACE({}, {}, {})", original_param.value_expr_norecursion, pattern_param.value_expr_norecursion, replacement_param.value_expr_norecursion);
                             let value_expr_recursion: String = format!("REPLACE({}, {}, {})", original_param.value_expr_recursion, pattern_param.value_expr_recursion, replacement_param.value_expr_recursion);
                             SelectParameter { 
-                                label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                                label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion), 
+                                plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                                plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion), 
                                 value_expr_norecursion,
                                 value_expr_recursion, 
                                 cell_expr_norecursion: String::from("NULL"), 
@@ -2962,8 +3556,8 @@ impl SelectConstructor {
                                 let value_expr_norecursion: String = format!("SUBSTR({}, {})", str_param.value_expr_norecursion, start_param.value_expr_norecursion);
                                 let value_expr_recursion: String = format!("SUBSTR({}, {})", str_param.value_expr_recursion, start_param.value_expr_recursion);
                                 SelectParameter { 
-                                    label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion), 
-                                    label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion), 
+                                    plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion), 
+                                    plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion), 
                                     value_expr_norecursion,
                                     value_expr_recursion, 
                                     cell_expr_norecursion: String::from("NULL"), 
@@ -2980,8 +3574,8 @@ impl SelectConstructor {
                                     let value_expr_norecursion: String = format!("SUBSTR({}, {}, {})", str_param.value_expr_norecursion, start_param.value_expr_norecursion, length_param.value_expr_norecursion);
                                     let value_expr_recursion: String = format!("SUBSTR({}, {}, {})", str_param.value_expr_recursion, start_param.value_expr_recursion, length_param.value_expr_recursion);
                                     SelectParameter { 
-                                        label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
-                                        label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion), 
+                                        plain_label_expr_norecursion: scalar_type.construct_plain_label_expr(&value_expr_norecursion),
+                                        plain_label_expr_recursion: scalar_type.construct_plain_label_expr(&value_expr_recursion), 
                                         value_expr_norecursion,
                                         value_expr_recursion, 
                                         cell_expr_norecursion: String::from("NULL"), 
@@ -3060,10 +3654,10 @@ impl SelectConstructor {
                         when_clauses_recursion.iter().map(|(when_clause, if_match_param)| format!("{when_clause} {}", if_match_param.value_expr_recursion))
                             .reduce(|acc, e| format!("{acc} {e}"))
                             .unwrap_or(String::from("")),
-                        when_clauses_norecursion.iter().map(|(when_clause, if_match_param)| format!("{when_clause} {}", if_match_param.label_expr_norecursion))
+                        when_clauses_norecursion.iter().map(|(when_clause, if_match_param)| format!("{when_clause} {}", if_match_param.plain_label_expr_norecursion))
                             .reduce(|acc, e| format!("{acc} {e}"))
                             .unwrap_or(String::from("")),
-                        when_clauses_recursion.iter().map(|(when_clause, if_match_param)| format!("{when_clause} {}", if_match_param.label_expr_recursion))
+                        when_clauses_recursion.iter().map(|(when_clause, if_match_param)| format!("{when_clause} {}", if_match_param.plain_label_expr_recursion))
                             .reduce(|acc, e| format!("{acc} {e}"))
                             .unwrap_or(String::from("")),
                         when_clauses_norecursion.iter().map(|(when_clause, if_match_param)| format!("{when_clause} {}", if_match_param.cell_expr_norecursion))
@@ -3097,16 +3691,16 @@ impl SelectConstructor {
                         (
                             format!("CASE {value_norecursion_when_clauses} ELSE {} END", if_no_match_param.value_expr_norecursion),
                             format!("CASE {value_recursion_when_clauses} ELSE {} END", if_no_match_param.value_expr_recursion),
-                            format!("CASE {label_norecursion_when_clauses} ELSE {} END", if_no_match_param.label_expr_norecursion),
-                            format!("CASE {label_recursion_when_clauses} ELSE {} END", if_no_match_param.label_expr_recursion),
+                            format!("CASE {label_norecursion_when_clauses} ELSE {} END", if_no_match_param.plain_label_expr_norecursion),
+                            format!("CASE {label_recursion_when_clauses} ELSE {} END", if_no_match_param.plain_label_expr_recursion),
                             format!("CASE {cell_norecursion_when_clauses} ELSE {} END", if_no_match_param.cell_expr_norecursion),
                             format!("CASE {cell_recursion_when_clauses} ELSE {} END", if_no_match_param.cell_expr_recursion)
                         )
                     }
                 };
                 SelectParameter {
-                    label_expr_norecursion,
-                    label_expr_recursion,
+                    plain_label_expr_norecursion: label_expr_norecursion,
+                    plain_label_expr_recursion: label_expr_recursion,
                     value_expr_norecursion,
                     value_expr_recursion,
                     cell_expr_norecursion,
