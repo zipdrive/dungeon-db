@@ -78,7 +78,7 @@ pub enum Formula {
     Switch {
         value: Box<Formula>,
         matches: Vec<(Formula, Formula)>,
-        formula_if_no_match: Box<Formula>,
+        formula_if_no_match: Option<Box<Formula>>,
     },
     NullIf {
         value: Box<Formula>,

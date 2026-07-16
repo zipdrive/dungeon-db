@@ -236,18 +236,23 @@ impl Datasource {
         Self::get_transact(&conn, oid)
     }
 
-    /// Retrieves the default root datasource for a particular table.
+    /// Retrieves the default root datasource for a particular schema.
+    /// Returns None if the schema has no default root datasource.
     pub fn get_default_datasource_transact(
         conn: &Connection,
-        table_oid: i64,
-    ) -> Result<Self, Error> {
-        Ok(Self::Table {
-            oid: conn.query_row(
-                "SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = ?1",
-                params![table_oid],
-                |row| row.get(0),
-            )?,
-            table_oid,
+        schema_oid: i64,
+    ) -> Result<Option<Self>, Error> {
+        let datasource_oid: Option<i64> = conn.query_row(
+            "SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = ?1",
+            params![schema_oid],
+            |row| row.get(0),
+        ).optional()?;
+        Ok(match datasource_oid {
+            Some(datasource_oid) => Some(Self::Table {
+                oid: datasource_oid,
+                table_oid: schema_oid,
+            }),
+            None => None
         })
     }
 
@@ -267,6 +272,18 @@ impl Datasource {
                 parent_datasource,
                 column,
             } => format!("{}_COLUMN{}", parent_datasource.get_alias(), column.oid),
+        }
+    }
+
+    /// Gets the chain of a datasource in a linear vector.
+    pub fn linearize(&self) -> Vec<Datasource> {
+        match self.get_parent() {
+            Some(parent_datasource) => {
+                let mut parent_linearized = parent_datasource.linearize();
+                parent_linearized.push(self.clone());
+                return parent_linearized;
+            }
+            None => vec![self.clone()]
         }
     }
 
@@ -527,6 +544,22 @@ impl Datasource {
         }
 
         Ok(())
+    }
+
+    /// Finds the longest chain shared between this datasource and the given datasource.
+    pub fn find_commonality(&self, other: &Self) -> Option<Self> {
+        let self_path_elements: Vec<Self> = self.linearize();
+        let other_path_elements: Vec<Self> = other.linearize();
+
+        let mut last_common_element: Option<Self> = None;
+        for (k, self_path_element) in self_path_elements.into_iter().enumerate() {
+            if other_path_elements[k].get_alias() == self_path_element.get_alias() {
+                last_common_element = Some(self_path_element);
+            } else {
+                break;
+            }
+        }
+        return last_common_element;
     }
 
     /// Seeks the root datasource.

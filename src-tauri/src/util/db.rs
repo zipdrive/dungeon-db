@@ -235,14 +235,18 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
 
     -- METADATA_COLUMN_TYPE_VIEW filters out all trashed column types.
     CREATE VIEW IF NOT EXISTS METADATA_COLUMN_TYPE_VIEW AS 
-        SELECT ct.OID 
+        SELECT 
+            ct.OID,
+            'Formula' AS TYPE
         FROM METADATA_COLUMN_TYPE ct 
         INNER JOIN METADATA_COLUMN_TYPE__FORMULA ctf ON ctf.OID = ct.OID 
         WHERE NOT ct.TRASH 
 
         UNION ALL 
 
-        SELECT ct.OID 
+        SELECT 
+            ct.OID,
+            'Subreport' AS TYPE
         FROM METADATA_COLUMN_TYPE ct 
         INNER JOIN METADATA_COLUMN_TYPE__SUBREPORT cts ON cts.OID = ct.OID 
         INNER JOIN METADATA_SCHEMA s ON s.OID = cts.REPORT_OID 
@@ -250,14 +254,18 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
 
         UNION ALL 
 
-        SELECT ct.OID 
+        SELECT 
+            ct.OID,
+            ctp.MODE AS TYPE
         FROM METADATA_COLUMN_TYPE ct 
         INNER JOIN METADATA_COLUMN_TYPE__PRIMITIVE ctp ON ctp.OID = ct.OID 
         WHERE NOT ct.TRASH 
 
         UNION ALL 
 
-        SELECT ct.OID 
+        SELECT 
+            ct.OID,
+            'Object' AS TYPE
         FROM METADATA_COLUMN_TYPE ct 
         INNER JOIN METADATA_COLUMN_TYPE__OBJECT cto ON cto.OID = ct.OID 
         INNER JOIN METADATA_SCHEMA s ON s.OID = cto.TABLE_OID 
@@ -265,7 +273,9 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
         
         UNION ALL 
 
-        SELECT ct.OID 
+        SELECT 
+            ct.OID,
+            'Select' AS TYPE
         FROM METADATA_COLUMN_TYPE ct 
         INNER JOIN METADATA_COLUMN_TYPE__SELECT cto ON cto.OID = ct.OID 
         INNER JOIN METADATA_SCHEMA s ON s.OID = cto.TABLE_OID 
@@ -273,7 +283,9 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
         
         UNION ALL 
 
-        SELECT ct.OID 
+        SELECT 
+            ct.OID,
+            'Multiselect' AS TYPE
         FROM METADATA_COLUMN_TYPE ct 
         INNER JOIN METADATA_COLUMN_TYPE__MULTISELECT cto ON cto.OID = ct.OID 
         INNER JOIN METADATA_SCHEMA s ON s.OID = cto.TABLE_OID 
@@ -315,7 +327,8 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
             c.ORDERING,
             c.IS_NULLABLE,
             c.IS_PRIMARY_KEY,
-            c.DEFAULT_VALUE 
+            c.DEFAULT_VALUE,
+            (ct.TYPE IS 'Subreport') AS IS_SUBREPORT
         FROM METADATA_COLUMN c 
         INNER JOIN METADATA_SCHEMA s ON s.OID = c.SCHEMA_OID 
         INNER JOIN METADATA_COLUMN_TYPE_VIEW ct ON ct.OID = c.TYPE_OID 
@@ -329,7 +342,9 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
             '' DATASOURCE_PATH,
             c.OID COLUMN_OID,
             TRUE IS_REQUIRED,
-            c.ORDERING
+            c.ORDERING,
+            c.IS_PRIMARY_KEY,
+            c.IS_SUBREPORT
         FROM METADATA_COLUMN_VIEW c
         
         UNION ALL
@@ -339,7 +354,9 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
             inh.MASTER_DATASOURCE_PATH DATASOURCE_PATH,
             c.OID COLUMN_OID,
             TRUE IS_REQUIRED,
-            c.ORDERING
+            c.ORDERING,
+            c.IS_PRIMARY_KEY,
+            c.IS_SUBREPORT
         FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW inh
         INNER JOIN METADATA_COLUMN_VIEW c ON c.SCHEMA_OID = inh.MASTER_SCHEMA_OID
 
@@ -350,7 +367,9 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
             inh.INHERITOR_DATASOURCE_PATH DATASOURCE_PATH,
             c.OID COLUMN_OID,
             FALSE IS_REQUIRED,
-            c.ORDERING
+            c.ORDERING,
+            c.IS_PRIMARY_KEY,
+            c.IS_SUBREPORT
         FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW inh
         INNER JOIN METADATA_COLUMN_VIEW c ON c.SCHEMA_OID = inh.INHERITOR_SCHEMA_OID
     ;
