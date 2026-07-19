@@ -578,6 +578,22 @@ impl Datasource {
         }
     }
 
+    /// Retrieves the datasource OID of the root datasource.
+    pub fn get_root_datasource_oid(&self) -> i64 {
+        match self {
+            Self::Table { oid, .. } => oid.clone(),
+            Self::MasterTable {
+                parent_datasource, ..
+            }
+            | Self::InheritorTable {
+                parent_datasource, ..
+            }
+            | Self::Column {
+                parent_datasource, ..
+            } => parent_datasource.get_root_datasource_oid(),
+        }
+    }
+
     /// Seeks the deepest parent which is either (a) a Table datasource, or (b) has a 1-to-* relationship with its parent.
     pub fn seek_basis(&self) -> Result<Datasource, Error> {
         Ok(match self {
