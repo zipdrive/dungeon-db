@@ -3,11 +3,16 @@ use crate::{
 };
 use bitflags::bitflags;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
-use std::collections::{HashMap, HashSet};
+use std::{cell, collections::{HashMap, HashSet}};
 use regex::Regex;
 
 
-/// Encodes a string to make it safe for inserting into a JSON string inside an SQL statement.
+/// Encodes a string to make it safe for inserting inside an SQL string.
+fn sql_encode_string(str: &String) -> String {
+    str.replace("'", "''")
+}
+
+/// Encodes a string to make it safe for inserting into a JSON double-quoted string inside an SQL string.
 fn json_encode_string(str: &String) -> String {
     str.replace("'", "''")
         .replace("\\", "\\\\")
@@ -970,7 +975,7 @@ impl SelectConstructor {
         for row_result in trans.prepare("SELECT COLUMN_OID, ORDERING, IS_REQUIRED FROM METADATA_SCHEMA_COLUMN_VIEW WHERE SCHEMA_OID = ?1 AND IS_PRIMARY_KEY ORDER BY IS_SUBREPORT ASC")?.query_map(params![schema_oid], |row| Ok((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, i64>("ORDERING")?, row.get::<_, bool>("IS_REQUIRED")?)))? {
             let (column_oid, ordering, is_required) = row_result?;
             let column: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
-            let json_safe_column_name: String = column.name.replace("'", "''").replace("\\", "\\\\").replace("\"", "\\\"");
+            let json_safe_column_name: String = json_encode_string(&column.name);
             match &root_datasource {
                 Some(root_datasource) => {
                     let root_datasource: SelectDatasource = SelectDatasource::new_norecursion(root_datasource.clone(), None);
@@ -1212,7 +1217,176 @@ impl SelectConstructor {
                 );
             }
             column_type::ColumnType::Subreport { report_oid, .. } => {
-                
+                match self.constructor_type {
+                    SelectConstructorType::SelectMainConstructor { .. } => {
+                        // Examine the schema of SCHEMA{report_oid}_LABEL_VIEW to see what filters are applicable to the report
+                        let mut filtered_columns: Vec<(String, String)> = Vec::new();
+                        let oid_regex = Regex::new(r"ROOT\d+(?:_MASTER\d+|_INHERITOR\d+|_COLUMN\d+)*_OID").unwrap();
+                        let pragma_sql: String = format!("PRAGMA table_info(SCHEMA{subreport_report_oid}_LABEL_VIEW)");
+                        for row_result in trans.prepare(&pragma_sql)?.query_map([], |row| row.get("NAME"))? {
+                            let oid_column_name: String = row_result?;
+                            if oid_regex.is_match(&oid_column_name) {
+                                // Test if the OID is being selected in this view
+                                let filtered_datasource_alias: String = oid_column_name.replace("_OID", "");
+                                let modified_datasource: Datasource = Datasource::from_alias_transact(trans, filtered_datasource_alias)?
+                                    .substitute_root(datasource.replace_root, datasource.datasource);
+                                let modified_datasource_alias: String = modified_datasource.get_alias();
+
+                                if self.cte_datasource.contains_key(&modified_datasource_alias)
+                                    && !self.cte_datasource[&modified_datasource_alias].is_always_collection {
+                                    filtered_columns.push((
+                                        oid_column_name,
+                                        format!("w.{modified_datasource_alias}_OID")
+                                    ));
+                                }
+                            }
+                        }
+
+                        // Construct the parameter
+                        let value_expr: String = filtered_columns.iter()
+                            .map(|(filtered_oid_ord, filtered_oid_value)| format!(
+                                "'{}=' || CAST({} AS TEXT)",
+                                sql_encode_string(&filtered_oid_ord),
+                                filtered_oid_value
+                            ))
+                            .reduce(|acc, e| format!("({acc} || '&' || {e})"))
+                            .unwrap_or(String::from("''"));
+                        let json_label_expr: String = format!(
+                            "NULLIF('[ ' || GROUP_CONCAT((SELECT l.JSON_LABEL FROM SCHEMA{subreport_report_oid}_LABEL_VIEW l {}), ', ') || ' ]', '[  ]')",
+                            if filtered_columns.len() > 0 {
+                                format!(
+                                    "WHERE {}",
+                                    filtered_columns.iter().map(|(filtered_oid_ord, filtered_oid_value)| format!("l.{filtered_oid_ord} IS {filtered_oid_value}"))
+                                        .reduce(|acc, e| format!("{acc} AND {e}"))
+                                        .unwrap()
+                                )
+                            } else {
+                                String::from("")
+                            }
+                        );
+                        return Ok(SelectParameter {
+                            plain_label_expr_norecursion: String::from("NULL"),
+                            plain_label_expr_recursion: String::from("NULL"),
+                            json_label_expr_norecursion: json_value_expr.clone(),
+                            json_label_expr_recursion: json_value_expr,
+                            value_expr_norecursion: value_expr.clone(),
+                            value_expr_recursion: value_expr,
+                            cell_expr_norecursion: cell_expr.clone(),
+                            cell_expr_recursion: cell_expr,
+                            scalar_type: SelectParameterType::new(),
+                            context
+                        });
+                    }
+                    SelectConstructorType::SelectLabelConstructor { recursions, .. } => {
+                        // Construct datasource for the columns of the subreport
+                        let subreport_datasource: SelectDatasource = {
+                            let column_datasource: Datasource = Datasource::from_alias_transact(trans, datasource_alias)?
+                                .substitute_root(datasource.replace_root, datasource.datasource);
+                            SelectDatasource { 
+                                replace_root: column_datasource.get_schema_oid()?,
+                                datasource: column_datasource, 
+                                alias: datasource.alias 
+                            }
+                        };
+
+                        // Insert all columns of the report as concrete parameters
+                        let mut param_context: SelectParameterContext = SelectParameterContext::Collection { 
+                            slice_norecursion: SelectParameterSlice::None, 
+                            slice_recursion: SelectParameterSlice::None, 
+                            filter_expr_norecursion: None, 
+                            filter_expr_recursion: None, 
+                            order_exprs_norecursion: Vec::new(), 
+                            order_exprs_recursion: Vec::new(), 
+                            min_depth: HashMap::new(), 
+                            window_changes_disabled: true 
+                        };
+                        let mut params: HashMap<column::FullMetadata, SelectParameter> = HashMap::new();
+                        for row_result in trans.prepare("SELECT COLUMN_OID FROM METADATA_SCHEMA_COLUMN_VIEW WHERE SCHEMA_OID = ?1 AND IS_REQUIRED ORDER BY IS_SUBREPORT ASC")?.query_map(params![report_oid], |row| row.get::<_, i64>("COLUMN_OID"))? {
+                            let column_oid = row_result?;
+                            let column: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
+
+                            // Insert the parameter with no datasource
+                            let param: SelectParameter = self.add_concrete_parameter(trans, subreport_datasource, column.clone(), param_context)?;
+                            param_context = param.context.clone();
+                            params.insert(column, param);
+                        }
+
+                        // Order the columns by ordering
+                        let mut ordered_params: Vec<(String, SelectParameter, i64)> = params.into_iter()
+                            .filter(|(column_metadata, _)| column_metadata.is_primary_key)
+                            .map(|(column_metadata, column_param)| (json_encode_string(&column_metadata.name), column_param, column_metadata.ordering))
+                            .collect();
+                        ordered_params.sort_by_key(|(_, _, ordering)| *ordering);
+
+                        // Compile the label expressions
+                        if ordered_params.len() == 0 {
+                            return Ok(SelectParameter { 
+                                plain_label_expr_norecursion: String::from("NULL"), 
+                                plain_label_expr_recursion: String::from("NULL"), 
+                                json_label_expr_norecursion: String::from("NULL"),  
+                                json_label_expr_recursion: String::from("NULL"),
+                                value_expr_norecursion: String::from("NULL"), 
+                                value_expr_recursion: String::from("NULL"), 
+                                cell_expr_norecursion: String::from("NULL"), 
+                                cell_expr_recursion: String::from("NULL"), 
+                                scalar_type: SelectParameterType::new(), 
+                                context 
+                            });
+                        } else if ordered_params.len() == 1 {
+                            let (agg_expr_norecursion, agg_expr_recursion) = param_context.wrap(
+                                format!(
+                                    "GROUP_CONCAT({}, ', ')",
+                                    ordered_params.iter().map(|(_, param, _)| param.json_label_expr_norecursion.clone()).next().unwrap()
+                                ),
+                                format!(
+                                    "GROUP_CONCAT({}, ', ')",
+                                    ordered_params.iter().map(|(_, param, _)| param.json_label_expr_recursion.clone()).next().unwrap()
+                                )
+                            );
+                            return Ok(SelectParameter { 
+                                plain_label_expr_norecursion: String::from("NULL"), 
+                                plain_label_expr_recursion: String::from("NULL"), 
+                                json_label_expr_norecursion: format!("('[ ' || {agg_expr_norecursion} || ' ]')"),  
+                                json_label_expr_recursion: format!("('[ ' || {agg_expr_recursion} || ' ]')"), 
+                                value_expr_norecursion: String::from("NULL"), 
+                                value_expr_recursion: String::from("NULL"), 
+                                cell_expr_norecursion: String::from("NULL"), 
+                                cell_expr_recursion: String::from("NULL"), 
+                                scalar_type: SelectParameterType::new(), 
+                                context 
+                            });
+                        } else {
+                            let (agg_expr_norecursion, agg_expr_recursion) = param_context.wrap(
+                                format!(
+                                    "GROUP_CONCAT('{{ ' || GROUP_CONCAT(({}), ', ') || ' }}', ', ')",
+                                    ordered_params.iter()
+                                        .map(|(param_key, param, _)| format!("SELECT '\"{param_key}\": ' || {}", param.json_label_expr_norecursion))
+                                        .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
+                                        .unwrap()
+                                ),
+                                format!(
+                                    "GROUP_CONCAT('{{ ' || GROUP_CONCAT(({}), ', ') || ' }}', ', ')",
+                                    ordered_params.iter()
+                                        .map(|(param_key, param, _)| format!("SELECT '\"{param_key}\": ' || {}", param.json_label_expr_recursion))
+                                        .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
+                                        .unwrap()
+                                )
+                            );
+                            return Ok(SelectParameter { 
+                                plain_label_expr_norecursion: String::from("NULL"), 
+                                plain_label_expr_recursion: String::from("NULL"), 
+                                json_label_expr_norecursion: format!("('[ ' || {agg_expr_norecursion} || ' ]')"),  
+                                json_label_expr_recursion: format!("('[ ' || {agg_expr_recursion} || ' ]')"), 
+                                value_expr_norecursion: String::from("NULL"), 
+                                value_expr_recursion: String::from("NULL"), 
+                                cell_expr_norecursion: String::from("NULL"), 
+                                cell_expr_recursion: String::from("NULL"), 
+                                scalar_type: SelectParameterType::new(), 
+                                context 
+                            });
+                        }
+                    }
+                }
             }
         }
         return Err(Error::AdhocError("Unable to add parameter."));
@@ -1251,12 +1425,9 @@ impl SelectConstructor {
                     let column: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
 
                     // Insert the parameter with no datasource
-                    let param: SelectParameter = self.add_virtual_parameter(trans, column, param_context)?;
+                    let param: SelectParameter = self.add_virtual_parameter(trans, column.clone(), param_context)?;
                     param_context = param.context.clone();
-                    params.insert(
-                        column.clone(),
-                        param
-                    );
+                    params.insert(column, param);
                 }
 
                 // Order the columns by ordering
@@ -1813,73 +1984,6 @@ impl SelectConstructor {
         }
     }
 
-    /// Constructs a label for a Subreport column.
-    /// The first item of the returned tuple is the non-recursive plain label.
-    /// The second item of the returned tuple is the recursive plain label.
-    /// The third item of the returned tuple is the non-recursive JSON label.
-    /// The fourth item of the returned tuple is the recursive JSON label.
-    fn construct_subreport_label(&mut self, trans: &Transaction, datasource: SelectDatasource, subreport_column_oid: i64, subreport_report_oid: i64, is_collection: bool) -> Result<(String, String, String, String), Error> {
-        match self.constructor_type {
-            SelectConstructorType::SelectMainConstructor { .. } => {
-                // Examine the schema of SCHEMA{report_oid}_LABEL_VIEW to see what filters are applicable to the report
-                let mut filtered_columns: Vec<(String, String)> = Vec::new();
-                let oid_regex = Regex::new(r"ROOT\d+(?:_MASTER\d+|_INHERITOR\d+|_COLUMN\d+)*_OID").unwrap();
-                let pragma_sql: String = format!("PRAGMA table_info(SCHEMA{subreport_report_oid}_LABEL_VIEW)");
-                for row_result in trans.prepare(&pragma_sql)?.query_map([], |row| row.get("NAME"))? {
-                    let oid_column_name: String = row_result?;
-                    if oid_regex.is_match(&oid_column_name) {
-                        // Test if the OID is being selected in this view
-                        let filtered_datasource_alias: String = oid_column_name.replace("_OID", "");
-                        if filtered_datasource_alias.starts_with(&datasource.datasource.get_alias()) && self.cte_datasource.contains_key(&filtered_datasource_alias) {
-                            filtered_columns.push((
-                                oid_column_name,
-                                format!("{}.{}", datasource.alias, oid_column_name)
-                            ));
-                        }
-                    }
-                }
-
-                // Construct the column
-                let plain_label_expr: String = String::from("NULL");
-                let json_label_expr: String = format!(
-                    "NULLIF('[ ' || GROUP_CONCAT((SELECT l.JSON_LABEL FROM SCHEMA{subreport_report_oid}_LABEL_VIEW l {}), ', ') || ' ]', '[  ]')",
-                    if filtered_columns.len() > 0 {
-                        format!(
-                            "WHERE {}",
-                            filtered_columns.iter().map(|(filtered_oid_ord, filtered_oid_value)| format!("l.{filtered_oid_ord} IS {filtered_oid_value}"))
-                                .reduce(|acc, e| format!("{acc} AND {e}"))
-                                .unwrap()
-                        )
-                    } else {
-                        String::from("")
-                    }
-                );
-                return Ok((
-                    plain_label_expr.clone(),
-                    plain_label_expr,
-                    json_label_expr.clone(),
-                    json_label_expr
-                ));
-            }
-            SelectConstructorType::SelectLabelConstructor { schema_oid, .. } => {
-                if schema_oid == subreport_report_oid {
-
-                }
-                let params = self.add_all_columns(trans, subreport_report_oid)?;
-                let ordered_params: Vec<(String, SelectParameter, i64)> = params.into_iter()
-                    .filter(|(column_metadata, _)| column_metadata.is_primary_key)
-                    .map(|(column_metadata, column_param)| (json_encode_string(&column_metadata.name), column_param, column_metadata.ordering))
-                    .collect();
-                ordered_params.sort_by_key(|(_, _, ordering)| ordering);
-
-                for (column_metadata, column_param) in params {
-
-                }
-                todo!("Construct labels for the report with OID {report_oid}");
-            }
-        }
-    }
-
     /// Constructs the SQL expression corresponding to a Formula object.
     fn construct_formula(&mut self, trans: &Transaction, datasource: Option<SelectDatasource>, formula: Box<Formula>, mut context: SelectParameterContext) -> Result<SelectParameter, Error> {
         Ok(match *formula {
@@ -1963,7 +2067,7 @@ impl SelectConstructor {
                 }
             }
             Formula::LiteralString(value) => {
-                let value_expr: String = format!("'{}'", value.replace("'", "''"));
+                let value_expr: String = format!("'{}'", sql_encode_string(&value);
                 let json_label_expr: String = json_encode_string(&value);
                 SelectParameter {
                     plain_label_expr_norecursion: value_expr.clone(),
@@ -3063,6 +3167,18 @@ impl SelectConstructor {
                             "({})",
                             params.iter()
                                 .map(|param| format!("SELECT {}", param.plain_label_expr_recursion))
+                                .reduce(|acc, e| format!("{acc} UNION ALL {e}")).unwrap()
+                        ),
+                        json_label_expr_norecursion: format!(
+                            "({})",
+                            params.iter()
+                                .map(|param| format!("SELECT {}", param.json_label_expr_norecursion))
+                                .reduce(|acc, e| format!("{acc} UNION ALL {e}")).unwrap()
+                        ),
+                        json_label_expr_recursion: format!(
+                            "({})",
+                            params.iter()
+                                .map(|param| format!("SELECT {}", param.json_label_expr_recursion))
                                 .reduce(|acc, e| format!("{acc} UNION ALL {e}")).unwrap()
                         ),
                         value_expr_norecursion: format!(
@@ -4225,7 +4341,7 @@ fn compile_keycolumn_cte(
     for row_result in trans.prepare("SELECT OID FROM METADATA_COLUMN WHERE SCHEMA_OID = ?1 AND IS_PRIMARY_KEY AND NOT TRASH")?.query_map(params![table_oid], |row| row.get::<_, i64>("OID"))? {
         let column_oid: i64 = row_result?;
         let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
-        let sanitized_column_name: String = column_metadata.name.replace("\\", "\\\\").replace("\"", "\\\"").replace("'", "''");
+        let sanitized_column_name: String = json_encode_string(&column_metadata.name);
 
         // Determine expression for this specific column
         match column_metadata.column_type {
@@ -5724,7 +5840,7 @@ impl SchemaView {
                 deterministic: true,
             },
             Formula::LiteralString(str) => {
-                let safe_str: String = format!("'{}'", str.replace("'", "''"));
+                let safe_str: String = format!("'{}'", sql_encode_string(&str);
                 ScalarExpression {
                     arg_expr: safe_str.clone(),
                     arg_type: ExpressionReturnType::new_primitive(PrimitiveScalarType::Text),
