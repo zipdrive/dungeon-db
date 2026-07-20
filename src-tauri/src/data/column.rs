@@ -256,52 +256,9 @@ impl FullMetadata {
     pub fn query_values(mut sender: Sender<DropdownValue>, schema_oid: i64) -> Result<(), Error> {
         let conn = db::open()?;
 
-        // Construct surrogate query
-        let datasource: datasource::Datasource =
-            datasource::Datasource::get_default_datasource_transact(&conn, schema_oid)?;
-        let mut query: query::QueryBuilder = query::QueryBuilder::new(Vec::new())?;
-        let surrogate: surrogate::Surrogate =
-            surrogate::Surrogate::get_flat(&conn, &mut query, datasource, vec![])?;
-
-        // Add ordering columns, if any
-        let mut stmt_orderby = conn.prepare(
-            "
-            SELECT 
-                DATASOURCE_ALIAS,
-                COLUMN_OID, 
-                SORT_ASCENDING 
-            FROM METADATA_SCHEMA_ORDERBY_VIEW
-            WHERE SCHEMA_OID = ?1 
-            ",
-        )?;
-        for row_result in stmt_orderby.query_and_then(params![schema_oid], |row| {
-            Ok::<(String, i64, bool), rusqlite::Error>((
-                row.get::<_, String>("DATASOURCE_ALIAS")?,
-                row.get::<_, i64>("COLUMN_OID")?,
-                row.get::<_, bool>("SORT_ASCENDING")?,
-            ))
-        })? {
-            let (datasource_alias, column_oid, sort_ascending) = row_result?;
-            let column_datasource: datasource::Datasource =
-                datasource::Datasource::from_alias_transact(&conn, datasource_alias)?;
-            let column_metadata: column::FullMetadata =
-                column::FullMetadata::get_transact(&conn, column_oid)?;
-
-            // Insert ORDER BY clause
-            query.insert_ordering(&column_datasource, column_metadata, sort_ascending)?;
-        }
-
-        // Run the surrogate query
+        // Select the label from the schema's main view
         let sql_select = format!(
-            "SELECT {} AS OID, COALESCE({}, '— NULL PRIMARY KEY —') AS LABEL {} ORDER BY ROW_INDEX",
-            surrogate.oid_expr,
-            surrogate.label_expr,
-            {
-                let Some((sql_from, _)) = query.compile_datasources(true)? else {
-                    return Err(Error::AdhocError("No datasources for surrogate query!"));
-                };
-                sql_from
-            }
+            "SELECT l.OID, COALESCE(l.PLAIN_LABEL, l.JSON_LABEL, '— NULL PRIMARY KEY —') AS LABEL FROM SCHEMA{schema_oid}_VIEW"
         );
         println!("{sql_select}");
 
@@ -394,7 +351,9 @@ impl FullMetadata {
                     self.oid,
                     match prim {
                         column_type::Primitive::PlainText
-                        | column_type::Primitive::JsonText => "TEXT",
+                        | column_type::Primitive::MarkdownText
+                        | column_type::Primitive::JsonText
+                        | column_type::Primitive::XmlText => "TEXT",
                         column_type::Primitive::Boolean
                         | column_type::Primitive::Integer => "INTEGER",
                         column_type::Primitive::Number
@@ -524,7 +483,10 @@ impl FullMetadata {
             if let Some(sql_update) = match &self.column_type {
                 column_type::ColumnType::Primitive(prim) => {
                     match prim {
-                        column_type::Primitive::PlainText | column_type::Primitive::JsonText => {
+                        column_type::Primitive::PlainText 
+                        | column_type::Primitive::MarkdownText
+                        | column_type::Primitive::JsonText
+                        | column_type::Primitive::XmlText => {
                             if let Some(label_expr) = match &old_column.column_type {
                                 column_type::ColumnType::Primitive(old_prim) => {
                                     let old_column_label: String =

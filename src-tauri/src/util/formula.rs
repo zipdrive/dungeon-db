@@ -78,7 +78,7 @@ pub enum Formula {
     Switch {
         value: Box<Formula>,
         matches: Vec<(Formula, Formula)>,
-        formula_if_no_match: Option<Box<Formula>>,
+        formula_if_no_match: Box<Formula>,
     },
     NullIf {
         value: Box<Formula>,
@@ -559,58 +559,31 @@ impl Formula {
             ));
         }
 
-        // Check for nth-value operator
-        // For simplicity, nth-value operator only allows for literal integer indices, since on the backend it is implemented by LIMIT {length} OFFSET {start}
-        let indexer_regex: Regex = Regex::new(r#"(?s)^\s*\{(\d+)(?::(\d+))?\}(.*)"#).unwrap();
-        if let Some(indexer_cap) = indexer_regex.captures(remaining_str) {
-            let (_, [slice_start, slice_end, following]) = indexer_cap.extract();
-            let Ok(start) = slice_start.parse::<i64>() else {
+        // Check for collection index operator
+        let open_index_regex: Regex = Regex::new(r#"(?s)^\s*\{(.*)"#).unwrap();
+        let close_index_regex: Regex = Regex::new(r#"(?s)^\s*\}(.*)"#).unwrap();
+        if let Some(open_index_cap) = open_index_regex.captures(remaining_str) {
+            let (_, [following]) = open_index_cap.extract();
+            let (inside_indexer_formula, following_after_expr) =
+                Self::parse_expr(full_str, following)?;
+            if let Some(close_index_cap) =
+                close_index_regex.captures(&following_after_expr)
+            {
+                let (_, [following_after_indexer]) = close_index_cap.extract();
+                return Self::parse_dependent_expr(
+                    full_str,
+                    following_after_indexer,
+                    Formula::Index {
+                        collection: Box::new(lhs),
+                        index: Box::from(inside_indexer_formula)
+                    }
+                );
+            } else {
                 return Err(error::Error::FormulaParseError {
-                    msg: String::from("Expected a literal integer as index."),
+                    msg: String::from("Expected '}' character."),
                     full_formula: full_str.clone(),
                     substring_with_error: String::from(remaining_str.trim_start()),
                 });
-            };
-
-            match slice_end.parse::<i64>() {
-                Ok(end) => {
-                    if end < start {
-                        return Err(error::Error::FormulaParseError {
-                            msg: String::from("End of slice cannot be before start of slice."),
-                            full_formula: full_str.clone(),
-                            substring_with_error: String::from(remaining_str.trim_start()),
-                        });
-                    }
-
-                    return Self::parse_dependent_expr(
-                        full_str,
-                        following,
-                        Formula::Slice {
-                            collection: Box::from(lhs),
-                            start: start,
-                            length: end - start,
-                        },
-                    );
-                }
-                Err(_) => {
-                    if slice_end != "" {
-                        return Err(error::Error::FormulaParseError {
-                            msg: String::from("Expected a literal integer as end of slice."),
-                            full_formula: full_str.clone(),
-                            substring_with_error: String::from(remaining_str.trim_start()),
-                        });
-                    }
-
-                    return Self::parse_dependent_expr(
-                        full_str,
-                        following,
-                        Formula::Slice {
-                            collection: Box::from(lhs),
-                            start: start,
-                            length: 1,
-                        },
-                    );
-                }
             }
         }
 
@@ -1238,53 +1211,53 @@ impl Formula {
     /// Converts formula to a basic string indicating the function name.
     pub fn to_string(&self) -> String {
         match self {
-            Self::Abs(_) => String::from("abs"),
-            Self::Add(_, _) => String::from("operator+"),
-            Self::And(_, _) => String::from("and"),
-            Self::Argmax(_) => String::from("max"),
-            Self::Argmin(_) => String::from("min"),
-            Self::Average(_) => String::from("avg"),
-            Self::Ceiling(_) => String::from("ceil"),
-            Self::Coalesce(_) => String::from("coalesce"),
-            Self::Concat(_, _) => String::from("operator&"),
-            Self::Conditional { .. } => String::from("if"),
-            Self::Count(_) => String::from("count"),
-            Self::Divide(_, _) => String::from("operator/"),
-            Self::Eq(_, _) => String::from("operator="),
-            Self::Exponent(_, _) => String::from("pow"),
-            Self::Floor(_) => String::from("floor"),
-            Self::Format { .. } => String::from("format"),
-            Self::Glob { .. } => String::from("match"),
-            Self::In { .. } => String::from("in"),
-            Self::Join { .. } => String::from("join"),
-            Self::Length(_) => String::from("length"),
-            Self::LessThan(_, _) => String::from("operator<"),
-            Self::LessThanOrEq(_, _) => String::from("operator<="),
-            Self::LiteralArray(items) => String::from("array"),
+            Self::Abs(_) => String::from("ABS(x: Number) -> Number"),
+            Self::Add(_, _) => String::from("ADD<_T: Number>(lhs: _T, rhs: _T) -> _T"),
+            Self::And(_, _) => String::from("AND(lhs: Boolean, rhs: Boolean) -> Boolean"),
+            Self::Argmax(_) => String::from("MAX<_T: Number>(...args: _T) -> _T"),
+            Self::Argmin(_) => String::from("MIN<_T: Number>(...args: _T) -> _T"),
+            Self::Average(_) => String::from("AVG(collection: List<Number>) -> Number"),
+            Self::Ceiling(_) => String::from("CEIL(x: Number) -> Integer"),
+            Self::Coalesce(_) => String::from("COALESCE<_T: Any>(...args: _T) -> _T"),
+            Self::Concat(_, _) => String::from("CONCAT(lhs: Text, rhs: Text) -> Text"),
+            Self::Conditional { .. } => String::from("IF<_T: Any>(condition: Boolean, valueIfTrue: _T, valueIfFalse?: _T) -> _T"),
+            Self::Count(_) => String::from("COUNT(collection: List<Any>) -> Integer"),
+            Self::Divide(_, _) => String::from("DIVIDE(lhs: Number, rhs: Number) -> Number"),
+            Self::Eq(_, _) => String::from("EQ(lhs: Any, rhs: Any) -> Boolean"),
+            Self::Exponent(_, _) => String::from("POW<_T: Number>(base: _T, exponent: _T) -> _T"),
+            Self::Floor(_) => String::from("FLOOR(x: Number) -> Integer"),
+            Self::Format { .. } => String::from("FORMAT(str: Text, ...args: Any) -> Text"),
+            Self::Glob { .. } => String::from("ISMATCH(str: Text, pattern: Text) -> Boolean"),
+            Self::In { .. } => String::from("CONTAINS(collection: List<Any>, x: Any) -> Boolean"),
+            Self::Index { .. } => String::from("INDEX<_T: Any>(collection: List<_T>, index: Integer) -> _T"),
+            Self::Join { .. } => String::from("JOIN(collection: List<Text>) -> Text"),
+            Self::Length(_) => String::from("LENGTH(x: Text) -> Integer"),
+            Self::LessThan(_, _) => String::from("LESSTHAN(lhs: Number, rhs: Number) -> Boolean"),
+            Self::LessThanOrEq(_, _) => String::from("LESSTHANEQUALTO(lhs: Number, rhs: Number) -> Boolean"),
+            Self::LiteralArray(items) => String::from("LIST<_T>(...args: _T) -> List<_T>"),
             Self::LiteralBool(b) => String::from(if *b { "true" } else { "false" }),
             Self::LiteralFloat(lit) => format!("{lit}"),
             Self::LiteralInt(lit) => format!("{lit}"),
-            Self::LiteralString(str) => format!("\"{}\"", str.replace("\"", "\\\"")),
-            Self::Lowercase(_) => String::from("lower"),
-            Self::Max(_) => String::from("max"),
-            Self::Min(_) => String::from("min"),
-            Self::Modulo(_, _) => String::from("operator%"),
-            Self::Multiply(_, _) => String::from("operator*"),
-            Self::Not(_) => String::from("not"),
+            Self::LiteralString(str) => format!("\"{}\"", str.replace("\"", "\\\"").replace("\\", "\\\\")),
+            Self::Lowercase(_) => String::from("LOWER<_T: Text>(x: _T) -> _T"),
+            Self::Max(_) => String::from("MAX<_T: Number>(collection: List<_T>) -> _T"),
+            Self::Min(_) => String::from("MIN<_T: Number>(collection: List<_T>) -> _T"),
+            Self::Modulo(_, _) => String::from("MODULO<_T: Number>(numerator: _T, modulus: _T) -> _T"),
+            Self::Multiply(_, _) => String::from("MULTIPLY<_T: Number>(lhs: _T, rhs: _T) -> _T"),
+            Self::Not(_) => String::from("NOT(x: Boolean) -> Boolean"),
             Self::Null => String::from("null"),
-            Self::NullIf { .. } => String::from("nullif"),
-            Self::Or(_, _) => String::from("or"),
-            Self::Param { .. } => String::from("parameter"),
-            Self::RandomInt => String::from("random"),
-            Self::Replace { .. } => String::from("replace"),
-            Self::Round(_) => String::from("round"),
-            Self::Sign(_) => String::from("sign"),
-            Self::Slice { .. } => String::from("operator{}"),
-            Self::Substring { .. } => String::from("substr"),
-            Self::Subtract(_, _) => String::from("operator-"),
-            Self::Sum(_) => String::from("sum"),
-            Self::Switch { .. } => String::from("switch"),
-            Self::Uppercase(_) => String::from("upper"),
+            Self::NullIf { .. } => String::from("NULLIF<_T: Any>(x: _T, y: Any) -> _T"),
+            Self::Or(_, _) => String::from("OR(lhs: Boolean"),
+            Self::Param { .. } => String::from("PARAM"),
+            Self::RandomInt => String::from("RANDOM() -> Integer"),
+            Self::Replace { .. } => String::from("REPLACE(str: Text, pattern: Text, replacement: Text) -> Text"),
+            Self::Round(_) => String::from("ROUND(x: Number) -> Integer"),
+            Self::Sign(_) => String::from("SIGN(x: Number) -> Integer"),
+            Self::Substring { .. } => String::from("SUBSTRING(str: Text, start: Integer, length?: Integer) -> Text"),
+            Self::Subtract(_, _) => String::from("SUBTRACT<_T: Number>(lhs: _T, rhs: _T) -> _T"),
+            Self::Sum(_) => String::from("SUM<_T: Number>(collection: List<_T>) -> _T"),
+            Self::Switch { .. } => String::from("SWITCH<_T: Any>(x: Any, ...[matchedValue1: Any, returnedValue1: _T], returnValueIfNoMatch?: _T) -> _T"),
+            Self::Uppercase(_) => String::from("UPPER<_T: Text>(x: _T) -> _T"),
             Self::Wrap(inner) => inner.to_string(),
         }
     }

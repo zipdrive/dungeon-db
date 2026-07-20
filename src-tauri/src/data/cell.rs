@@ -1,4 +1,3 @@
-use crate::data::query::QueryBuilder;
 use crate::data::{column, column_type, datasource, query, schema, table};
 use crate::data::{datasource::Datasource, file, row};
 use crate::util::channel::Sender;
@@ -85,7 +84,9 @@ pub enum CellIdentifier {
 #[serde(rename_all = "camelCase")]
 pub enum CellTextFormat {
     Plain,
-    JSON,
+    Markdown,
+    Json,
+    Xml
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -378,7 +379,10 @@ impl Cell {
                                 },
                             }
                         }
-                        column_type::Primitive::PlainText | column_type::Primitive::JsonText => {
+                        column_type::Primitive::PlainText 
+                        | column_type::Primitive::MarkdownText
+                        | column_type::Primitive::JsonText
+                        | column_type::Primitive::XmlText => {
                             let label_sql: String = format!("SELECT COLUMN{column_oid}_LABEL AS LABEL FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
                             let (label, label_e) =
                                 match conn.query_one(&label_sql, params![row_oid], |row| {
@@ -394,7 +398,7 @@ impl Cell {
                                 data_row_oid: row_oid.clone(),
                                 label,
                                 format: match prim {
-                                    column_type::Primitive::JsonText => CellTextFormat::JSON,
+                                    column_type::Primitive::JsonText => CellTextFormat::Json,
                                     _ => CellTextFormat::Plain,
                                 },
                                 cell_identifier: CellIdentifier::DataCell {
@@ -985,12 +989,56 @@ impl Cell {
                                                 }
                                             },
                                         },
+                                        column_type::Primitive::MarkdownText => Self::TextEntry {
+                                            data_table_oid,
+                                            data_column_oid,
+                                            data_row_oid,
+                                            label,
+                                            format: CellTextFormat::Markdown,
+                                            cell_identifier: CellIdentifier::VirtualCell {
+                                                column_oid,
+                                                query_filter,
+                                                isolated_cell_dependencies,
+                                                full_reload_cell_dependencies,
+                                            },
+                                            validation_failures: {
+                                                if let Some(label_e) = label_e {
+                                                    vec![FailedValidation {
+                                                        message: format!("{label_e}"),
+                                                    }]
+                                                } else {
+                                                    Vec::new()
+                                                }
+                                            },
+                                        },
                                         column_type::Primitive::JsonText => Self::TextEntry {
                                             data_table_oid,
                                             data_column_oid,
                                             data_row_oid,
                                             label,
-                                            format: CellTextFormat::JSON,
+                                            format: CellTextFormat::Json,
+                                            cell_identifier: CellIdentifier::VirtualCell {
+                                                column_oid,
+                                                query_filter,
+                                                isolated_cell_dependencies,
+                                                full_reload_cell_dependencies,
+                                            },
+                                            validation_failures: {
+                                                if let Some(label_e) = label_e {
+                                                    vec![FailedValidation {
+                                                        message: format!("{label_e}"),
+                                                    }]
+                                                } else {
+                                                    Vec::new()
+                                                }
+                                            },
+                                        },
+                                        column_type::Primitive::XmlText => Self::TextEntry {
+                                            data_table_oid,
+                                            data_column_oid,
+                                            data_row_oid,
+                                            label,
+                                            format: CellTextFormat::Xml,
                                             cell_identifier: CellIdentifier::VirtualCell {
                                                 column_oid,
                                                 query_filter,
@@ -1301,7 +1349,7 @@ impl Cell {
                                 return Self::Readonly {
                                     label,
                                     format: if param.starts_with("json") {
-                                        CellTextFormat::JSON
+                                        CellTextFormat::Json
                                     } else {
                                         CellTextFormat::Plain
                                     },
@@ -1610,7 +1658,9 @@ impl SchemaCellStream {
                                 }
                             }
                             column_type::Primitive::PlainText
-                            | column_type::Primitive::JsonText => {
+                            | column_type::Primitive::MarkdownText
+                            | column_type::Primitive::JsonText
+                            | column_type::Primitive::XmlText => {
                                 let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
                                     Ok(label) => (label, None),
                                     Err(e) => (None, Some(e))
@@ -1622,7 +1672,7 @@ impl SchemaCellStream {
                                     data_row_oid,
                                     label,
                                     format: match prim {
-                                        column_type::Primitive::JsonText => CellTextFormat::JSON,
+                                        column_type::Primitive::JsonText => CellTextFormat::Json,
                                         _ => CellTextFormat::Plain
                                     },
                                     cell_identifier,
@@ -2051,7 +2101,9 @@ impl SchemaCellStream {
                                                 column_type::Primitive::Integer
                                                 | column_type::Primitive::Number
                                                 | column_type::Primitive::PlainText
+                                                | column_type::Primitive::MarkdownText
                                                 | column_type::Primitive::JsonText
+                                                | column_type::Primitive::XmlText
                                                 | column_type::Primitive::Date
                                                 | column_type::Primitive::Datetime => {
                                                     Cell::TextEntry  {
@@ -2060,7 +2112,7 @@ impl SchemaCellStream {
                                                         data_row_oid,
                                                         label,
                                                         format: match prim {
-                                                            column_type::Primitive::JsonText => CellTextFormat::JSON,
+                                                            column_type::Primitive::JsonText => CellTextFormat::Json,
                                                             _ => CellTextFormat::Plain
                                                         },
                                                         cell_identifier,
@@ -2261,7 +2313,7 @@ impl SchemaCellStream {
                                 Cell::Readonly {  
                                     label, 
                                     format: if param.starts_with("json") {
-                                        CellTextFormat::JSON
+                                        CellTextFormat::Json
                                     } else {
                                         CellTextFormat::Plain
                                     },
@@ -2407,8 +2459,11 @@ impl DataCellEntry {
         }
 
         // Query for root datasource
-        let root_datasource_alias: String =
-            Datasource::get_default_datasource_transact(conn, table_oid)?.get_alias();
+        let root_datasource_alias: String = if let Some(root_datasource) = Datasource::get_default_datasource_transact(conn, table_oid)? {
+            root_datasource.get_alias()
+        } else {
+            return Err(Error::AdhocError("Table does not have a default datasource!"));
+        };
 
         // Query row from
         let select_sql: String = format!("SELECT * FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
@@ -2431,7 +2486,9 @@ impl DataCellEntry {
                     column_type::ColumnType::Primitive(prim) => {
                         match prim {
                             column_type::Primitive::PlainText
-                            | column_type::Primitive::JsonText => DataCellValue::Text( 
+                            | column_type::Primitive::MarkdownText
+                            | column_type::Primitive::JsonText
+                            | column_type::Primitive::XmlText => DataCellValue::Text( 
                                 row.get::<&str, _>(&value_ord)?
                             ),
                             column_type::Primitive::Integer => DataCellValue::Integer( 

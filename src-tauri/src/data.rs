@@ -14,7 +14,6 @@ mod column_type;
 mod datasource;
 mod export;
 mod file;
-mod query;
 mod report;
 mod row;
 mod schema;
