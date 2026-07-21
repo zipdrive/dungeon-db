@@ -109,7 +109,9 @@ fn construct_row_object(
                                 None => Value::Null,
                             }
                         }
-                        column_type::Primitive::PlainText => {
+                        column_type::Primitive::PlainText
+                        | column_type::Primitive::MarkdownText
+                        | column_type::Primitive::XmlText => {
                             match row.get::<&str, Option<String>>(&value_ord)? {
                                 Some(value) => json!(value),
                                 None => Value::Null,

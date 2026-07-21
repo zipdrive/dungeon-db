@@ -17,7 +17,6 @@ mod file;
 mod report;
 mod row;
 mod schema;
-mod surrogate;
 mod table;
 mod view;
 

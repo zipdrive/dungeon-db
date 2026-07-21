@@ -1,8 +1,7 @@
 use crate::data::column;
 use crate::data::column_type;
 use crate::data::datasource::{self, Datasource};
-use crate::data::query::QueryBuilder;
-use crate::data::{query, schema, table};
+use crate::data::{schema, table};
 use crate::util::channel::Sender;
 use crate::util::error::Error;
 use rusqlite::OptionalExtension;

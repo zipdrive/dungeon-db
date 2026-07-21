@@ -1,9 +1,7 @@
 use crate::data::column;
 use crate::data::column_type;
 use crate::data::datasource::Datasource;
-use crate::data::query::QueryBuilder;
 use crate::data::schema;
-use crate::data::surrogate;
 use crate::data::view::regenerate_schema_views;
 use crate::util::channel::Sender;
 use crate::util::db;
