@@ -59,9 +59,17 @@ export type File = {
 };
 
 export type SchemaRow = {
-    rowIdentifier: [number, number] | null,
+    rowIdentifier: {
+        tableRow: {
+            tableOid: number,
+            rowOid: number
+        }
+    } | {
+        reportRow: {
+            objectFilter: number
+        }
+    },
     index: number,
-    queryFilter: string,
     fixedParentDatasource: [number, number, ColumnFullMetadata] | null,
     validationFailures: ValidationFailures
 };

@@ -10,7 +10,7 @@ import '@interactjs/actions/resize';
 import interact from '@interactjs/interact';
 import { ResizeEvent } from '@interactjs/actions/resize/plugin';
 
-export type Primitive = 'text' | 'integer' | 'number' | 'checkbox' | 'date' | 'datetime' | 'file' | 'image' | 'jSON';
+export type Primitive = 'plainText' | 'markdownText' | 'jsonText' | 'xmlText' | 'integer' | 'number' | 'boolean' | 'date' | 'datetime' | 'file' | 'image';
 
 export type ColumnType = {
     primitive: Primitive
@@ -108,7 +108,7 @@ export function createColumnHeaderHTML(schemaOid: number, column: FullMetadata):
                     action: () => {
                         openDialogAsync({
                             createColumn: {
-                                schemaOid: schemaOid,
+                                schemaOid,
                                 columnOrdering: column.ordering
                             }
                         });
@@ -118,7 +118,10 @@ export function createColumnHeaderHTML(schemaOid: number, column: FullMetadata):
                     text: 'Delete Column',
                     action: () => {
                         executeAsync({
-                            trashColumn: column.oid
+                            trashColumn: {
+                                schemaOid,
+                                columnOid: column.oid
+                            }
                         })
                         .catch(async (e) => {
                             await message(e, {

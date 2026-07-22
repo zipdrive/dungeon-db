@@ -48,8 +48,8 @@ class GridRow {
      * Set up the context menu for the index cell.
      */
     async #setupContextMenu() {
-        if (this.#row.rowIdentifier) {
-            const [tableOid, rowOid] = this.#row.rowIdentifier;
+        if ('tableRow' in this.#row.rowIdentifier) {
+            const  { tableOid, rowOid } = this.#row.rowIdentifier.tableRow;
 
             const insertSubmenu = await Submenu.new({
                 text: 'Insert New Row...',
@@ -91,7 +91,7 @@ class GridRow {
                         }
                     }
                 ]
-            })
+            });
             const menu = await Menu.new({
                 items: [
                     {

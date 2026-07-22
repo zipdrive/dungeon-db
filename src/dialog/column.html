@@ -28,8 +28,8 @@
                             <td><label for="column-type">Column Type:<sup tooltip="The type of the column.&#10;Plain Text columns contain raw, unformatted text values.&#10;Checkbox columns contain binary flags, represented by a checkbox.&#10;Integer columns are restricted to whole number values.&#10;Number columns are restricted to decimal number values.&#10;Date columns are restricted to values representing a date.&#10;Datetime columns are restricted to values representing a date and time.&#10;Object columns contain a unique reference to a row in another table. This Object is displayed as a link, which opens a form where you can inspect and edit the polymorphic behavior of the linked row.&#10;Select columns contain references to a single row in another table, selected via a dropdown menu.&#10;Multiselect columns contain references to any number of rows in another table.&#10;File columns contain files. These files can either be uploaded as a link referencing a filepath on your computer (in which case they will change when the linked file is changed), or they can be uploaded directly into this .db file (in which case they will remain the same even if the original file is altered or deleted). Image files will be displayed as an image thumbnail.&#10;JSON columns contain text values in JSON format.&#10;Formula columns are defined by a formula.&#10;Subreports are represented as a link to a report, which opens with the same filters of the parent row automatically applied to it.">?</sup></label></td>
                             <td>
                                 <select name="column-type" id="column-type" class="input">
-                                    <option class="exclusive-table" value="primitive-text">Plain Text</option>
-                                    <option class="exclusive-table" value="primitive-checkbox">Checkbox</option>
+                                    <option class="exclusive-table" value="primitive-plainText">Plain Text</option>
+                                    <option class="exclusive-table" value="primitive-boolean">Checkbox</option>
                                     <option class="exclusive-table" value="primitive-integer">Integer</option>
                                     <option class="exclusive-table" value="primitive-number">Number</option>
                                     <option class="exclusive-table" value="primitive-date">Date</option>
@@ -38,7 +38,8 @@
                                     <option class="exclusive-table" value="select">Select</option>
                                     <option class="exclusive-table" value="multiselect">Multiselect</option>
                                     <option class="exclusive-table" value="primitive-file">File</option>
-                                    <option class="exclusive-table" value="primitive-jSON">JSON</option>
+                                    <option class="exclusive-table" value="primitive-image">Image</option>
+                                    <option class="exclusive-table" value="primitive-jsonText">JSON</option>
                                     <option value="formula">Formula</option>
                                     <option value="subreport">Subreport</option>
                                 </select>
@@ -51,17 +52,20 @@
                             </td>
                         </tr>
                         <tr class="
-                            exclusive-table
-                            parameter-primitive-text 
-                            parameter-primitive-checkbox 
+                            parameter-primitive-plainText 
+                            parameter-primitive-boolean 
                             parameter-primitive-integer
                             parameter-primitive-number
                             parameter-primitive-date
                             parameter-primitive-datetime
-                            parameter-primitive-jSON
+                            parameter-primitive-jsonText
+                            parameter-primitive-markdownText
+                            parameter-primitive-xmlText
                             parameter-object
                             parameter-select
                             parameter-multiselect 
+                            parameter-formula 
+                            parameter-subreport
                         ">
                             <td><label for="column-is-primary-key">Is Key Column?<sup tooltip="Key columns are used to identify rows for Object, Select, and Multiselect columns.">?</sup></label></td>
                             <td>
@@ -69,13 +73,15 @@
                             </td>
                         </tr>
                         <tr class="
-                            parameter-primitive-text 
-                            parameter-primitive-checkbox 
+                            parameter-primitive-plainText 
+                            parameter-primitive-boolean 
                             parameter-primitive-integer
                             parameter-primitive-number
                             parameter-primitive-date
                             parameter-primitive-datetime
-                            parameter-primitive-jSON
+                            parameter-primitive-jsonText
+                            parameter-primitive-markdownText
+                            parameter-primitive-xmlText
                         ">
                             <td><label for="column-default-value">Default Value:<sup tooltip="The default value of this column when a new row is created.">?</sup></label></td>
                             <td>

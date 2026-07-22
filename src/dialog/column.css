@@ -30,15 +30,15 @@ tr:has(#parameter-advanced-toggle:checked) ~ tr.parameter-advanced {
 /**
  *  Toggle parameters that only display for certain column types, when those column types are picked.
  */
-tr.parameter-primitive-text {
+tr.parameter-primitive-plainText {
     display: none;
-    :has(#column-type option[value="primitive-text"]:checked) ~ & {
+    :has(#column-type option[value="primitive-plainText"]:checked) ~ & {
         display: table-row;
     }
 }
-tr.parameter-primitive-checkbox {
+tr.parameter-primitive-boolean {
     display: none;
-    :has(#column-type option[value="primitive-checkbox"]:checked) ~ & {
+    :has(#column-type option[value="primitive-boolean"]:checked) ~ & {
         display: table-row;
     }
 }
@@ -78,9 +78,21 @@ tr.parameter-primitive-image {
         display: table-row;
     }
 }
-tr.parameter-primitive-jSON {
+tr.parameter-primitive-jsonText {
     display: none;
-    :has(#column-type option[value="primitive-jSON"]:checked) ~ & {
+    :has(#column-type option[value="primitive-jsonText"]:checked) ~ & {
+        display: table-row;
+    }
+}
+tr.parameter-primitive-markdownText {
+    display: none;
+    :has(#column-type option[value="primitive-markdownText"]:checked) ~ & {
+        display: table-row;
+    }
+}
+tr.parameter-primitive-xmlText {
+    display: none;
+    :has(#column-type option[value="primitive-xmlText"]:checked) ~ & {
         display: table-row;
     }
 }

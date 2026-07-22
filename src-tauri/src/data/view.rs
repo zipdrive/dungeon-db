@@ -708,6 +708,7 @@ impl SelectConstructorType {
                     "
                     WITH {} 
                     SELECT 
+                        ROW_NUMBER() OVER ({}) AS ROW_INDEX,
                         l.PLAIN_LABEL, 
                         l.JSON_LABEL, 
                         {}
@@ -719,15 +720,30 @@ impl SelectConstructorType {
                     // All of the CTEs, including the wrapper
                     cte_list.join(", "),
 
+                    // ORDER BY expressions
+                    // For now, leaving blank
+                    String::from(""),
+
                     // Include OBJECT_LABEL and ROOT{schema_oid}_SCHEMA columns if the schema is of type table
                     if let Some(root_datasource) = Datasource::get_default_datasource_transact(trans, schema_oid.clone())? {
                         format!(
-                            "l.OBJECT_LABEL, l.{}_SCHEMA AS SCHEMA_OID, w.{}_OID AS OID, ", 
-                            root_datasource.get_alias(),
+                            "
+                            l.OBJECT_LABEL, 
+                            l.TABLE_OID, 
+                            w.{}_OID AS OID, 
+                            ", 
                             root_datasource.get_alias()
                         )
                     } else {
-                        String::from("")
+                        format!(
+                            "
+                            {} AS OBJECT_FILTER,
+                            ",
+                            oid_list.iter()
+                                .map(|oid| format!("'{}=' || CAST(w.{oid} AS TEXT)", sql_encode_string(&oid)))
+                                .reduce(|acc, e| format!("{acc} || '&' || {e}"))
+                                .unwrap_or(String::from("''"))
+                        )
                     },
 
                     // Select each column from the wrapper
@@ -755,52 +771,37 @@ impl SelectConstructorType {
                 // Assume columns are already sorted
                 //columns.sort_by_key(|col| col.ordering);
 
-                let plain_expr_norecursion: String = if columns.len() == 1 {
-                    columns[0].plain_expr_norecursion.clone()
-                } else {
-                    String::from("NULL")
-                };
-                let json_expr_norecursion: String = if columns.len() > 1 {
-                    format!(
-                        "'{{ ' || GROUP_CONCAT(({}), ', ') || ' }}'",
-                        columns.iter()
-                            .filter_map(|col| {
-                                if col.is_required {
-                                    Some(format!("SELECT {}", col.json_expr_norecursion))
-                                } else {
-                                    None 
-                                }
-                            })
-                            .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
-                            .unwrap()
-                    )
-                } else {
-                    String::from("NULL")
-                };
-                let object_expr_norecursion: String = format!(
-                    "'{{ \"' || (SELECT REPLACE(REPLACE(s.NAME, '\\', '\\\\'), '\"', '\\\"') FROM METADATA_SCHEMA s WHERE s.OID = {}) || '\": ' || COALESCE('{{ ' || GROUP_CONCAT(({}), ', ') || ' }}', 'null') || ' }}'",
+                // Construct expressions for each column
+                let (all_columns_norecursion, all_columns_recursion): (String, String) = {
+                    let plain_expr_norecursion: String = if columns.len() == 1 {
+                        columns[0].plain_expr_norecursion.clone()
+                    } else {
+                        String::from("NULL")
+                    };
+                    let json_expr_norecursion: String = if columns.len() > 0 {
+                        format!(
+                            "'{{ ' || GROUP_CONCAT(({}), ', ') || ' }}'",
+                            columns.iter()
+                                .filter_map(|col| {
+                                    if col.is_required {
+                                        Some(format!("SELECT {}", col.json_expr_norecursion))
+                                    } else {
+                                        None 
+                                    }
+                                })
+                                .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
+                                .unwrap()
+                        )
+                    } else {
+                        String::from("NULL")
+                    };
 
-                    // The OID of the schema
-                    // If the schema is a table, this is the inheritor schema OID
-                    // If the schema is a report, this is the report's schema OID
-                    schema_oid,
-
-                    // The key columns of the schema
-                    columns.iter()
-                        .map(|col| format!("SELECT {}", col.json_expr_norecursion))
-                        .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
-                        .unwrap()
-                );
-                let oid_columns: String = oid_list.iter().fold(String::from(""), |acc, e| format!("{acc}, w.{e}"));
-                
-                if recursions.len() > 0 {
-                    // Need to make a recursive CTE
                     let plain_expr_recursion: String = if columns.len() == 1 {
                         columns[0].plain_expr_recursion.clone()
                     } else {
                         String::from("NULL")
                     };
-                    let json_expr_recursion: String = if columns.len() > 1 {
+                    let json_expr_recursion: String = if columns.len() > 0 {
                         format!(
                             "'{{ ' || GROUP_CONCAT(({}), ', ') || ' }}'",
                             columns.iter()
@@ -817,40 +818,112 @@ impl SelectConstructorType {
                     } else {
                         String::from("NULL")
                     };
-                    let object_expr_recursion: String = format!(
-                        "'{{ \"' || (SELECT REPLACE(REPLACE(s.NAME, '\\', '\\\\'), '\"', '\\\"') FROM METADATA_SCHEMA s WHERE s.OID = {}) || '\": ' || COALESCE('{{ ' || GROUP_CONCAT(({}), ', ') || ' }}', '{{ }}') || ' }}'",
 
-                        // The OID of the schema
-                        // If the schema is a table, this is the inheritor schema OID
-                        // If the schema is a report, this is the report's schema OID
-                        schema_oid,
+                    match Datasource::get_default_datasource_transact(trans, schema_oid.clone())? {
+                        Some(root_datasource) => {
+                            // Schema is a table, so include OBJECT_LABEL and TABLE_OID
+                            let root_datasource_oid: i64 = root_datasource.get_root_datasource_oid();
 
-                        // The key columns of the schema
-                        columns.iter()
-                            .map(|col| format!("SELECT {}", col.json_expr_recursion))
-                            .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
-                            .unwrap()
-                    );
+                            let object_expr_norecursion: String = format!(
+                                "'{{ \"' || (SELECT REPLACE(REPLACE(s.NAME, '\\', '\\\\'), '\"', '\\\"') FROM METADATA_SCHEMA s WHERE s.OID = w.ROOT{root_datasource_oid}_TABLE) || '\": {} }}'",
 
+                                // The key columns of the schema
+                                if columns.len() == 0 {
+                                    String::from("null")
+                                } else {
+                                    format!(
+                                        "' || COALESCE('{{ ' || GROUP_CONCAT(({}), ', ') || ' }}', 'null') || '",
+                                        columns.iter()
+                                            .map(|col| format!("SELECT {}", col.json_expr_norecursion))
+                                            .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
+                                            .unwrap()
+                                    )
+                                }
+                            );
+                            let object_expr_recursion: String = format!(
+                                "'{{ \"' || (SELECT REPLACE(REPLACE(s.NAME, '\\', '\\\\'), '\"', '\\\"') FROM METADATA_SCHEMA s WHERE s.OID = w.ROOT{root_datasource_oid}_TABLE) || '\": {} }}'",
+
+                                // The key columns of the schema
+                                if columns.len() == 0 {
+                                    String::from("null")
+                                } else {
+                                    format!(
+                                        "' || COALESCE('{{ ' || GROUP_CONCAT(({}), ', ') || ' }}', 'null') || '",
+                                        columns.iter()
+                                            .map(|col| format!("SELECT {}", col.json_expr_norecursion))
+                                            .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
+                                            .unwrap()
+                                    )
+                                }
+                            );
+
+                            (
+                                oid_list.iter().fold(
+                                    format!(
+                                        "
+                                        {plain_expr_norecursion} AS PLAIN_LABEL, 
+                                        {json_expr_norecursion} AS JSON_LABEL,
+                                        {object_expr_norecursion} AS OBJECT_LABEL,
+                                        w.ROOT{root_datasource_oid}_TABLE AS TABLE_OID
+                                        "
+                                    ),
+                                    |acc, e| format!("{acc}, w.{e}")
+                                ),
+                                oid_list.iter().fold(
+                                    format!(
+                                        "
+                                        {plain_expr_recursion} AS PLAIN_LABEL, 
+                                        {json_expr_recursion} AS JSON_LABEL,
+                                        {object_expr_recursion} AS OBJECT_LABEL,
+                                        w.ROOT{root_datasource_oid}_TABLE AS TABLE_OID
+                                        "
+                                    ),
+                                    |acc, e| format!("{acc}, w.{e}")
+                                )
+                            )
+                        }
+                        None => {
+                            (
+                                oid_list.iter().fold(
+                                    format!(
+                                        "
+                                        {plain_expr_norecursion} AS PLAIN_LABEL, 
+                                        {json_expr_norecursion} AS JSON_LABEL
+                                        "
+                                    ),
+                                    |acc, e| format!("{acc}, w.{e}")
+                                ),
+                                oid_list.iter().fold(
+                                    format!(
+                                        "
+                                        {plain_expr_recursion} AS PLAIN_LABEL, 
+                                        {json_expr_recursion} AS JSON_LABEL
+                                        "
+                                    ),
+                                    |acc, e| format!("{acc}, w.{e}")
+                                )
+                            )
+                        }
+                    }
+                };
+                
+                let oid_columns: String = oid_list.iter().fold(String::from(""), |acc, e| format!("{acc}, w.{e}"));
+                
+                if recursions.len() > 0 {
+                    // Need to make a recursive CTE
                     format!(
                         "
                         WITH {}, 
                         LABEL_CTE (PLAIN_LABEL, JSON_LABEL, OBJECT_LABEL {}) AS (
                             SELECT
-                                {plain_expr_norecursion} AS PLAIN_LABEL,
-                                {json_expr_norecursion} AS JSON_LABEL,
-                                {object_expr_norecursion} AS OBJECT_LABEL
-                                {oid_columns}
+                                {all_columns_norecursion}
                             FROM WRAPPER w
                             WHERE {}
 
                             UNION
 
                             SELECT
-                                {plain_expr_recursion} AS PLAIN_LABEL,
-                                {json_expr_recursion} AS JSON_LABEL,
-                                {object_expr_recursion} AS OBJECT_LABEL
-                                {oid_columns}
+                                {all_columns_recursion}
                             FROM WRAPPER w
                             {}
                         ) 
@@ -858,10 +931,7 @@ impl SelectConstructorType {
                         SELECT * FROM LABEL_CTE 
                         UNION ALL 
                         SELECT 
-                            {plain_expr_norecursion} AS PLAIN_LABEL,
-                            {json_expr_norecursion} AS JSON_LABEL,
-                            {object_expr_norecursion} AS OBJECT_LABEL,
-                            {oid_columns}
+                            {all_columns_norecursion}
                         FROM WRAPPER w
                         WHERE {}
                         ",
@@ -895,10 +965,7 @@ impl SelectConstructorType {
                         "
                         WITH {} 
                         SELECT 
-                            {plain_expr_norecursion} AS PLAIN_LABEL, 
-                            {json_expr_norecursion} AS JSON_LABEL, 
-                            {object_expr_norecursion} AS OBJECT_LABEL 
-                            {oid_columns} 
+                            {all_columns_norecursion}
                         FROM WRAPPER w
                         ",
 
@@ -988,6 +1055,20 @@ impl SelectConstructor {
 
         let root_datasource: Option<Datasource> = Datasource::get_default_datasource_transact(trans, schema_oid)?;
 
+        // Add all inheritor datasources
+        if let Some(root_datasource) = &root_datasource {           
+            select_constructor.add_datasource(root_datasource.clone(), false);
+
+            // Add datasource for each inheritor table
+            for row_result in trans.prepare("SELECT INHERITOR_DATASOURCE_PATH FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW WHERE MASTER_SCHEMA_OID = ?1")?.query_map(params![schema_oid], |row| row.get("INHERITOR_DATASOURCE_PATH"))? {
+                let inheritor_datasource_path: String = row_result?;
+                select_constructor.add_datasource(
+                    root_datasource.append_path(inheritor_datasource_path)?, 
+                    false
+                );
+            }
+        }
+
         for row_result in trans.prepare("SELECT COLUMN_OID FROM METADATA_SCHEMA_COLUMN_VIEW WHERE SCHEMA_OID = ?1 AND IS_PRIMARY_KEY AND IS_REQUIRED ORDER BY IS_SUBREPORT ASC")?.query_map(params![schema_oid], |row| row.get::<_, i64>("COLUMN_OID"))? {
             let column_oid = row_result?;
             let column: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid.clone())?;
@@ -1051,6 +1132,20 @@ impl SelectConstructor {
         };
 
         let root_datasource: Option<Datasource> = Datasource::get_default_datasource_transact(trans, schema_oid)?;
+
+        // Add all inheritor datasources
+        if let Some(root_datasource) = &root_datasource {    
+            select_constructor.add_datasource(root_datasource.clone(), false);
+
+            // Add datasource for each inheritor table
+            for row_result in trans.prepare("SELECT INHERITOR_DATASOURCE_PATH FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW WHERE MASTER_SCHEMA_OID = ?1")?.query_map(params![schema_oid], |row| row.get("INHERITOR_DATASOURCE_PATH"))? {
+                let inheritor_datasource_path: String = row_result?;
+                select_constructor.add_datasource(
+                    root_datasource.append_path(inheritor_datasource_path)?, 
+                    false
+                );
+            }
+        }
 
         for row_result in trans.prepare("SELECT COLUMN_OID, ORDERING, IS_REQUIRED FROM METADATA_SCHEMA_COLUMN_VIEW WHERE SCHEMA_OID = ?1 AND IS_PRIMARY_KEY ORDER BY IS_SUBREPORT ASC")?.query_map(params![schema_oid], |row| Ok((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, i64>("ORDERING")?, row.get::<_, bool>("IS_REQUIRED")?)))? {
             let (column_oid, ordering, is_required) = row_result?;
@@ -1122,7 +1217,7 @@ impl SelectConstructor {
                         root_datasource_aliases.into_iter().reduce(|acc, e| format!("{acc} INNER JOIN {e}")).unwrap()
                     )
                 } else {
-                    String::from("NULL AS COLUMN1 WHERE FALSE")
+                    String::from("SELECT NULL AS COLUMN1 WHERE FALSE")
                 }
             ));
 
@@ -4202,9 +4297,10 @@ pub fn regenerate_schema_views(trans: &Transaction, schema_oid: i64) -> Result<(
         if view_to_create.create_label_view {
             let select_constructor: SelectConstructor = SelectConstructor::new_label(trans, schema_oid)?;
             let sql_create: String = format!(
-                "CREATE VIEW SCHEMA{view_schema_oid}_LABEL_VIEW AS ({})",
+                "CREATE VIEW SCHEMA{view_schema_oid}_LABEL_VIEW AS {}",
                 select_constructor.build(trans)?
             );
+            println!("{sql_create}");
             trans.execute(&sql_create, [])?;
         }
     }
@@ -4214,9 +4310,10 @@ pub fn regenerate_schema_views(trans: &Transaction, schema_oid: i64) -> Result<(
         if view_to_create.create_main_view {
             let select_constructor: SelectConstructor = SelectConstructor::new_main(trans, schema_oid)?;
             let sql_create: String = format!(
-                "CREATE VIEW SCHEMA{view_schema_oid}_VIEW AS ({})",
+                "CREATE VIEW SCHEMA{view_schema_oid}_VIEW AS {}",
                 select_constructor.build(trans)?
             );
+            println!("{sql_create}");
             trans.execute(&sql_create, [])?;
         }
     }
