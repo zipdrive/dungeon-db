@@ -63,7 +63,6 @@ pub fn save(app: AppHandle) -> Result<(), Error> {
 
 /// Save to the main file being worked on.
 pub fn save_shortcut(app: &AppHandle) -> Result<(), Error> {
-    println!("Command: SAVE");
      // Save to main file, then clean database
     if db::save_to_current_file(app)? {
         // Record that there are no changes since the last save
@@ -76,7 +75,6 @@ pub fn save_shortcut(app: &AppHandle) -> Result<(), Error> {
 #[tauri::command]
 /// Save to a prompted file.
 pub fn save_as(app: AppHandle) -> Result<(), Error> {
-    println!("Command: SAVE AS");
     // Save to prompted main file, then clean database
     if db::save_to_prompted_file(&app)? {
         // Record that there are no changes since the last save
@@ -683,8 +681,7 @@ impl Action {
                 };
 
                 // Send signal to update that cell + any dependent cells
-                // Do this regardless of whether previous execution succeeded or failed
-                app.emit("cell", cell)?;
+                cell::Cell::emit_affected_cells(app, cell.table_oid, cell.column_oid, cell.row_oid)?;
 
                 // Throw error if execution failed
                 if let Err(e) = execution_result {

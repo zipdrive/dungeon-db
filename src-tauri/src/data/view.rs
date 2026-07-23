@@ -467,15 +467,16 @@ struct SelectParameter {
     json_label_expr_recursion: String,
     value_expr_norecursion: String,
     value_expr_recursion: String,
-    cell_expr_norecursion: String,
-    cell_expr_recursion: String,
+    cell_expr: String,
+    isolated_dependency_exprs: HashSet<String>,
+    full_reload_dependency_exprs: HashSet<String>,
     scalar_type: SelectParameterType,
     context: SelectParameterContext
 }
 
 impl SelectParameter {
     /// Constructs a new scalar parameter with no recursion.
-    fn new_norecursion(plain_label_expr: String, json_label_expr: String, value_expr: String, cell_expr: String, scalar_type: SelectParameterType, context: SelectParameterContext) -> Self {
+    fn new_norecursion(plain_label_expr: String, json_label_expr: String, value_expr: String, cell_expr: String, isolated_dependency_exprs: HashSet<String>, full_reload_dependency_exprs: HashSet<String>, scalar_type: SelectParameterType, context: SelectParameterContext) -> Self {
         Self {
             plain_label_expr_norecursion: plain_label_expr.clone(),
             plain_label_expr_recursion: plain_label_expr,
@@ -483,8 +484,9 @@ impl SelectParameter {
             json_label_expr_recursion: json_label_expr,
             value_expr_norecursion: value_expr.clone(),
             value_expr_recursion: value_expr,
-            cell_expr_norecursion: cell_expr.clone(),
-            cell_expr_recursion: cell_expr,
+            cell_expr,
+            isolated_dependency_exprs,
+            full_reload_dependency_exprs,
             scalar_type,
             context
         }
@@ -638,7 +640,19 @@ enum SelectMainColumn {
         cell_expr: String,
 
         /// The ordinal for the referenced cell.
-        cell_ord: String 
+        cell_ord: String,
+
+        /// Expression referencing each table_oid:column_oid:row_oid for which the formula has a dependency that can be resolved with a hot reload.
+        isolated_dependencies_expr: String,
+
+        /// The ordinal for the isolated dependencies.
+        isolated_dependencies_ord: String,
+
+        /// Expression referencing each table_oid:column_oid:row_oid for which the formula has a dependency that can only be resolved by reloading the entire report.
+        full_reload_dependencies_expr: String,
+
+        /// The ordinal for the full-reload dependencies.
+        full_reload_dependencies_ord: String 
     }
 }
 
@@ -752,8 +766,8 @@ impl SelectConstructorType {
                             columns.iter().map(|col| match col {
                                 SelectMainColumn::Cell { value_expr, value_ord, label_expr, label_ord } => 
                                     format!("{value_expr} AS {value_ord}, {label_expr} AS {label_ord}"),
-                                SelectMainColumn::Formula { value_expr, value_ord, label_expr, label_ord, cell_expr, cell_ord } => 
-                                    format!("{value_expr} AS {value_ord}, {label_expr} AS {label_ord}, {cell_expr} AS {cell_ord}")
+                                SelectMainColumn::Formula { value_expr, value_ord, label_expr, label_ord, cell_expr, cell_ord, isolated_dependencies_expr, isolated_dependencies_ord, full_reload_dependencies_expr, full_reload_dependencies_ord } => 
+                                    format!("{value_expr} AS {value_ord}, {label_expr} AS {label_ord}, {cell_expr} AS {cell_ord}, {isolated_dependencies_expr} AS {isolated_dependencies_ord}, {full_reload_dependencies_expr} AS {full_reload_dependencies_ord}")
                             })
                         )
                         .reduce(|acc, e| format!("{acc}, {e}"))
@@ -864,7 +878,8 @@ impl SelectConstructorType {
                                         {plain_expr_norecursion} AS PLAIN_LABEL, 
                                         {json_expr_norecursion} AS JSON_LABEL,
                                         {object_expr_norecursion} AS OBJECT_LABEL,
-                                        w.ROOT{root_datasource_oid}_TABLE AS TABLE_OID
+                                        w.ROOT{root_datasource_oid}_TABLE AS TABLE_OID,
+                                        w.ROOT{root_datasource_oid}_OID AS OID
                                         "
                                     ),
                                     |acc, e| format!("{acc}, w.{e}")
@@ -875,7 +890,8 @@ impl SelectConstructorType {
                                         {plain_expr_recursion} AS PLAIN_LABEL, 
                                         {json_expr_recursion} AS JSON_LABEL,
                                         {object_expr_recursion} AS OBJECT_LABEL,
-                                        w.ROOT{root_datasource_oid}_TABLE AS TABLE_OID
+                                        w.ROOT{root_datasource_oid}_TABLE AS TABLE_OID,
+                                        w.ROOT{root_datasource_oid}_OID AS OID
                                         "
                                     ),
                                     |acc, e| format!("{acc}, w.{e}")
@@ -1112,8 +1128,24 @@ impl SelectConstructor {
                             value_ord,
                             label_expr,
                             label_ord,
-                            cell_expr: param.cell_expr_norecursion,
-                            cell_ord: format!("COLUMN{column_oid}_CELL")
+                            cell_expr: param.cell_expr,
+                            cell_ord: format!("COLUMN{column_oid}_CELL"),
+                            isolated_dependencies_expr: if param.isolated_dependency_exprs.len() > 0 {
+                                param.isolated_dependency_exprs.into_iter()
+                                    .reduce(|acc, e| format!("{acc} || ',' || {e}"))
+                                    .unwrap()
+                            } else {
+                                String::from("NULL")
+                            },
+                            isolated_dependencies_ord: format!("COLUMN{column_oid}_ISOLATEDRELOAD"),
+                            full_reload_dependencies_expr: if param.full_reload_dependency_exprs.len() > 0 {
+                                param.full_reload_dependency_exprs.into_iter()
+                                    .reduce(|acc, e| format!("{acc} || ',' || {e}"))
+                                    .unwrap()
+                            } else {
+                                String::from("NULL")
+                            },
+                            full_reload_dependencies_ord: format!("COLUMN{column_oid}_FULLRELOAD")
                         });
                     }
                     _ => {
@@ -1289,11 +1321,68 @@ impl SelectConstructor {
         }
         
         let cell_expr: String = format!(
-            "('{}:{}:' || CAST({} AS TEXT))",
+            "('{}:{}:{}:' || CAST(w.{}_OID AS TEXT))",
+            column.column_type.to_str(),
             column.schema.oid,
             column.oid,
-            datasource.get_oid_expr()
+            datasource.datasource.get_alias()
         );
+                    
+        let (isolated_dependency_exprs, full_reload_dependency_exprs): (HashSet<String>, HashSet<String>) = {
+            match context {
+                SelectParameterContext::Scalar => {
+                    let mut isolated_dependency_exprs: HashSet<String> = HashSet::new();
+                    let mut full_reload_dependency_exprs: HashSet<String> = HashSet::new();
+                    let dependent_basis_datasource_alias = datasource.datasource.seek_basis()?.get_alias();
+                    for dependent_datasource in datasource.datasource.linearize() {
+                        let dependent_datasource_alias: String = dependent_datasource.get_alias();
+                        let dependent_datasource_table_oid: i64 = dependent_datasource.get_schema_oid()?;
+                        if let Datasource::Column { parent_datasource, column: dependent_column, .. } = dependent_datasource {
+                            let dependent_cell_expr: String = format!(
+                                "('{}:{}:' || w.{}_OID)",
+                                dependent_column.schema.oid,
+                                dependent_column.oid,
+                                if dependent_column.schema.oid == dependent_datasource_table_oid {
+                                    // Row OID is on this datasource
+                                    dependent_datasource_alias.clone()
+                                } else {
+                                    // Row OID is on parent datasource
+                                    parent_datasource.get_alias()
+                                }
+                            );
+                            if dependent_basis_datasource_alias.starts_with(&dependent_datasource_alias) && dependent_datasource_alias != dependent_basis_datasource_alias {
+                                // A change to the cell won't affect the cardinality of the schema
+                                isolated_dependency_exprs.insert(dependent_cell_expr);
+                            } else {
+                                // A change to the cell will affect the cardinality of the schema
+                                full_reload_dependency_exprs.insert(dependent_cell_expr);
+                            }
+                        }
+                    }
+                    (
+                        isolated_dependency_exprs,
+                        full_reload_dependency_exprs
+                    )
+                }
+                SelectParameterContext::Collection { .. } => {
+                    let mut isolated_dependency_exprs: HashSet<String> = HashSet::new();
+                    for dependent_datasource in datasource.datasource.linearize() {
+                        if let Datasource::Column { column: dependent_column, .. } = dependent_datasource {
+                            let dependent_cell_expr: String = format!(
+                                "('{}:{}:*')",
+                                dependent_column.schema.oid,
+                                dependent_column.oid
+                            );
+                            isolated_dependency_exprs.insert(dependent_cell_expr);
+                        }
+                    }
+                    (
+                        isolated_dependency_exprs,
+                        HashSet::new()
+                    )
+                }
+            }
+        };
         
         match column.column_type {
             column_type::ColumnType::Primitive(prim) => {
@@ -1304,8 +1393,17 @@ impl SelectConstructor {
                     let value_expr: String = format!("w.{}", cte_column.value_ord);
                     let plain_label_expr: String = scalar_type.construct_plain_label_expr(&value_expr);
                     let json_label_expr: String = scalar_type.construct_json_label_expr(&value_expr);
-                    
-                    return Ok(SelectParameter::new_norecursion(plain_label_expr, json_label_expr, value_expr, cell_expr, scalar_type, context));
+
+                    return Ok(SelectParameter::new_norecursion(
+                        plain_label_expr, 
+                        json_label_expr, 
+                        value_expr, 
+                        cell_expr,
+                        isolated_dependency_exprs,
+                        full_reload_dependency_exprs,
+                        scalar_type, 
+                        context
+                    ));
                 }
             }
             column_type::ColumnType::Object { table_oid, .. } => {
@@ -1326,8 +1424,9 @@ impl SelectConstructor {
                         json_label_expr_recursion, 
                         value_expr_norecursion: value_expr.clone(), 
                         value_expr_recursion: value_expr, 
-                        cell_expr_norecursion: cell_expr.clone(), 
-                        cell_expr_recursion: cell_expr, 
+                        cell_expr, 
+                        isolated_dependency_exprs,
+                        full_reload_dependency_exprs,
                         scalar_type: SelectParameterType::new(), 
                         context 
                     });
@@ -1351,8 +1450,9 @@ impl SelectConstructor {
                         json_label_expr_recursion, 
                         value_expr_norecursion: value_expr.clone(), 
                         value_expr_recursion: value_expr, 
-                        cell_expr_norecursion: cell_expr.clone(), 
-                        cell_expr_recursion: cell_expr, 
+                        cell_expr, 
+                        isolated_dependency_exprs,
+                        full_reload_dependency_exprs,
                         scalar_type: SelectParameterType::new(), 
                         context 
                     });
@@ -1386,8 +1486,9 @@ impl SelectConstructor {
                         json_label_expr_recursion, 
                         value_expr_norecursion: value_expr.clone(), 
                         value_expr_recursion: value_expr, 
-                        cell_expr_norecursion: cell_expr.clone(), 
-                        cell_expr_recursion: cell_expr, 
+                        cell_expr, 
+                        isolated_dependency_exprs,
+                        full_reload_dependency_exprs,
                         scalar_type: SelectParameterType::new(), 
                         context 
                     });
@@ -1441,12 +1542,22 @@ impl SelectConstructor {
                             .reduce(|acc, e| format!("({acc} || '&' || {e})"))
                             .unwrap_or(String::from("''"));
                         let json_label_expr: String = format!(
-                            "NULLIF('[ ' || GROUP_CONCAT((SELECT l.JSON_LABEL FROM SCHEMA{report_oid}_LABEL_VIEW l {}), ', ') || ' ]', '[  ]')",
+                            "NULLIF('[ ' || GROUP_CONCAT((SELECT l.JSON_LABEL FROM SCHEMA{report_oid}_LABEL_VIEW l {}), ', ') OVER ({}) || ' ]', '[  ]')",
                             if filtered_columns.len() > 0 {
                                 format!(
                                     "WHERE {}",
                                     filtered_columns.iter().map(|(filtered_oid_ord, filtered_oid_value)| format!("l.{filtered_oid_ord} IS {filtered_oid_value}"))
                                         .reduce(|acc, e| format!("{acc} AND {e}"))
+                                        .unwrap()
+                                )
+                            } else {
+                                String::from("")
+                            },
+                            if filtered_columns.len() > 0 {
+                                format!(
+                                    "PARTITION BY {}",
+                                    filtered_columns.iter().map(|(_, filtered_oid_value)| filtered_oid_value.clone())
+                                        .reduce(|acc, e| format!("{acc}, {e}"))
                                         .unwrap()
                                 )
                             } else {
@@ -1460,8 +1571,9 @@ impl SelectConstructor {
                             json_label_expr_recursion: json_label_expr,
                             value_expr_norecursion: value_expr.clone(),
                             value_expr_recursion: value_expr,
-                            cell_expr_norecursion: cell_expr.clone(),
-                            cell_expr_recursion: cell_expr,
+                            cell_expr,
+                            isolated_dependency_exprs,
+                            full_reload_dependency_exprs,
                             scalar_type: SelectParameterType::new(),
                             context
                         });
@@ -1508,8 +1620,9 @@ impl SelectConstructor {
                                 json_label_expr_recursion: String::from("NULL"),
                                 value_expr_norecursion: String::from("NULL"), 
                                 value_expr_recursion: String::from("NULL"), 
-                                cell_expr_norecursion: String::from("NULL"), 
-                                cell_expr_recursion: String::from("NULL"), 
+                                cell_expr: String::from("NULL"), 
+                                isolated_dependency_exprs: HashSet::new(),
+                                full_reload_dependency_exprs: HashSet::new(), 
                                 scalar_type: SelectParameterType::new(), 
                                 context 
                             });
@@ -1531,8 +1644,9 @@ impl SelectConstructor {
                                 json_label_expr_recursion: format!("('[ ' || {agg_expr_recursion} || ' ]')"), 
                                 value_expr_norecursion: String::from("NULL"), 
                                 value_expr_recursion: String::from("NULL"), 
-                                cell_expr_norecursion: String::from("NULL"), 
-                                cell_expr_recursion: String::from("NULL"), 
+                                cell_expr: String::from("NULL"), 
+                                isolated_dependency_exprs,
+                                full_reload_dependency_exprs, 
                                 scalar_type: SelectParameterType::new(), 
                                 context 
                             });
@@ -1560,8 +1674,9 @@ impl SelectConstructor {
                                 json_label_expr_recursion: format!("('[ ' || {agg_expr_recursion} || ' ]')"), 
                                 value_expr_norecursion: String::from("NULL"), 
                                 value_expr_recursion: String::from("NULL"), 
-                                cell_expr_norecursion: String::from("NULL"), 
-                                cell_expr_recursion: String::from("NULL"), 
+                                cell_expr: String::from("NULL"), 
+                                isolated_dependency_exprs,
+                                full_reload_dependency_exprs, 
                                 scalar_type: SelectParameterType::new(), 
                                 context 
                             });
@@ -1627,8 +1742,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: String::from("NULL"),
                         value_expr_norecursion: String::from("NULL"), 
                         value_expr_recursion: String::from("NULL"), 
-                        cell_expr_norecursion: String::from("NULL"), 
-                        cell_expr_recursion: String::from("NULL"), 
+                        cell_expr: String::from("NULL"), 
+                        isolated_dependency_exprs: HashSet::new(),
+                        full_reload_dependency_exprs: HashSet::new(),
                         scalar_type: SelectParameterType::new(), 
                         context 
                     });
@@ -1650,8 +1766,11 @@ impl SelectConstructor {
                         json_label_expr_recursion: format!("('[ ' || {agg_expr_recursion} || ' ]')"), 
                         value_expr_norecursion: String::from("NULL"), 
                         value_expr_recursion: String::from("NULL"), 
-                        cell_expr_norecursion: String::from("NULL"), 
-                        cell_expr_recursion: String::from("NULL"), 
+                        cell_expr: String::from("NULL"), 
+                        isolated_dependency_exprs: ordered_params.iter()
+                            .fold(HashSet::new(), |acc, (_, param, _)| acc.union(&param.isolated_dependency_exprs).map(|e| e.clone()).collect()), 
+                        full_reload_dependency_exprs: ordered_params.iter()
+                            .fold(HashSet::new(), |acc, (_, param, _)| acc.union(&param.full_reload_dependency_exprs).map(|e| e.clone()).collect()), 
                         scalar_type: SelectParameterType::new(), 
                         context 
                     });
@@ -1679,8 +1798,11 @@ impl SelectConstructor {
                         json_label_expr_recursion: format!("('[ ' || {agg_expr_recursion} || ' ]')"), 
                         value_expr_norecursion: String::from("NULL"), 
                         value_expr_recursion: String::from("NULL"), 
-                        cell_expr_norecursion: String::from("NULL"), 
-                        cell_expr_recursion: String::from("NULL"), 
+                        cell_expr: String::from("NULL"), 
+                        isolated_dependency_exprs: ordered_params.iter()
+                            .fold(HashSet::new(), |acc, (_, param, _)| acc.union(&param.isolated_dependency_exprs).map(|e| e.clone()).collect()), 
+                        full_reload_dependency_exprs: ordered_params.iter()
+                            .fold(HashSet::new(), |acc, (_, param, _)| acc.union(&param.full_reload_dependency_exprs).map(|e| e.clone()).collect()), 
                         scalar_type: SelectParameterType::new(), 
                         context 
                     });
@@ -1705,8 +1827,8 @@ impl SelectConstructor {
                 return Ok((
                     String::from("NULL"),
                     String::from("NULL"),
-                    format!("(SELECT l.OBJECT_LABEL FROM SCHEMA{object_table_oid}_LABEL l WHERE l.OID = {value_expr})"),
-                    format!("(SELECT l.OBJECT_LABEL FROM SCHEMA{object_table_oid}_LABEL l WHERE l.OID = {value_expr})")
+                    format!("(SELECT l.OBJECT_LABEL FROM SCHEMA{object_table_oid}_LABEL_VIEW l WHERE l.OID = {value_expr})"),
+                    format!("(SELECT l.OBJECT_LABEL FROM SCHEMA{object_table_oid}_LABEL_VIEW l WHERE l.OID = {value_expr})")
                 ));
             }
 
@@ -1953,10 +2075,10 @@ impl SelectConstructor {
             SelectConstructorType::SelectMainConstructor { .. } => {
                 // MAIN views are allowed to select the label from the LABEL view
                 return Ok((
-                    format!("(SELECT l.PLAIN_LABEL FROM SCHEMA{object_table_oid}_LABEL l WHERE l.OID = {value_expr})"),
-                    format!("(SELECT l.PLAIN_LABEL FROM SCHEMA{object_table_oid}_LABEL l WHERE l.OID = {value_expr})"),
-                    format!("(SELECT l.JSON_LABEL FROM SCHEMA{object_table_oid}_LABEL l WHERE l.OID = {value_expr})"),
-                    format!("(SELECT l.JSON_LABEL FROM SCHEMA{object_table_oid}_LABEL l WHERE l.OID = {value_expr})")
+                    format!("(SELECT l.PLAIN_LABEL FROM SCHEMA{object_table_oid}_LABEL_VIEW l WHERE l.OID = {value_expr})"),
+                    format!("(SELECT l.PLAIN_LABEL FROM SCHEMA{object_table_oid}_LABEL_VIEW l WHERE l.OID = {value_expr})"),
+                    format!("(SELECT l.JSON_LABEL FROM SCHEMA{object_table_oid}_LABEL_VIEW l WHERE l.OID = {value_expr})"),
+                    format!("(SELECT l.JSON_LABEL FROM SCHEMA{object_table_oid}_LABEL_VIEW l WHERE l.OID = {value_expr})")
                 ));
             }
 
@@ -2180,8 +2302,9 @@ impl SelectConstructor {
                     json_label_expr_recursion: String::from("NULL"),
                     value_expr_norecursion: String::from("NULL"),
                     value_expr_recursion: String::from("NULL"),
-                    cell_expr_norecursion: String::from("NULL"),
-                    cell_expr_recursion: String::from("NULL"),
+                    cell_expr: String::from("NULL"),
+                    isolated_dependency_exprs: HashSet::new(),
+                    full_reload_dependency_exprs: HashSet::new(),
                     scalar_type: SelectParameterType::new(),
                     context
                 }
@@ -2197,8 +2320,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: label_expr, 
                         value_expr_norecursion: value_expr.clone(),
                         value_expr_recursion: value_expr,
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: HashSet::new(),
+                        full_reload_dependency_exprs: HashSet::new(),
                         scalar_type: SelectParameterType::from(column_type::Primitive::Boolean),
                         context
                     }
@@ -2212,8 +2336,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: label_expr, 
                         value_expr_norecursion: value_expr.clone(),
                         value_expr_recursion: value_expr,
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: HashSet::new(),
+                        full_reload_dependency_exprs: HashSet::new(),
                         scalar_type: SelectParameterType::from(column_type::Primitive::Boolean),
                         context
                     }
@@ -2229,8 +2354,9 @@ impl SelectConstructor {
                     json_label_expr_recursion: label_expr, 
                     value_expr_norecursion: value_expr.clone(),
                     value_expr_recursion: value_expr,
-                    cell_expr_norecursion: String::from("NULL"),
-                    cell_expr_recursion: String::from("NULL"),
+                    cell_expr: String::from("NULL"),
+                    isolated_dependency_exprs: HashSet::new(),
+                    full_reload_dependency_exprs: HashSet::new(),
                     scalar_type: SelectParameterType::from(column_type::Primitive::Number),
                     context
                 }
@@ -2245,8 +2371,9 @@ impl SelectConstructor {
                     json_label_expr_recursion: label_expr, 
                     value_expr_norecursion: value_expr.clone(),
                     value_expr_recursion: value_expr,
-                    cell_expr_norecursion: String::from("NULL"),
-                    cell_expr_recursion: String::from("NULL"),
+                    cell_expr: String::from("NULL"),
+                    isolated_dependency_exprs: HashSet::new(),
+                    full_reload_dependency_exprs: HashSet::new(),
                     scalar_type: SelectParameterType::from(column_type::Primitive::Integer),
                     context
                 }
@@ -2261,8 +2388,9 @@ impl SelectConstructor {
                     json_label_expr_recursion: json_label_expr, 
                     value_expr_norecursion: value_expr.clone(),
                     value_expr_recursion: value_expr,
-                    cell_expr_norecursion: String::from("NULL"),
-                    cell_expr_recursion: String::from("NULL"),
+                    cell_expr: String::from("NULL"),
+                    isolated_dependency_exprs: HashSet::new(),
+                    full_reload_dependency_exprs: HashSet::new(),
                     scalar_type: SelectParameterType::from(column_type::Primitive::PlainText),
                     context
                 }
@@ -2284,8 +2412,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: inner_param.isolated_dependency_exprs,
+                        full_reload_dependency_exprs: inner_param.full_reload_dependency_exprs,
                         scalar_type,
                         context: inner_param.context
                     }
@@ -2314,8 +2443,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: inner_param.isolated_dependency_exprs,
+                        full_reload_dependency_exprs: inner_param.full_reload_dependency_exprs,
                         scalar_type,
                         context: inner_param.context
                     }
@@ -2344,8 +2474,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: inner_param.isolated_dependency_exprs,
+                        full_reload_dependency_exprs: inner_param.full_reload_dependency_exprs,
                         scalar_type,
                         context: inner_param.context
                     }
@@ -2373,8 +2504,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: inner_param.isolated_dependency_exprs,
+                        full_reload_dependency_exprs: inner_param.full_reload_dependency_exprs,
                         scalar_type,
                         context: inner_param.context
                     }
@@ -2402,8 +2534,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: inner_param.isolated_dependency_exprs,
+                        full_reload_dependency_exprs: inner_param.full_reload_dependency_exprs,
                         scalar_type,
                         context: inner_param.context
                     }
@@ -2432,8 +2565,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: inner_param.isolated_dependency_exprs,
+                        full_reload_dependency_exprs: inner_param.full_reload_dependency_exprs,
                         scalar_type,
                         context: inner_param.context
                     }
@@ -2462,8 +2596,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: inner_param.isolated_dependency_exprs,
+                        full_reload_dependency_exprs: inner_param.full_reload_dependency_exprs,
                         scalar_type,
                         context: inner_param.context
                     }
@@ -2492,8 +2627,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: inner_param.isolated_dependency_exprs,
+                        full_reload_dependency_exprs: inner_param.full_reload_dependency_exprs,
                         scalar_type,
                         context: inner_param.context
                     }
@@ -2521,8 +2657,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: inner_param.isolated_dependency_exprs,
+                        full_reload_dependency_exprs: inner_param.full_reload_dependency_exprs,
                         scalar_type,
                         context: inner_param.context
                     }
@@ -2558,8 +2695,9 @@ impl SelectConstructor {
                             json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
-                            cell_expr_norecursion: String::from("NULL"),
-                            cell_expr_recursion: String::from("NULL"),
+                            cell_expr: String::from("NULL"),
+                            isolated_dependency_exprs: lhs_param.isolated_dependency_exprs.union(&rhs_param.isolated_dependency_exprs).map(|e| e.clone()).collect(),
+                            full_reload_dependency_exprs: lhs_param.full_reload_dependency_exprs.union(&rhs_param.full_reload_dependency_exprs).map(|e| e.clone()).collect(),
                             scalar_type,
                             context: rhs_param.context
                         }
@@ -2599,8 +2737,9 @@ impl SelectConstructor {
                             json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
-                            cell_expr_norecursion: String::from("NULL"),
-                            cell_expr_recursion: String::from("NULL"),
+                            cell_expr: String::from("NULL"),
+                            isolated_dependency_exprs: lhs_param.isolated_dependency_exprs.union(&rhs_param.isolated_dependency_exprs).map(|e| e.clone()).collect(),
+                            full_reload_dependency_exprs: lhs_param.full_reload_dependency_exprs.union(&rhs_param.full_reload_dependency_exprs).map(|e| e.clone()).collect(),
                             scalar_type,
                             context: rhs_param.context
                         }
@@ -2640,8 +2779,9 @@ impl SelectConstructor {
                             json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
-                            cell_expr_norecursion: String::from("NULL"),
-                            cell_expr_recursion: String::from("NULL"),
+                            cell_expr: String::from("NULL"),
+                            isolated_dependency_exprs: lhs_param.isolated_dependency_exprs.union(&rhs_param.isolated_dependency_exprs).map(|e| e.clone()).collect(),
+                            full_reload_dependency_exprs: lhs_param.full_reload_dependency_exprs.union(&rhs_param.full_reload_dependency_exprs).map(|e| e.clone()).collect(),
                             scalar_type,
                             context: rhs_param.context
                         }
@@ -2681,8 +2821,9 @@ impl SelectConstructor {
                             json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
-                            cell_expr_norecursion: String::from("NULL"),
-                            cell_expr_recursion: String::from("NULL"),
+                            cell_expr: String::from("NULL"),
+                            isolated_dependency_exprs: lhs_param.isolated_dependency_exprs.union(&rhs_param.isolated_dependency_exprs).map(|e| e.clone()).collect(),
+                            full_reload_dependency_exprs: lhs_param.full_reload_dependency_exprs.union(&rhs_param.full_reload_dependency_exprs).map(|e| e.clone()).collect(),
                             scalar_type,
                             context: rhs_param.context
                         }
@@ -2718,8 +2859,9 @@ impl SelectConstructor {
                     json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                     value_expr_norecursion,
                     value_expr_recursion,
-                    cell_expr_norecursion: String::from("NULL"),
-                    cell_expr_recursion: String::from("NULL"),
+                            cell_expr: String::from("NULL"),
+                            isolated_dependency_exprs: lhs_param.isolated_dependency_exprs.union(&rhs_param.isolated_dependency_exprs).map(|e| e.clone()).collect(),
+                            full_reload_dependency_exprs: lhs_param.full_reload_dependency_exprs.union(&rhs_param.full_reload_dependency_exprs).map(|e| e.clone()).collect(),
                     scalar_type,
                     context: rhs_param.context
                 }
@@ -2743,8 +2885,9 @@ impl SelectConstructor {
                             json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
-                            cell_expr_norecursion: String::from("NULL"),
-                            cell_expr_recursion: String::from("NULL"),
+                            cell_expr: String::from("NULL"),
+                            isolated_dependency_exprs: lhs_param.isolated_dependency_exprs.union(&rhs_param.isolated_dependency_exprs).map(|e| e.clone()).collect(),
+                            full_reload_dependency_exprs: lhs_param.full_reload_dependency_exprs.union(&rhs_param.full_reload_dependency_exprs).map(|e| e.clone()).collect(),
                             scalar_type,
                             context: rhs_param.context
                         }
@@ -2783,8 +2926,9 @@ impl SelectConstructor {
                             json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
-                            cell_expr_norecursion: String::from("NULL"),
-                            cell_expr_recursion: String::from("NULL"),
+                            cell_expr: String::from("NULL"),
+                            isolated_dependency_exprs: lhs_param.isolated_dependency_exprs.union(&rhs_param.isolated_dependency_exprs).map(|e| e.clone()).collect(),
+                            full_reload_dependency_exprs: lhs_param.full_reload_dependency_exprs.union(&rhs_param.full_reload_dependency_exprs).map(|e| e.clone()).collect(),
                             scalar_type,
                             context: rhs_param.context
                         }
@@ -2823,8 +2967,9 @@ impl SelectConstructor {
                             json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
-                            cell_expr_norecursion: String::from("NULL"),
-                            cell_expr_recursion: String::from("NULL"),
+                            cell_expr: String::from("NULL"),
+                            isolated_dependency_exprs: lhs_param.isolated_dependency_exprs.union(&rhs_param.isolated_dependency_exprs).map(|e| e.clone()).collect(),
+                            full_reload_dependency_exprs: lhs_param.full_reload_dependency_exprs.union(&rhs_param.full_reload_dependency_exprs).map(|e| e.clone()).collect(),
                             scalar_type,
                             context: rhs_param.context
                         }
@@ -2864,8 +3009,9 @@ impl SelectConstructor {
                             json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
-                            cell_expr_norecursion: String::from("NULL"),
-                            cell_expr_recursion: String::from("NULL"),
+                            cell_expr: String::from("NULL"),
+                            isolated_dependency_exprs: lhs_param.isolated_dependency_exprs.union(&rhs_param.isolated_dependency_exprs).map(|e| e.clone()).collect(),
+                            full_reload_dependency_exprs: lhs_param.full_reload_dependency_exprs.union(&rhs_param.full_reload_dependency_exprs).map(|e| e.clone()).collect(),
                             scalar_type,
                             context: rhs_param.context
                         }
@@ -2905,8 +3051,9 @@ impl SelectConstructor {
                             json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
-                            cell_expr_norecursion: String::from("NULL"),
-                            cell_expr_recursion: String::from("NULL"),
+                            cell_expr: String::from("NULL"),
+                            isolated_dependency_exprs: lhs_param.isolated_dependency_exprs.union(&rhs_param.isolated_dependency_exprs).map(|e| e.clone()).collect(),
+                            full_reload_dependency_exprs: lhs_param.full_reload_dependency_exprs.union(&rhs_param.full_reload_dependency_exprs).map(|e| e.clone()).collect(),
                             scalar_type,
                             context: rhs_param.context
                         }
@@ -2946,8 +3093,9 @@ impl SelectConstructor {
                             json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
-                            cell_expr_norecursion: String::from("NULL"),
-                            cell_expr_recursion: String::from("NULL"),
+                            cell_expr: String::from("NULL"),
+                            isolated_dependency_exprs: lhs_param.isolated_dependency_exprs.union(&rhs_param.isolated_dependency_exprs).map(|e| e.clone()).collect(),
+                            full_reload_dependency_exprs: lhs_param.full_reload_dependency_exprs.union(&rhs_param.full_reload_dependency_exprs).map(|e| e.clone()).collect(),
                             scalar_type,
                             context: rhs_param.context
                         }
@@ -2987,8 +3135,9 @@ impl SelectConstructor {
                             json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
-                            cell_expr_norecursion: String::from("NULL"),
-                            cell_expr_recursion: String::from("NULL"),
+                            cell_expr: String::from("NULL"),
+                            isolated_dependency_exprs: lhs_param.isolated_dependency_exprs.union(&rhs_param.isolated_dependency_exprs).map(|e| e.clone()).collect(),
+                            full_reload_dependency_exprs: lhs_param.full_reload_dependency_exprs.union(&rhs_param.full_reload_dependency_exprs).map(|e| e.clone()).collect(),
                             scalar_type,
                             context: rhs_param.context
                         }
@@ -3029,8 +3178,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: String::from("NULL"),
                         value_expr_norecursion: String::from("NULL"),
                         value_expr_recursion: String::from("NULL"),
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: HashSet::new(),
+                        full_reload_dependency_exprs: HashSet::new(),
                         scalar_type, 
                         context 
                     }
@@ -3052,9 +3202,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
-                        cell_expr_norecursion: match params.iter().enumerate().filter_map(|(param_lhs_idx, param_lhs)| {
+                        cell_expr: match params.iter().enumerate().filter_map(|(param_lhs_idx, param_lhs)| {
                             // Iterate over each argument, checking if the cell_expr is not trivial
-                            if param_lhs.cell_expr_norecursion != "NULL" {
+                            if param_lhs.cell_expr != "NULL" {
                                 // For each argument that is potentially associated with a cell, build a WHEN clause that checks if the value is the maximum of all parameters
                                 match params.iter().enumerate().filter_map(|(param_rhs_idx, param_rhs)| {
                                     if param_lhs.value_expr_norecursion != param_rhs.value_expr_norecursion {
@@ -3068,7 +3218,7 @@ impl SelectConstructor {
                                         None
                                     }
                                 }).reduce(|acc, e| format!("{acc} AND {e}")) {
-                                    Some(conditions) => Some(format!("WHEN {conditions} THEN {}", param_lhs.cell_expr_norecursion)),
+                                    Some(conditions) => Some(format!("WHEN {conditions} THEN {}", param_lhs.cell_expr)),
                                     None => None
                                 }
                             } else {
@@ -3078,32 +3228,10 @@ impl SelectConstructor {
                             Some(when_conditions) => format!("CASE {when_conditions} ELSE NULL END"),
                             None => String::from("NULL")
                         },
-                        cell_expr_recursion: match params.iter().enumerate().filter_map(|(param_lhs_idx, param_lhs)| {
-                            // Iterate over each argument, checking if the cell_expr is not trivial
-                            if param_lhs.cell_expr_recursion != "NULL" {
-                                // For each argument that is potentially associated with a cell, build a WHEN clause that checks if the value is the maximum of all parameters
-                                match params.iter().enumerate().filter_map(|(param_rhs_idx, param_rhs)| {
-                                    if param_lhs.value_expr_recursion != param_rhs.value_expr_recursion {
-                                        Some(format!(
-                                            "({} {} {})", 
-                                            param_lhs.value_expr_recursion, 
-                                            if param_lhs_idx < param_rhs_idx { ">=" } else { ">" }, 
-                                            param_rhs.value_expr_recursion
-                                        ))
-                                    } else {
-                                        None
-                                    }
-                                }).reduce(|acc, e| format!("{acc} AND {e}")) {
-                                    Some(conditions) => Some(format!("WHEN {conditions} THEN {}", param_lhs.cell_expr_recursion)),
-                                    None => None
-                                }
-                            } else {
-                                None
-                            }
-                        }).reduce(|acc, e| format!("{acc} {e}")) {
-                            Some(when_conditions) => format!("CASE {when_conditions} ELSE NULL END"),
-                            None => String::from("NULL")
-                        },
+                        isolated_dependency_exprs: params.iter()
+                            .fold(HashSet::new(), |acc, param| acc.union(&param.isolated_dependency_exprs).map(|e| e.clone()).collect()),
+                        full_reload_dependency_exprs: params.iter()
+                            .fold(HashSet::new(), |acc, param| acc.union(&param.full_reload_dependency_exprs).map(|e| e.clone()).collect()),
                         scalar_type,
                         context
                     }
@@ -3128,8 +3256,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: String::from("NULL"),
                         value_expr_norecursion: String::from("NULL"),
                         value_expr_recursion: String::from("NULL"),
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"), 
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: HashSet::new(),
+                        full_reload_dependency_exprs: HashSet::new(),
                         scalar_type, 
                         context 
                     }
@@ -3151,9 +3280,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
-                        cell_expr_norecursion: match params.iter().enumerate().filter_map(|(param_lhs_idx, param_lhs)| {
+                        cell_expr: match params.iter().enumerate().filter_map(|(param_lhs_idx, param_lhs)| {
                             // Iterate over each argument, checking if the cell_expr is not trivial
-                            if param_lhs.cell_expr_norecursion != "NULL" {
+                            if param_lhs.cell_expr != "NULL" {
                                 // For each argument that is potentially associated with a cell, build a WHEN clause that checks if the value is the maximum of all parameters
                                 match params.iter().enumerate().filter_map(|(param_rhs_idx, param_rhs)| {
                                     if param_lhs.value_expr_norecursion != param_rhs.value_expr_norecursion {
@@ -3167,7 +3296,7 @@ impl SelectConstructor {
                                         None
                                     }
                                 }).reduce(|acc, e| format!("{acc} AND {e}")) {
-                                    Some(conditions) => Some(format!("WHEN {conditions} THEN {}", param_lhs.cell_expr_norecursion)),
+                                    Some(conditions) => Some(format!("WHEN {conditions} THEN {}", param_lhs.cell_expr)),
                                     None => None
                                 }
                             } else {
@@ -3177,32 +3306,10 @@ impl SelectConstructor {
                             Some(when_conditions) => format!("CASE {when_conditions} ELSE NULL END"),
                             None => String::from("NULL")
                         },
-                        cell_expr_recursion: match params.iter().enumerate().filter_map(|(param_lhs_idx, param_lhs)| {
-                            // Iterate over each argument, checking if the cell_expr is not trivial
-                            if param_lhs.cell_expr_recursion != "NULL" {
-                                // For each argument that is potentially associated with a cell, build a WHEN clause that checks if the value is the maximum of all parameters
-                                match params.iter().enumerate().filter_map(|(param_rhs_idx, param_rhs)| {
-                                    if param_lhs.value_expr_recursion != param_rhs.value_expr_recursion {
-                                        Some(format!(
-                                            "({} {} {})", 
-                                            param_lhs.value_expr_recursion, 
-                                            if param_lhs_idx < param_rhs_idx { "<=" } else { "<" }, 
-                                            param_rhs.value_expr_recursion
-                                        ))
-                                    } else {
-                                        None
-                                    }
-                                }).reduce(|acc, e| format!("{acc} AND {e}")) {
-                                    Some(conditions) => Some(format!("WHEN {conditions} THEN {}", param_lhs.cell_expr_recursion)),
-                                    None => None
-                                }
-                            } else {
-                                None
-                            }
-                        }).reduce(|acc, e| format!("{acc} {e}")) {
-                            Some(when_conditions) => format!("CASE {when_conditions} ELSE NULL END"),
-                            None => String::from("NULL")
-                        },
+                        isolated_dependency_exprs: params.iter()
+                            .fold(HashSet::new(), |acc, param| acc.union(&param.isolated_dependency_exprs).map(|e| e.clone()).collect()),
+                        full_reload_dependency_exprs: params.iter()
+                            .fold(HashSet::new(), |acc, param| acc.union(&param.full_reload_dependency_exprs).map(|e| e.clone()).collect()),
                         scalar_type,
                         context
                     }
@@ -3227,8 +3334,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: String::from("NULL"),
                         value_expr_norecursion: String::from("NULL"),
                         value_expr_recursion: String::from("NULL"),
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: HashSet::new(),
+                        full_reload_dependency_exprs: HashSet::new(),
                         scalar_type, 
                         context 
                     }
@@ -3284,26 +3392,20 @@ impl SelectConstructor {
                             "COALESCE({})",
                             params.iter().map(|param| param.value_expr_recursion.clone()).reduce(|acc, e| format!("{acc}, {e}")).unwrap()
                         ),
-                        cell_expr_norecursion: match params.iter().map(|param| {
+                        cell_expr: match params.iter().map(|param| {
                             format!(
                                 "WHEN {} IS NOT NULL THEN {}",
                                 param.value_expr_norecursion,
-                                param.cell_expr_norecursion
+                                param.cell_expr
                             )
                         }).reduce(|acc, e| format!("{acc} {e}")) {
                             Some(when_conditions) => format!("CASE {when_conditions} ELSE NULL END"),
                             None => String::from("NULL")
                         },
-                        cell_expr_recursion: match params.iter().map(|param| {
-                            format!(
-                                "WHEN {} IS NOT NULL THEN {}",
-                                param.value_expr_recursion,
-                                param.cell_expr_recursion
-                            )
-                        }).reduce(|acc, e| format!("{acc} {e}")) {
-                            Some(when_conditions) => format!("CASE {when_conditions} ELSE NULL END"),
-                            None => String::from("NULL")
-                        },
+                        isolated_dependency_exprs: params.iter()
+                            .fold(HashSet::new(), |acc, param| acc.union(&param.isolated_dependency_exprs).map(|e| e.clone()).collect()),
+                        full_reload_dependency_exprs: params.iter()
+                            .fold(HashSet::new(), |acc, param| acc.union(&param.full_reload_dependency_exprs).map(|e| e.clone()).collect()),
                         scalar_type,
                         context
                     }
@@ -3333,8 +3435,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: String::from("NULL"),
                         value_expr_norecursion: String::from("NULL"),
                         value_expr_recursion: String::from("NULL"),
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: HashSet::new(),
+                        full_reload_dependency_exprs: HashSet::new(),
                         scalar_type, 
                         context 
                     }
@@ -3378,18 +3481,16 @@ impl SelectConstructor {
                                 .map(|param| format!("SELECT {}", param.value_expr_recursion))
                                 .reduce(|acc, e| format!("{acc} UNION ALL {e}")).unwrap()
                         ),
-                        cell_expr_norecursion: format!(
+                        cell_expr: format!(
                             "({})",
                             params.iter()
-                                .map(|param| format!("SELECT {}", param.cell_expr_norecursion))
+                                .map(|param| format!("SELECT {}", param.cell_expr))
                                 .reduce(|acc, e| format!("{acc} UNION ALL {e}")).unwrap()
                         ),
-                        cell_expr_recursion: format!(
-                            "({})",
-                            params.iter()
-                                .map(|param| format!("SELECT {}", param.cell_expr_recursion))
-                                .reduce(|acc, e| format!("{acc} UNION ALL {e}")).unwrap()
-                        ),
+                        isolated_dependency_exprs: params.iter()
+                            .fold(HashSet::new(), |acc, param| acc.union(&param.isolated_dependency_exprs).map(|e| e.clone()).collect()),
+                        full_reload_dependency_exprs: params.iter()
+                            .fold(HashSet::new(), |acc, param| acc.union(&param.full_reload_dependency_exprs).map(|e| e.clone()).collect()),
                         scalar_type,
                         context
                     }
@@ -3422,8 +3523,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: collection_param.isolated_dependency_exprs,
+                        full_reload_dependency_exprs: collection_param.full_reload_dependency_exprs,
                         scalar_type,
                         context
                     }
@@ -3459,8 +3561,9 @@ impl SelectConstructor {
                     json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                     value_expr_norecursion,
                     value_expr_recursion,
-                    cell_expr_norecursion: String::from("NULL"),
-                    cell_expr_recursion: String::from("NULL"),
+                    cell_expr: String::from("NULL"),
+                    isolated_dependency_exprs: collection_param.isolated_dependency_exprs,
+                    full_reload_dependency_exprs: collection_param.full_reload_dependency_exprs,
                     scalar_type,
                     context
                 }
@@ -3495,8 +3598,9 @@ impl SelectConstructor {
                             json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
-                            cell_expr_norecursion: String::from("NULL"),
-                            cell_expr_recursion: String::from("NULL"),
+                            cell_expr: String::from("NULL"),
+                            isolated_dependency_exprs: collection_param.isolated_dependency_exprs,
+                            full_reload_dependency_exprs: collection_param.full_reload_dependency_exprs,
                             scalar_type,
                             context: delimiter_param.context
                         }
@@ -3543,8 +3647,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: collection_param.isolated_dependency_exprs,
+                        full_reload_dependency_exprs: collection_param.full_reload_dependency_exprs,
                         scalar_type,
                         context
                     }
@@ -3583,8 +3688,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: collection_param.isolated_dependency_exprs,
+                        full_reload_dependency_exprs: collection_param.full_reload_dependency_exprs,
                         scalar_type,
                         context
                     }
@@ -3623,8 +3729,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: collection_param.isolated_dependency_exprs,
+                        full_reload_dependency_exprs: collection_param.full_reload_dependency_exprs,
                         scalar_type,
                         context
                     }
@@ -3653,8 +3760,9 @@ impl SelectConstructor {
                     json_label_expr_recursion: json_label_expr,
                     value_expr_norecursion: value_expr.clone(),
                     value_expr_recursion: value_expr,
-                    cell_expr_norecursion: String::from("NULL"),
-                    cell_expr_recursion: String::from("NULL"),
+                    cell_expr: String::from("NULL"),
+                    isolated_dependency_exprs: HashSet::new(),
+                    full_reload_dependency_exprs: HashSet::new(),
                     scalar_type,
                     context
                 }
@@ -3742,18 +3850,26 @@ impl SelectConstructor {
                             if_true_param.value_expr_recursion, 
                             if_false_param.value_expr_recursion
                         ),
-                        cell_expr_norecursion: format!(
+                        cell_expr: format!(
                             "IF({}, {}, {})", 
                             condition_param.value_expr_norecursion, 
-                            if_true_param.cell_expr_norecursion, 
-                            if_false_param.cell_expr_norecursion
+                            if_true_param.cell_expr, 
+                            if_false_param.cell_expr
                         ),
-                        cell_expr_recursion: format!(
-                            "IF({}, {}, {})", 
-                            condition_param.value_expr_recursion, 
-                            if_true_param.cell_expr_recursion, 
-                            if_false_param.cell_expr_recursion
-                        ),
+                        isolated_dependency_exprs: condition_param.isolated_dependency_exprs
+                            .union(&if_true_param.isolated_dependency_exprs)
+                            .map(|e| e.clone())
+                            .collect::<HashSet<String>>()
+                            .union(&if_false_param.isolated_dependency_exprs)
+                            .map(|e| e.clone())
+                            .collect(),
+                        full_reload_dependency_exprs: condition_param.full_reload_dependency_exprs
+                            .union(&if_true_param.full_reload_dependency_exprs)
+                            .map(|e| e.clone())
+                            .collect::<HashSet<String>>()
+                            .union(&if_false_param.full_reload_dependency_exprs)
+                            .map(|e| e.clone())
+                            .collect(),
                         scalar_type,
                         context: if_false_param.context
                     }
@@ -3805,8 +3921,11 @@ impl SelectConstructor {
                         json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                         value_expr_norecursion,
                         value_expr_recursion,
-                        cell_expr_norecursion: String::from("NULL"),
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: params.iter()
+                            .fold(format_str_param.isolated_dependency_exprs, |acc, param| acc.union(&param.isolated_dependency_exprs).map(|e| e.clone()).collect()),
+                        full_reload_dependency_exprs: params.iter()
+                            .fold(format_str_param.full_reload_dependency_exprs, |acc, param| acc.union(&param.full_reload_dependency_exprs).map(|e| e.clone()).collect()),
                         scalar_type,
                         context
                     }
@@ -3837,8 +3956,15 @@ impl SelectConstructor {
                             json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                             value_expr_norecursion,
                             value_expr_recursion,
-                            cell_expr_norecursion: String::from("NULL"),
-                            cell_expr_recursion: String::from("NULL"),
+                            cell_expr: String::from("NULL"),
+                            isolated_dependency_exprs: str_param.isolated_dependency_exprs
+                                .union(&pattern_param.isolated_dependency_exprs)
+                                .map(|e| e.clone())
+                                .collect(),
+                            full_reload_dependency_exprs: str_param.full_reload_dependency_exprs
+                                .union(&pattern_param.full_reload_dependency_exprs)
+                                .map(|e| e.clone())
+                                .collect(),
                             scalar_type,
                             context: pattern_param.context
                         }
@@ -3882,8 +4008,9 @@ impl SelectConstructor {
                     json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                     value_expr_norecursion,
                     value_expr_recursion,
-                    cell_expr_norecursion: String::from("NULL"),
-                    cell_expr_recursion: String::from("NULL"),
+                    cell_expr: String::from("NULL"),
+                    isolated_dependency_exprs: value_param.isolated_dependency_exprs.union(&collection_param.isolated_dependency_exprs).map(|e| e.clone()).collect(),
+                    full_reload_dependency_exprs: value_param.full_reload_dependency_exprs.union(&collection_param.full_reload_dependency_exprs).map(|e| e.clone()).collect(),
                     scalar_type,
                     context: value_param.context
                 }
@@ -3916,8 +4043,9 @@ impl SelectConstructor {
                         json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion), 
                         value_expr_norecursion,
                         value_expr_recursion, 
-                        cell_expr_norecursion: String::from("NULL"), 
-                        cell_expr_recursion: String::from("NULL"),
+                        cell_expr: String::from("NULL"),
+                        isolated_dependency_exprs: index_param.isolated_dependency_exprs.union(&collection_param.isolated_dependency_exprs).map(|e| e.clone()).collect(),
+                        full_reload_dependency_exprs: index_param.full_reload_dependency_exprs.union(&collection_param.full_reload_dependency_exprs).map(|e| e.clone()).collect(),
                         scalar_type, 
                         context: index_param.context
                     }
@@ -3943,8 +4071,9 @@ impl SelectConstructor {
                     json_label_expr_recursion: format!("CASE WHEN ({} IS {}) THEN NULL ELSE {} END", lhs_param.value_expr_recursion, rhs_param.value_expr_recursion, lhs_param.json_label_expr_recursion),
                     value_expr_norecursion: format!("NULLIF({}, {})", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion),
                     value_expr_recursion: format!("NULLIF({}, {})", lhs_param.value_expr_recursion, rhs_param.value_expr_recursion),
-                    cell_expr_norecursion: format!("CASE WHEN ({} IS {}) THEN NULL ELSE {} END", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion, lhs_param.cell_expr_norecursion),
-                    cell_expr_recursion: format!("CASE WHEN ({} IS {}) THEN NULL ELSE {} END", lhs_param.value_expr_recursion, rhs_param.value_expr_recursion, lhs_param.cell_expr_recursion),
+                    cell_expr: format!("CASE WHEN ({} IS {}) THEN NULL ELSE {} END", lhs_param.value_expr_norecursion, rhs_param.value_expr_norecursion, lhs_param.cell_expr),
+                    isolated_dependency_exprs: lhs_param.isolated_dependency_exprs.union(&rhs_param.isolated_dependency_exprs).map(|e| e.clone()).collect(),
+                    full_reload_dependency_exprs: lhs_param.full_reload_dependency_exprs.union(&rhs_param.full_reload_dependency_exprs).map(|e| e.clone()).collect(),
                     scalar_type,
                     context: rhs_param.context
                 }
@@ -3971,8 +4100,21 @@ impl SelectConstructor {
                                 json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                                 value_expr_norecursion,
                                 value_expr_recursion, 
-                                cell_expr_norecursion: String::from("NULL"), 
-                                cell_expr_recursion: String::from("NULL"),
+                                cell_expr: String::from("NULL"), 
+                                isolated_dependency_exprs: original_param.isolated_dependency_exprs
+                                    .union(&pattern_param.isolated_dependency_exprs)
+                                    .map(|e| e.clone())
+                                    .collect::<HashSet<String>>()
+                                    .union(&replacement_param.isolated_dependency_exprs)
+                                    .map(|e| e.clone())
+                                    .collect(),
+                                full_reload_dependency_exprs: original_param.full_reload_dependency_exprs
+                                    .union(&pattern_param.full_reload_dependency_exprs)
+                                    .map(|e| e.clone())
+                                    .collect::<HashSet<String>>()
+                                    .union(&replacement_param.full_reload_dependency_exprs)
+                                    .map(|e| e.clone())
+                                    .collect(),
                                 scalar_type, 
                                 context: replacement_param.context 
                             }
@@ -4022,8 +4164,15 @@ impl SelectConstructor {
                                     json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                                     value_expr_norecursion,
                                     value_expr_recursion, 
-                                    cell_expr_norecursion: String::from("NULL"), 
-                                    cell_expr_recursion: String::from("NULL"),
+                                    cell_expr: String::from("NULL"), 
+                                    isolated_dependency_exprs: str_param.isolated_dependency_exprs
+                                        .union(&start_param.isolated_dependency_exprs)
+                                        .map(|e| e.clone())
+                                        .collect(),
+                                    full_reload_dependency_exprs: str_param.full_reload_dependency_exprs
+                                        .union(&start_param.full_reload_dependency_exprs)
+                                        .map(|e| e.clone())
+                                        .collect(),
                                     scalar_type, 
                                     context: start_param.context 
                                 }
@@ -4042,8 +4191,21 @@ impl SelectConstructor {
                                         json_label_expr_recursion: scalar_type.construct_json_label_expr(&value_expr_recursion),
                                         value_expr_norecursion,
                                         value_expr_recursion, 
-                                        cell_expr_norecursion: String::from("NULL"), 
-                                        cell_expr_recursion: String::from("NULL"), 
+                                        cell_expr: String::from("NULL"), 
+                                        isolated_dependency_exprs: str_param.isolated_dependency_exprs
+                                            .union(&start_param.isolated_dependency_exprs)
+                                            .map(|e| e.clone())
+                                            .collect::<HashSet<String>>()
+                                            .union(&length_param.isolated_dependency_exprs)
+                                            .map(|e| e.clone())
+                                            .collect(),
+                                        full_reload_dependency_exprs: str_param.full_reload_dependency_exprs
+                                            .union(&start_param.full_reload_dependency_exprs)
+                                            .map(|e| e.clone())
+                                            .collect::<HashSet<String>>()
+                                            .union(&length_param.full_reload_dependency_exprs)
+                                            .map(|e| e.clone())
+                                            .collect(),
                                         scalar_type, 
                                         context: length_param.context 
                                     }
@@ -4092,8 +4254,9 @@ impl SelectConstructor {
                     plain_label_recursion_when_clauses, 
                     json_label_norecursion_when_clauses,
                     json_label_recursion_when_clauses,
-                    cell_norecursion_when_clauses,
-                    cell_recursion_when_clauses
+                    cell_when_clauses,
+                    isolated_dependency_exprs_when,
+                    full_reload_dependency_exprs_when
                 ) = {
                     let mut match_params: Vec<(SelectParameter, SelectParameter)> = Vec::new();
                     for (test_match, formula_if_match) in matches {
@@ -4132,12 +4295,21 @@ impl SelectConstructor {
                         when_clauses_recursion.iter().map(|(when_clause, if_match_param)| format!("{when_clause} {}", if_match_param.json_label_expr_recursion))
                             .reduce(|acc, e| format!("{acc} {e}"))
                             .unwrap_or(String::from("")),
-                        when_clauses_norecursion.iter().map(|(when_clause, if_match_param)| format!("{when_clause} {}", if_match_param.cell_expr_norecursion))
+                        when_clauses_norecursion.iter().map(|(when_clause, if_match_param)| format!("{when_clause} {}", if_match_param.cell_expr))
                             .reduce(|acc, e| format!("{acc} {e}"))
                             .unwrap_or(String::from("")),
-                        when_clauses_recursion.iter().map(|(when_clause, if_match_param)| format!("{when_clause} {}", if_match_param.cell_expr_recursion))
-                            .reduce(|acc, e| format!("{acc} {e}"))
-                            .unwrap_or(String::from(""))
+                        match_params.iter()
+                            .fold(value_param.isolated_dependency_exprs, 
+                                |acc, (param1, param2)| 
+                                acc.union(&param1.isolated_dependency_exprs).map(|e| e.clone()).collect::<HashSet<String>>()
+                                    .union(&param2.isolated_dependency_exprs).map(|e| e.clone()).collect()
+                            ),
+                        match_params.iter()
+                            .fold(value_param.full_reload_dependency_exprs, 
+                                |acc, (param1, param2)| 
+                                acc.union(&param1.full_reload_dependency_exprs).map(|e| e.clone()).collect::<HashSet<String>>()
+                                    .union(&param2.full_reload_dependency_exprs).map(|e| e.clone()).collect()
+                            )
                     )
                 };
                 
@@ -4148,8 +4320,9 @@ impl SelectConstructor {
                     plain_label_expr_recursion, 
                     json_label_expr_norecursion,
                     json_label_expr_recursion,
-                    cell_expr_norecursion,
-                    cell_expr_recursion
+                    cell_expr,
+                    isolated_dependency_exprs,
+                    full_reload_dependency_exprs
                 ) = {
                     let if_no_match_param = self.construct_formula(trans, datasource, formula_if_no_match, context)?;
                     context = if_no_match_param.context.clone();
@@ -4160,8 +4333,9 @@ impl SelectConstructor {
                         format!("CASE {plain_label_recursion_when_clauses} ELSE {} END", if_no_match_param.plain_label_expr_recursion),
                         format!("CASE {json_label_norecursion_when_clauses} ELSE {} END", if_no_match_param.plain_label_expr_norecursion),
                         format!("CASE {json_label_recursion_when_clauses} ELSE {} END", if_no_match_param.plain_label_expr_recursion),
-                        format!("CASE {cell_norecursion_when_clauses} ELSE {} END", if_no_match_param.cell_expr_norecursion),
-                        format!("CASE {cell_recursion_when_clauses} ELSE {} END", if_no_match_param.cell_expr_recursion)
+                        format!("CASE {cell_when_clauses} ELSE {} END", if_no_match_param.cell_expr),
+                        isolated_dependency_exprs_when.union(&if_no_match_param.isolated_dependency_exprs).map(|e| e.clone()).collect(),
+                        full_reload_dependency_exprs_when.union(&if_no_match_param.full_reload_dependency_exprs).map(|e| e.clone()).collect()
                     )
                 };
                 SelectParameter {
@@ -4171,8 +4345,9 @@ impl SelectConstructor {
                     json_label_expr_recursion,
                     value_expr_norecursion,
                     value_expr_recursion,
-                    cell_expr_norecursion,
-                    cell_expr_recursion,
+                    cell_expr,
+                    isolated_dependency_exprs,
+                    full_reload_dependency_exprs,
                     scalar_type: return_scalar_type,
                     context
                 }
@@ -4308,7 +4483,7 @@ pub fn regenerate_schema_views(trans: &Transaction, schema_oid: i64) -> Result<(
     // Create all of the label views
     for (view_schema_oid, view_to_create) in views_to_create.iter() {
         if view_to_create.create_label_view {
-            let select_constructor: SelectConstructor = SelectConstructor::new_label(trans, schema_oid)?;
+            let select_constructor: SelectConstructor = SelectConstructor::new_label(trans, view_schema_oid.clone())?;
             let sql_create: String = format!(
                 "CREATE VIEW SCHEMA{view_schema_oid}_LABEL_VIEW AS {}",
                 select_constructor.build(trans)?
@@ -4321,7 +4496,7 @@ pub fn regenerate_schema_views(trans: &Transaction, schema_oid: i64) -> Result<(
     // Create all of the main views
     for (view_schema_oid, view_to_create) in views_to_create.iter() {
         if view_to_create.create_main_view {
-            let select_constructor: SelectConstructor = SelectConstructor::new_main(trans, schema_oid)?;
+            let select_constructor: SelectConstructor = SelectConstructor::new_main(trans, view_schema_oid.clone())?;
             let sql_create: String = format!(
                 "CREATE VIEW SCHEMA{view_schema_oid}_VIEW AS {}",
                 select_constructor.build(trans)?

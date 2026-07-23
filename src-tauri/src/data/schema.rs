@@ -628,51 +628,75 @@ impl FullMetadata {
                     FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW
                     WHERE MASTER_SCHEMA_OID IN rarray(?1)
                 ), 
-                AFFECTED_FORMULAE (SCHEMA_OID, FORMULA_OID) AS (
+                AFFECTED_FORMULAE (SCHEMA_OID, COLUMN_OID) AS (
                     SELECT
-                        s.OID AS SCHEMA_OID,
-                        f.OID AS FORMULA_OID
+                        c.SCHEMA_OID AS SCHEMA_OID,
+                        c.OID AS COLUMN_OID
                     FROM BASE_AFFECTED_SCHEMA s
                     INNER JOIN METADATA_DATASOURCE d ON d.TABLE_OID = s.OID
                     INNER JOIN METADATA_COLUMN_TYPE__FORMULA f 
                         ON f.FORMULA LIKE '%ROOT' || FORMAT('%d', d.OID) || '_%'
                             OR f.FORMULA LIKE '%_MASTER' || FORMAT('%d', s.OID) || '_%'
                             OR f.FORMULA LIKE '%_INHERITOR' || FORMAT('%d', s.OID) || '_%'
+                    INNER JOIN METADATA_COLUMN c ON c.TYPE_OID = f.OID
 
                     UNION
 
                     SELECT
-                        s.OID AS SCHEMA_OID,
-                        f.OID AS FORMULA_OID
+                        c2.SCHEMA_OID AS SCHEMA_OID,
+                        c2.OID AS COLUMN_OID
                     FROM BASE_AFFECTED_SCHEMA s
-                    INNER JOIN METADATA_COLUMN c ON c.SCHEMA_OID = s.OID
+                    INNER JOIN METADATA_COLUMN c1 ON c1.SCHEMA_OID = s.OID
                     INNER JOIN METADATA_COLUMN_TYPE__FORMULA f 
-                        ON f.FORMULA LIKE '%_COLUMN' || FORMAT('%d', c.OID) || '_%'
+                        ON f.FORMULA LIKE '%_COLUMN' || FORMAT('%d', c1.OID) || '_%'
+                    INNER JOIN METADATA_COLUMN c2 ON c2.TYPE_OID = f.OID
 
                     UNION
 
                     SELECT
                         c.SCHEMA_OID AS SCHEMA_OID,
-                        fdep.OID AS FORMULA_OID
+                        c.OID AS COLUMN_OID
                     FROM AFFECTED_FORMULAE f
-                    INNER JOIN METADATA_COLUMN c ON c.TYPE_OID = f.FORMULA_OID
-                    INNER JOIN METADATA_COLUMN_TYPE__FORMULA fdep ON fdep.FORMULA LIKE '%_COLUMN' || FORMAT('%d', c.OID) || '%'
+                    INNER JOIN METADATA_COLUMN_TYPE__FORMULA fdep ON fdep.FORMULA LIKE '%_COLUMN' || FORMAT('%d', f.COLUMN_OID) || '%'
+                    INNER JOIN METADATA_COLUMN c ON c.TYPE_OID = fdep.OID
                 )
 
                 SELECT OID FROM BASE_AFFECTED_SCHEMA
                 UNION
                 SELECT SCHEMA_OID AS OID FROM AFFECTED_FORMULAE
+                UNION
+                SELECT 
+                    inh.INHERITOR_SCHEMA_OID AS OID 
+                FROM AFFECTED_FORMULAE f 
+                INNER JOIN METADATA_SCHEMA_INHERITANCE_PATH_VIEW inh ON inh.MASTER_SCHEMA_OID = f.SCHEMA_OID 
                 "
             )?
             .query_map(params![Array::new(schema_oids.into_iter().map(|i| Value::Integer(i)).collect())], |row| row.get::<_, i64>(0))? {
             
-            affected_schema.push(affected_schema_results?);
+            let affected_schema_oid: i64 = affected_schema_results?;
+            affected_schema.push(affected_schema_oid);
         }
         app.emit(UPDATE_SCHEMA_SIGNAL, affected_schema)?;
         Ok(())
     }
 
+    /// Emits a signal to update every schema.
     pub fn emit_all_schema(app: &AppHandle) -> Result<(), Error> {
-        todo!("Implement this function")
+        let conn = db::open()?;
+
+        let mut affected_schema: Vec<i64> = Vec::new();
+        for affected_schema_results in conn
+            .prepare(
+                "
+                SELECT OID FROM METADATA_SCHEMA WHERE NOT TRASH
+                "
+            )?
+            .query_map([], |row| row.get::<_, i64>(0))? {
+            
+            let affected_schema_oid: i64 = affected_schema_results?;
+            affected_schema.push(affected_schema_oid);
+        }
+        app.emit(UPDATE_SCHEMA_SIGNAL, affected_schema)?;
+        Ok(())
     }
 }

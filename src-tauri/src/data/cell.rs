@@ -1,7 +1,7 @@
 use crate::data::{column, column_type, datasource, query, schema, table};
 use crate::data::{datasource::Datasource, file, row};
 use crate::util::channel::Sender;
-use crate::util::db;
+use crate::util::{db, formula};
 use crate::util::error::Error;
 use base64::{prelude::BASE64_STANDARD as base64standard, Engine};
 use regex::Regex;
@@ -47,7 +47,7 @@ impl RetrievalLimit {
 pub struct CellDependency {
     table_oid: i64,
     column_oid: i64,
-    row_oid: i64,
+    row_oid: Option<i64>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -69,14 +69,6 @@ pub enum CellIdentifier {
 
         /// The query filter used to identify the cell's row.
         query_filter: String,
-
-        /// The list of dependencies that always have a 1-to-1 relationship with this cell.
-        /// Whenever one of these dependencies is updated, only this cell needs to be updated.
-        isolated_cell_dependencies: Vec<CellDependency>,
-
-        /// The list of dependencies that have a *-to-1 relationship with this cell.
-        /// Whenever one of these dependencies is updated, the entire schema needs to be reloaded.
-        full_reload_cell_dependencies: Vec<CellDependency>,
     },
 }
 
@@ -97,6 +89,15 @@ pub enum Cell {
         cell_identifier: CellIdentifier,
         label: Option<String>,
         format: CellTextFormat,
+
+        /// The list of dependencies that always have a 1-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, only this cell needs to be updated.
+        isolated_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of dependencies that have a *-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, the entire schema needs to be reloaded.
+        full_reload_cell_dependencies: Vec<CellDependency>,
+
         validation_failures: Vec<FailedValidation>,
     },
 
@@ -108,6 +109,16 @@ pub enum Cell {
         data_row_oid: i64,
         label: Option<String>,
         format: CellTextFormat,
+
+        /// The list of dependencies that always have a 1-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, only this cell needs to be updated.
+        isolated_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of dependencies that have a *-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, the entire schema needs to be reloaded.
+        full_reload_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of validation errors.
         validation_failures: Vec<FailedValidation>,
     },
 
@@ -118,6 +129,16 @@ pub enum Cell {
         data_column_oid: i64,
         data_row_oid: i64,
         value: Option<i64>,
+
+        /// The list of dependencies that always have a 1-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, only this cell needs to be updated.
+        isolated_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of dependencies that have a *-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, the entire schema needs to be reloaded.
+        full_reload_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of validation errors.
         validation_failures: Vec<FailedValidation>,
     },
 
@@ -128,6 +149,16 @@ pub enum Cell {
         data_column_oid: i64,
         data_row_oid: i64,
         value: Option<f64>,
+
+        /// The list of dependencies that always have a 1-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, only this cell needs to be updated.
+        isolated_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of dependencies that have a *-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, the entire schema needs to be reloaded.
+        full_reload_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of validation errors.
         validation_failures: Vec<FailedValidation>,
     },
 
@@ -138,6 +169,16 @@ pub enum Cell {
         data_column_oid: i64,
         data_row_oid: i64,
         label: Option<String>,
+
+        /// The list of dependencies that always have a 1-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, only this cell needs to be updated.
+        isolated_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of dependencies that have a *-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, the entire schema needs to be reloaded.
+        full_reload_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of validation errors.
         validation_failures: Vec<FailedValidation>,
     },
 
@@ -148,6 +189,16 @@ pub enum Cell {
         data_column_oid: i64,
         data_row_oid: i64,
         label: Option<String>,
+
+        /// The list of dependencies that always have a 1-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, only this cell needs to be updated.
+        isolated_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of dependencies that have a *-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, the entire schema needs to be reloaded.
+        full_reload_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of validation errors.
         validation_failures: Vec<FailedValidation>,
     },
 
@@ -158,6 +209,16 @@ pub enum Cell {
         data_column_oid: i64,
         data_row_oid: i64,
         is_checked: bool,
+
+        /// The list of dependencies that always have a 1-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, only this cell needs to be updated.
+        isolated_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of dependencies that have a *-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, the entire schema needs to be reloaded.
+        full_reload_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of validation errors.
         validation_failures: Vec<FailedValidation>,
     },
 
@@ -169,6 +230,16 @@ pub enum Cell {
         data_row_oid: i64,
         file_oid: Option<i64>,
         label: Option<String>,
+
+        /// The list of dependencies that always have a 1-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, only this cell needs to be updated.
+        isolated_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of dependencies that have a *-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, the entire schema needs to be reloaded.
+        full_reload_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of validation errors.
         validation_failures: Vec<FailedValidation>,
     },
 
@@ -180,6 +251,16 @@ pub enum Cell {
         data_row_oid: i64,
         label: Option<String>,
         file: Option<file::File>,
+
+        /// The list of dependencies that always have a 1-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, only this cell needs to be updated.
+        isolated_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of dependencies that have a *-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, the entire schema needs to be reloaded.
+        full_reload_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of validation errors.
         validation_failures: Vec<FailedValidation>,
     },
 
@@ -188,7 +269,17 @@ pub enum Cell {
         cell_identifier: CellIdentifier,
         label: Option<String>,
         link_schema_oid: i64,
-        link_query_filter: String,
+        link_query_filter: Option<String>,
+
+        /// The list of dependencies that always have a 1-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, only this cell needs to be updated.
+        isolated_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of dependencies that have a *-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, the entire schema needs to be reloaded.
+        full_reload_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of validation errors.
         validation_failures: Vec<FailedValidation>,
     },
 
@@ -203,6 +294,16 @@ pub enum Cell {
         link_row_oid: Option<i64>,
         link_query_filter: Option<String>,
         clipboard_data: Option<(i64, Vec<DataCellEntry>)>,
+
+        /// The list of dependencies that always have a 1-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, only this cell needs to be updated.
+        isolated_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of dependencies that have a *-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, the entire schema needs to be reloaded.
+        full_reload_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of validation errors.
         validation_failures: Vec<FailedValidation>,
     },
 
@@ -215,6 +316,16 @@ pub enum Cell {
         label: Option<String>,
         dropdown_table_oid: i64,
         dropdown_row_oid: Option<i64>,
+
+        /// The list of dependencies that always have a 1-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, only this cell needs to be updated.
+        isolated_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of dependencies that have a *-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, the entire schema needs to be reloaded.
+        full_reload_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of validation errors.
         validation_failures: Vec<FailedValidation>,
     },
 
@@ -227,9 +338,21 @@ pub enum Cell {
         label: Option<String>,
         dropdown_table_oid: i64,
         dropdown_row_oid: Vec<i64>,
+
+        /// The list of dependencies that always have a 1-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, only this cell needs to be updated.
+        isolated_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of dependencies that have a *-to-1 relationship with this cell.
+        /// Whenever one of these dependencies is updated, the entire schema needs to be reloaded.
+        full_reload_cell_dependencies: Vec<CellDependency>,
+
+        /// The list of validation errors.
         validation_failures: Vec<FailedValidation>,
     },
 }
+
+pub const UPDATE_CELL_SIGNAL: &'static str = "cell";
 
 impl Cell {
     /// Retrieve a particular cell.
@@ -241,6 +364,8 @@ impl Cell {
                     cell_identifier,
                     label: None,
                     format: CellTextFormat::Plain,
+                    isolated_cell_dependencies: Vec::new(),
+                    full_reload_cell_dependencies: Vec::new(),
                     validation_failures: vec![FailedValidation {
                         message: format!(
                             "SQLite error occurred when connecting to database file: {}",
@@ -270,6 +395,8 @@ impl Cell {
                                 cell_identifier,
                                 label: None,
                                 format: CellTextFormat::Plain,
+                                isolated_cell_dependencies: Vec::new(),
+                                full_reload_cell_dependencies: Vec::new(),
                                 validation_failures: vec![FailedValidation {
                                     message: format!(
                                         "Error while retrieving column metadata: {}",
@@ -279,465 +406,109 @@ impl Cell {
                             };
                         }
                     };
+                    
+                let value_ord: String = format!("COLUMN{column_oid}_VALUE");
+                let label_ord: String = format!("COLUMN{column_oid}_LABEL");
 
-                match column_metadata.column_type {
-                    column_type::ColumnType::Primitive(prim) => match prim {
-                        column_type::Primitive::Boolean => {
-                            let is_checked_sql: String = format!("SELECT COLUMN{column_oid}_VALUE AS IS_CHECKED FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
-                            let (is_checked, is_checked_e) =
-                                match conn.query_one(&is_checked_sql, params![row_oid], |row| {
-                                    row.get::<_, Option<bool>>("IS_CHECKED")
-                                }) {
-                                    Ok(is_checked) => (is_checked, None),
-                                    Err(e) => (None, Some(e)),
-                                };
-
-                            Self::CheckboxEntry {
-                                data_table_oid: table_oid.clone(),
-                                data_column_oid: column_oid.clone(),
-                                data_row_oid: row_oid.clone(),
-                                is_checked: if let Some(is_checked) = is_checked {
-                                    is_checked
-                                } else {
-                                    false
-                                },
-                                cell_identifier: CellIdentifier::DataCell {
-                                    table_oid,
-                                    column_oid,
-                                    row_oid,
-                                },
-                                validation_failures: {
-                                    if let Some(is_checked_e) = is_checked_e {
-                                        vec![FailedValidation {
-                                            message: format!("{is_checked_e}"),
-                                        }]
-                                    } else {
-                                        Vec::new()
-                                    }
-                                },
-                            }
-                        }
-                        column_type::Primitive::Integer => {
-                            let value_sql: String = format!("SELECT COLUMN{column_oid}_VALUE AS VALUE FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
-                            let (value, value_e) =
-                                match conn.query_one(&value_sql, params![row_oid], |row| {
-                                    row.get::<_, Option<i64>>("VALUE")
-                                }) {
-                                    Ok(value) => (value, None),
-                                    Err(e) => (None, Some(e)),
-                                };
-
-                            Self::IntegerEntry {
-                                data_table_oid: table_oid.clone(),
-                                data_column_oid: column_oid.clone(),
-                                data_row_oid: row_oid.clone(),
-                                value,
-                                cell_identifier: CellIdentifier::DataCell {
-                                    table_oid,
-                                    column_oid,
-                                    row_oid,
-                                },
-                                validation_failures: {
-                                    if let Some(value_e) = value_e {
-                                        vec![FailedValidation {
-                                            message: format!("{value_e}"),
-                                        }]
-                                    } else {
-                                        Vec::new()
-                                    }
-                                },
-                            }
-                        }
-                        column_type::Primitive::Number => {
-                            let value_sql: String = format!("SELECT COLUMN{column_oid}_VALUE AS VALUE FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
-                            let (value, value_e) =
-                                match conn.query_one(&value_sql, params![row_oid], |row| {
-                                    row.get::<_, Option<f64>>("VALUE")
-                                }) {
-                                    Ok(value) => (value, None),
-                                    Err(e) => (None, Some(e)),
-                                };
-
-                            Self::NumberEntry {
-                                data_table_oid: table_oid.clone(),
-                                data_column_oid: column_oid.clone(),
-                                data_row_oid: row_oid.clone(),
-                                value,
-                                cell_identifier: CellIdentifier::DataCell {
-                                    table_oid,
-                                    column_oid,
-                                    row_oid,
-                                },
-                                validation_failures: {
-                                    if let Some(value_e) = value_e {
-                                        vec![FailedValidation {
-                                            message: format!("{value_e}"),
-                                        }]
-                                    } else {
-                                        Vec::new()
-                                    }
-                                },
-                            }
-                        }
-                        column_type::Primitive::PlainText 
-                        | column_type::Primitive::MarkdownText
-                        | column_type::Primitive::JsonText
-                        | column_type::Primitive::XmlText => {
-                            let label_sql: String = format!("SELECT COLUMN{column_oid}_LABEL AS LABEL FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
-                            let (label, label_e) =
-                                match conn.query_one(&label_sql, params![row_oid], |row| {
-                                    row.get::<_, Option<String>>("LABEL")
-                                }) {
-                                    Ok(label) => (label, None),
-                                    Err(e) => (None, Some(e)),
-                                };
-
-                            Self::TextEntry {
-                                data_table_oid: table_oid.clone(),
-                                data_column_oid: column_oid.clone(),
-                                data_row_oid: row_oid.clone(),
-                                label,
-                                format: match prim {
-                                    column_type::Primitive::JsonText => CellTextFormat::Json,
-                                    _ => CellTextFormat::Plain,
-                                },
-                                cell_identifier: CellIdentifier::DataCell {
-                                    table_oid,
-                                    column_oid,
-                                    row_oid,
-                                },
-                                validation_failures: {
-                                    if let Some(label_e) = label_e {
-                                        vec![FailedValidation {
-                                            message: format!("{label_e}"),
-                                        }]
-                                    } else {
-                                        Vec::new()
-                                    }
-                                },
-                            }
-                        }
-                        column_type::Primitive::Date => {
-                            let label_sql: String = format!("SELECT COLUMN{column_oid}_LABEL AS LABEL FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
-                            let (label, label_e) =
-                                match conn.query_one(&label_sql, params![row_oid], |row| {
-                                    row.get::<_, Option<String>>("LABEL")
-                                }) {
-                                    Ok(label) => (label, None),
-                                    Err(e) => (None, Some(e)),
-                                };
-
-                            Self::DateEntry {
-                                data_table_oid: table_oid.clone(),
-                                data_column_oid: column_oid.clone(),
-                                data_row_oid: row_oid.clone(),
-                                label,
-                                cell_identifier: CellIdentifier::DataCell {
-                                    table_oid,
-                                    column_oid,
-                                    row_oid,
-                                },
-                                validation_failures: {
-                                    if let Some(label_e) = label_e {
-                                        vec![FailedValidation {
-                                            message: format!("{label_e}"),
-                                        }]
-                                    } else {
-                                        Vec::new()
-                                    }
-                                },
-                            }
-                        }
-                        column_type::Primitive::Datetime => {
-                            let label_sql: String = format!("SELECT COLUMN{column_oid}_LABEL AS LABEL FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
-                            let (label, label_e) =
-                                match conn.query_one(&label_sql, params![row_oid], |row| {
-                                    row.get::<_, Option<String>>("LABEL")
-                                }) {
-                                    Ok(label) => (label, None),
-                                    Err(e) => (None, Some(e)),
-                                };
-
-                            Self::DatetimeEntry {
-                                data_table_oid: table_oid.clone(),
-                                data_column_oid: column_oid.clone(),
-                                data_row_oid: row_oid.clone(),
-                                label,
-                                cell_identifier: CellIdentifier::DataCell {
-                                    table_oid,
-                                    column_oid,
-                                    row_oid,
-                                },
-                                validation_failures: {
-                                    if let Some(label_e) = label_e {
-                                        vec![FailedValidation {
-                                            message: format!("{label_e}"),
-                                        }]
-                                    } else {
-                                        Vec::new()
-                                    }
-                                },
-                            }
-                        }
-                        column_type::Primitive::File => {
-                            let label_sql: String = format!("SELECT COLUMN{column_oid}_VALUE AS FILE_OID, COLUMN{column_oid}_LABEL AS LABEL FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
-                            let (file_oid, label, label_e) =
-                                match conn.query_one(&label_sql, params![row_oid], |row| {
-                                    Ok((
-                                        row.get::<_, Option<i64>>("FILE_OID")?,
-                                        row.get::<_, Option<String>>("LABEL")?,
-                                    ))
-                                }) {
-                                    Ok((file_oid, label)) => (file_oid, label, None),
-                                    Err(e) => (None, None, Some(e)),
-                                };
-
-                            Self::FileEntry {
-                                data_table_oid: table_oid.clone(),
-                                data_column_oid: column_oid.clone(),
-                                data_row_oid: row_oid.clone(),
-                                file_oid,
-                                label,
-                                cell_identifier: CellIdentifier::DataCell {
-                                    table_oid,
-                                    column_oid,
-                                    row_oid,
-                                },
-                                validation_failures: {
-                                    if let Some(label_e) = label_e {
-                                        vec![FailedValidation {
-                                            message: format!("{label_e}"),
-                                        }]
-                                    } else {
-                                        Vec::new()
-                                    }
-                                },
-                            }
-                        }
-                        column_type::Primitive::Image => {
-                            let file_oid_sql: String = format!("SELECT COLUMN{column_oid}_VALUE AS FILE_OID, COLUMN{column_oid}_LABEL AS LABEL FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
-                            let (file_oid, label, file_oid_e) =
-                                match conn.query_one(&file_oid_sql, params![row_oid], |row| {
-                                    Ok((
-                                        row.get::<_, Option<i64>>("FILE_OID")?,
-                                        row.get::<_, Option<String>>("LABEL")?,
-                                    ))
-                                }) {
-                                    Ok((file_oid, label)) => (file_oid, label, None),
-                                    Err(e) => (None::<i64>, None::<String>, Some(e)),
-                                };
-                            let (file, file_e) = if let Some(file_oid) = file_oid {
-                                match file::File::get_transact(conn, file_oid) {
-                                    Ok(file) => (Some(file), None),
-                                    Err(e) => (None, Some(e)),
-                                }
-                            } else {
-                                (None, None)
-                            };
-
-                            Self::ImageEntry {
-                                data_table_oid: table_oid.clone(),
-                                data_column_oid: column_oid.clone(),
-                                data_row_oid: row_oid.clone(),
-                                file,
-                                label,
-                                cell_identifier: CellIdentifier::DataCell {
-                                    table_oid,
-                                    column_oid,
-                                    row_oid,
-                                },
-                                validation_failures: {
-                                    let mut failures: Vec<FailedValidation> =
-                                        if let Some(file_oid_e) = file_oid_e {
-                                            vec![FailedValidation {
-                                                message: format!("{file_oid_e}"),
-                                            }]
-                                        } else {
-                                            Vec::new()
-                                        };
-                                    if let Some(file_src_e) = file_e {
-                                        failures.push(FailedValidation {
-                                            message: format!(
-                                                "Error while getting image src: {}",
-                                                <Error as Into<String>>::into(file_src_e)
-                                            ),
-                                        });
-                                    }
-                                    failures
-                                },
-                            }
-                        }
-                    },
-                    column_type::ColumnType::Object {
-                        table_oid: link_schema_oid,
-                        ..
-                    } => {
-                        let label_sql: String = format!("SELECT COLUMN{column_oid}_VALUE AS VALUE, COLUMN{column_oid}_LABEL AS LABEL FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
-                        let (link_row_oid, label, label_e) =
-                            match conn.query_one(&label_sql, params![row_oid], |row| {
-                                Ok((
-                                    row.get::<_, Option<i64>>("VALUE")?,
-                                    row.get::<_, Option<String>>("LABEL")?,
-                                ))
-                            }) {
-                                Ok((link_row_oid, label)) => (link_row_oid, label, None),
-                                Err(e) => (None, None, Some(e)),
-                            };
-
-                        let (clipboard_data, clipboard_data_e) =
-                            if let Some(link_row_oid) = link_row_oid {
-                                match DataCellEntry::get_object_data(
-                                    link_schema_oid.clone(),
-                                    link_row_oid.clone(),
-                                ) {
-                                    Ok(clipboard_data) => (Some(clipboard_data), None),
-                                    Err(e) => (None, Some(e)),
-                                }
-                            } else {
-                                (None, None)
-                            };
-
-                        Self::ObjectLink {
-                            data_table_oid: table_oid.clone(),
-                            data_column_oid: column_oid.clone(),
-                            data_row_oid: row_oid.clone(),
-                            label,
-                            link_schema_oid,
-                            link_query_filter: match link_row_oid {
-                                Some(link_row_oid) => Some(format!("OID={link_row_oid}")),
-                                None => None,
-                            },
-                            link_row_oid,
-                            clipboard_data,
-                            cell_identifier: CellIdentifier::DataCell {
-                                table_oid,
-                                column_oid,
-                                row_oid,
-                            },
-                            validation_failures: {
-                                if let Some(label_e) = label_e {
-                                    vec![FailedValidation {
-                                        message: format!("{label_e}"),
-                                    }]
-                                } else {
-                                    Vec::new()
-                                }
-                            },
-                        }
+                let sql_select: String = format!(
+                    "SELECT {value_ord}, {label_ord}{} FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1",
+                    if let column_type::ColumnType::Formula { .. } = &column_metadata.column_type {
+                        format!(", COLUMN{column_oid}_CELL, COLUMN{column_oid}_ISOLATEDRELOAD, COLUMN{column_oid}_FULLRELOAD")
+                    } else {
+                        String::from("")
                     }
-                    column_type::ColumnType::Select {
-                        table_oid: dropdown_table_oid,
-                        ..
-                    } => {
-                        let label_sql: String = format!("SELECT COLUMN{column_oid}_VALUE AS VALUE, COLUMN{column_oid}_LABEL AS LABEL FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
-                        let (label, dropdown_row_oid, dropdown_row_oid_e) =
-                            match conn.query_one(&label_sql, params![row_oid], |row| {
-                                Ok((
-                                    row.get::<_, Option<String>>("LABEL")?,
-                                    row.get::<_, Option<i64>>("VALUE")?,
-                                ))
-                            }) {
-                                Ok((label, dropdown_row_oid)) => (label, dropdown_row_oid, None),
-                                Err(e) => (None, None, Some(e)),
-                            };
-
-                        Self::SingleSelectDropdown {
-                            data_table_oid: table_oid.clone(),
-                            data_column_oid: column_oid.clone(),
-                            data_row_oid: row_oid.clone(),
-                            label,
-                            dropdown_table_oid,
-                            dropdown_row_oid,
-                            cell_identifier: CellIdentifier::DataCell {
-                                table_oid,
-                                column_oid,
-                                row_oid,
-                            },
-                            validation_failures: {
-                                if let Some(label_e) = dropdown_row_oid_e {
-                                    vec![FailedValidation {
-                                        message: format!("{label_e}"),
-                                    }]
-                                } else {
-                                    Vec::new()
-                                }
-                            },
-                        }
-                    }
-                    column_type::ColumnType::Multiselect {
-                        table_oid: dropdown_table_oid,
-                        ..
-                    } => {
-                        let value_sql: String = format!("SELECT COLUMN{column_oid}_VALUE AS VALUE, COLUMN{column_oid}_LABEL AS LABEL FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
-                        let (value, label, label_e) =
-                            match conn.query_one(&value_sql, params![row_oid], |row| {
-                                Ok((
-                                    row.get::<_, Option<String>>("VALUE")?,
-                                    row.get::<_, Option<String>>("LABEL")?,
-                                ))
-                            }) {
-                                Ok((value, label)) => (value, label, None),
-                                Err(e) => (None, None, Some(e)),
-                            };
-                        let dropdown_row_oid: Vec<i64> = if let Some(value) = value {
-                            value
-                                .split(',')
-                                .filter_map(|s| match i64::from_str_radix(s, 10) {
-                                    Ok(i) => Some(i),
-                                    Err(_) => None,
-                                })
-                                .collect()
-                        } else {
-                            Vec::new()
-                        };
-
-                        Self::MultiSelectDropdown {
-                            data_table_oid: table_oid.clone(),
-                            data_column_oid: column_oid.clone(),
-                            data_row_oid: row_oid.clone(),
-                            label,
-                            dropdown_table_oid,
-                            dropdown_row_oid,
-                            cell_identifier: CellIdentifier::DataCell {
-                                table_oid,
-                                column_oid,
-                                row_oid,
-                            },
-                            validation_failures: {
-                                if let Some(label_e) = label_e {
-                                    vec![FailedValidation {
-                                        message: format!("{label_e}"),
-                                    }]
-                                } else {
-                                    Vec::new()
-                                }
-                            },
-                        }
-                    }
-                    _ => {
+                );
+                let mut stmt = match conn.prepare(&sql_select) {
+                    Ok(stmt) => stmt,
+                    Err(e) => {
                         return Self::Readonly {
-                            cell_identifier: CellIdentifier::DataCell {
-                                table_oid,
-                                column_oid,
-                                row_oid,
-                            },
+                            cell_identifier,
                             label: None,
                             format: CellTextFormat::Plain,
+                            isolated_cell_dependencies: Vec::new(),
+                            full_reload_cell_dependencies: Vec::new(),
                             validation_failures: vec![FailedValidation {
                                 message: format!(
-                                    "A data cell is not expected to belong to a {} column!",
-                                    column_metadata.column_type.to_str()
+                                    "Error while constructing statement to query cell: {e}"
                                 ),
                             }],
                         };
+                    }
+                };
+                let mut rows = match stmt.query(params![row_oid]) {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        return Self::Readonly {
+                            cell_identifier,
+                            label: None,
+                            format: CellTextFormat::Plain,
+                            isolated_cell_dependencies: Vec::new(),
+                            full_reload_cell_dependencies: Vec::new(),
+                            validation_failures: vec![FailedValidation {
+                                message: format!(
+                                    "Error while running query to get cell: {e}"
+                                ),
+                            }],
+                        };
+                    }
+                };
+                let row = match rows.next() {
+                    Ok(row) => {
+                        if let Some(row) = row {
+                            row 
+                        } else {
+                            return Self::Readonly {
+                                cell_identifier,
+                                label: None,
+                                format: CellTextFormat::Plain,
+                                isolated_cell_dependencies: Vec::new(),
+                                full_reload_cell_dependencies: Vec::new(),
+                                validation_failures: vec![FailedValidation {
+                                    message: format!("Cell on table with OID {table_oid}, column with OID {column_oid}, row with OID {row_oid} does not exist."),
+                                }],
+                            };
+                        }
+                    }
+                    Err(e) => {
+                        return Self::Readonly {
+                            cell_identifier,
+                            label: None,
+                            format: CellTextFormat::Plain,
+                            isolated_cell_dependencies: Vec::new(),
+                            full_reload_cell_dependencies: Vec::new(),
+                            validation_failures: vec![FailedValidation {
+                                message: format!(
+                                    "Error while querying row: {e}"
+                                ),
+                            }],
+                        };
+                    }
+                };
+
+                match column_metadata.column_type {
+                    column_type::ColumnType::Primitive(prim) => {
+                        Self::new_primitive(row, table_oid, column_oid, row_oid, &prim, value_ord, label_ord)
+                    },
+                    column_type::ColumnType::Object { table_oid: link_schema_oid, .. } => {
+                        Self::new_object_link(row, table_oid, column_oid, row_oid, value_ord, label_ord, &link_schema_oid)
+                    }
+                    column_type::ColumnType::Select { table_oid: dropdown_table_oid, .. } => {
+                        Self::new_single_select_dropdown(row, table_oid, column_oid, row_oid, value_ord, label_ord, &dropdown_table_oid)
+                    }
+                    column_type::ColumnType::Multiselect { table_oid: dropdown_table_oid, .. } => {
+                        Self::new_multiple_select_dropdown(row, table_oid, column_oid, row_oid, value_ord, label_ord, &dropdown_table_oid)
+                    }
+                    column_type::ColumnType::Formula { .. } => {
+                        Self::new_formula_cell(row, CellIdentifier::DataCell { table_oid, column_oid, row_oid }, value_ord, label_ord)
+                    }
+                    column_type::ColumnType::Subreport { report_oid: link_schema_oid, .. } => {
+                        Self::new_subreport(row, CellIdentifier::DataCell { table_oid, column_oid, row_oid }, value_ord, label_ord, &link_schema_oid)
                     }
                 }
             }
             CellIdentifier::VirtualCell {
                 column_oid,
-                query_filter,
-                isolated_cell_dependencies,
-                full_reload_cell_dependencies,
+                query_filter
             } => {
                 // Get the column metadata
                 let column_metadata: column::FullMetadata =
@@ -747,6 +518,8 @@ impl Cell {
                             return Self::Readonly {
                                 label: None,
                                 format: CellTextFormat::Plain,
+                                isolated_cell_dependencies: Vec::new(),
+                                full_reload_cell_dependencies: Vec::new(),
                                 validation_failures: vec![FailedValidation {
                                     message: format!(
                                         "Error while retrieving column metadata: {}",
@@ -756,648 +529,108 @@ impl Cell {
                                 cell_identifier: CellIdentifier::VirtualCell {
                                     column_oid,
                                     query_filter,
-                                    isolated_cell_dependencies,
-                                    full_reload_cell_dependencies,
                                 },
                             };
                         }
                     };
+                    
+                let value_ord: String = format!("COLUMN{column_oid}_VALUE");
+                let label_ord: String = format!("COLUMN{column_oid}_LABEL");
+
+                let sql_select: String = format!(
+                    "SELECT {value_ord}, {label_ord}{} FROM SCHEMA{}_VIEW {}",
+                    if let column_type::ColumnType::Formula { .. } = &column_metadata.column_type {
+                        format!(", COLUMN{column_oid}_CELL, COLUMN{column_oid}_ISOLATEDRELOAD, COLUMN{column_oid}_FULLRELOAD")
+                    } else {
+                        String::from("")
+                    },
+                    column_metadata.schema.oid,
+                    if query_filter != "" {
+                        format!("WHERE {query_filter}")
+                    } else {
+                        String::from("")
+                    }
+                );
+                let mut stmt = match conn.prepare(&sql_select) {
+                    Ok(stmt) => stmt,
+                    Err(e) => {
+                        return Self::Readonly {
+                            cell_identifier: CellIdentifier::VirtualCell { column_oid, query_filter },
+                            label: None,
+                            format: CellTextFormat::Plain,
+                            isolated_cell_dependencies: Vec::new(),
+                            full_reload_cell_dependencies: Vec::new(),
+                            validation_failures: vec![FailedValidation {
+                                message: format!(
+                                    "Error while constructing statement to query cell: {e}"
+                                ),
+                            }],
+                        };
+                    }
+                };
+                let mut rows = match stmt.query([]) {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        return Self::Readonly {
+                            cell_identifier: CellIdentifier::VirtualCell { column_oid, query_filter },
+                            label: None,
+                            format: CellTextFormat::Plain,
+                            isolated_cell_dependencies: Vec::new(),
+                            full_reload_cell_dependencies: Vec::new(),
+                            validation_failures: vec![FailedValidation {
+                                message: format!(
+                                    "Error while running query to get cell: {e}"
+                                ),
+                            }],
+                        };
+                    }
+                };
+                let row = match rows.next() {
+                    Ok(row) => {
+                        if let Some(row) = row {
+                            row 
+                        } else {
+                            return Self::Readonly {
+                                validation_failures: vec![FailedValidation {
+                                    message: format!("Cell on report with OID {}, column with OID {column_oid}, row with filters {query_filter} does not exist.", column_metadata.schema.oid),
+                                }],
+                                cell_identifier: CellIdentifier::VirtualCell { column_oid, query_filter },
+                                label: None,
+                                format: CellTextFormat::Plain,
+                                isolated_cell_dependencies: Vec::new(),
+                                full_reload_cell_dependencies: Vec::new(),
+                            };
+                        }
+                    }
+                    Err(e) => {
+                        return Self::Readonly {
+                            cell_identifier: CellIdentifier::VirtualCell { column_oid, query_filter },
+                            label: None,
+                            format: CellTextFormat::Plain,
+                            isolated_cell_dependencies: Vec::new(),
+                            full_reload_cell_dependencies: Vec::new(),
+                            validation_failures: vec![FailedValidation {
+                                message: format!(
+                                    "Error while querying row: {e}"
+                                ),
+                            }],
+                        };
+                    }
+                };
 
                 match column_metadata.column_type {
                     column_type::ColumnType::Formula { .. } => {
-                        let label_sql: String = format!(
-                            "
-                            SELECT 
-                                COLUMN{column_oid}_PARAM AS PARAM, 
-                                COLUMN{column_oid}_VALUE AS VALUE, 
-                                COLUMN{column_oid}_LABEL AS LABEL 
-                            FROM SCHEMA{}_VIEW 
-                            {}
-                            ",
-                            column_metadata.schema.oid,
-                            {
-                                let schema_view_def: String = match conn.query_one(
-                                    "SELECT sql FROM sqlite_schema WHERE tbl_name = ?1",
-                                    params![format!("SCHEMA{}_VIEW", column_metadata.schema.oid)],
-                                    |row| row.get("sql"),
-                                ) {
-                                    Ok(schema_view_def) => schema_view_def,
-                                    Err(_) => String::from(""),
-                                };
-                                let filters: Vec<String> = query_filter
-                                    .split('&')
-                                    .filter_map(|s| {
-                                        if let Some((filter_column_name, filter_column_value)) =
-                                            s.split_once('=')
-                                        {
-                                            let pattern: String =
-                                                format!(" AS {filter_column_name}");
-                                            if schema_view_def.contains(&pattern) {
-                                                Some(format!(
-                                                    "{filter_column_name} = {filter_column_value}"
-                                                ))
-                                            } else {
-                                                None
-                                            }
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect();
-                                if filters.len() == 0 {
-                                    String::from("")
-                                } else {
-                                    format!(
-                                        "WHERE {}",
-                                        filters
-                                            .into_iter()
-                                            .reduce(|acc, e| format!("{acc} AND {e}"))
-                                            .unwrap()
-                                    )
-                                }
-                            }
-                        );
-                        let (param, value, label, label_e) =
-                            match conn.query_one(&label_sql, params![], |row| {
-                                Ok((
-                                    row.get::<_, Option<String>>("PARAM")?,
-                                    row.get::<_, Option<String>>("VALUE")?,
-                                    row.get::<_, Option<String>>("LABEL")?,
-                                ))
-                            }) {
-                                Ok((param, value, label)) => (param, value, label, None),
-                                Err(e) => (None, None, None, Some(e)),
-                            };
-
-                        // Check if the parameter points to a data cell
-                        if let Some(param) = param {
-                            let param_regex = Regex::new(r"[^:]*:(\d+):(\d+):(\d+)").unwrap();
-                            if let Some(param_captures) = param_regex.captures(&param) {
-                                // Extract the table, column, and row of the data cell
-                                let data_table_oid: i64 =
-                                    param_captures
-                                        .get(0)
-                                        .map_or(0, |s| match i64::from_str_radix(s.as_str(), 10) {
-                                            Ok(i) => i,
-                                            Err(_) => 0,
-                                        });
-                                let data_column_oid: i64 =
-                                    param_captures
-                                        .get(1)
-                                        .map_or(0, |s| match i64::from_str_radix(s.as_str(), 10) {
-                                            Ok(i) => i,
-                                            Err(_) => 0,
-                                        });
-                                let data_row_oid: i64 =
-                                    param_captures
-                                        .get(2)
-                                        .map_or(0, |s| match i64::from_str_radix(s.as_str(), 10) {
-                                            Ok(i) => i,
-                                            Err(_) => 0,
-                                        });
-
-                                // Retrieve the metadata of the data cell's column
-                                let data_column_metadata: column::FullMetadata =
-                                    match column::FullMetadata::get_transact(conn, data_column_oid)
-                                    {
-                                        Ok(data_column_metadata) => data_column_metadata,
-                                        Err(e) => {
-                                            return Self::Readonly {  
-                                            label: None, 
-                                            format: CellTextFormat::Plain,
-                                            validation_failures: vec![FailedValidation {
-                                                message: format!("Error while retrieving metadata of referenced column: {}", <Error as Into<String>>::into(e))
-                                            }],
-                                            cell_identifier: CellIdentifier::VirtualCell { column_oid, query_filter, isolated_cell_dependencies, full_reload_cell_dependencies },
-                                        };
-                                        }
-                                    };
-
-                                // Return the data cell referenced by the formula
-                                return match data_column_metadata.column_type {
-                                    column_type::ColumnType::Primitive(prim) => match prim {
-                                        column_type::Primitive::Boolean => {
-                                            let (is_checked, is_checked_e) =
-                                                if let Some(value) = value {
-                                                    match i64::from_str_radix(&value, 10) {
-                                                        Ok(i) => (i != 0, None),
-                                                        Err(e) => (false, Some(e)),
-                                                    }
-                                                } else {
-                                                    (false, None)
-                                                };
-
-                                            Self::CheckboxEntry {
-                                                data_table_oid,
-                                                data_column_oid,
-                                                data_row_oid,
-                                                is_checked,
-                                                cell_identifier: CellIdentifier::VirtualCell {
-                                                    column_oid,
-                                                    query_filter,
-                                                    isolated_cell_dependencies,
-                                                    full_reload_cell_dependencies,
-                                                },
-                                                validation_failures: {
-                                                    if let Some(is_checked_e) = is_checked_e {
-                                                        vec![FailedValidation {
-                                                            message: format!("{is_checked_e}"),
-                                                        }]
-                                                    } else {
-                                                        Vec::new()
-                                                    }
-                                                },
-                                            }
-                                        }
-                                        column_type::Primitive::Integer => Self::IntegerEntry {
-                                            data_table_oid,
-                                            data_column_oid,
-                                            data_row_oid,
-                                            value: if let Some(value) = value {
-                                                if let Ok(value) = i64::from_str_radix(&value, 10) {
-                                                    Some(value)
-                                                } else {
-                                                    None
-                                                }
-                                            } else {
-                                                None
-                                            },
-                                            cell_identifier: CellIdentifier::VirtualCell {
-                                                column_oid,
-                                                query_filter,
-                                                isolated_cell_dependencies,
-                                                full_reload_cell_dependencies,
-                                            },
-                                            validation_failures: {
-                                                if let Some(label_e) = label_e {
-                                                    vec![FailedValidation {
-                                                        message: format!("{label_e}"),
-                                                    }]
-                                                } else {
-                                                    Vec::new()
-                                                }
-                                            },
-                                        },
-                                        column_type::Primitive::Number => Self::NumberEntry {
-                                            data_table_oid,
-                                            data_column_oid,
-                                            data_row_oid,
-                                            value: if let Some(value) = value {
-                                                if let Ok(value) = f64::from_str(&value) {
-                                                    Some(value)
-                                                } else {
-                                                    None
-                                                }
-                                            } else {
-                                                None
-                                            },
-                                            cell_identifier: CellIdentifier::VirtualCell {
-                                                column_oid,
-                                                query_filter,
-                                                isolated_cell_dependencies,
-                                                full_reload_cell_dependencies,
-                                            },
-                                            validation_failures: {
-                                                if let Some(label_e) = label_e {
-                                                    vec![FailedValidation {
-                                                        message: format!("{label_e}"),
-                                                    }]
-                                                } else {
-                                                    Vec::new()
-                                                }
-                                            },
-                                        },
-                                        column_type::Primitive::PlainText => Self::TextEntry {
-                                            data_table_oid,
-                                            data_column_oid,
-                                            data_row_oid,
-                                            label,
-                                            format: CellTextFormat::Plain,
-                                            cell_identifier: CellIdentifier::VirtualCell {
-                                                column_oid,
-                                                query_filter,
-                                                isolated_cell_dependencies,
-                                                full_reload_cell_dependencies,
-                                            },
-                                            validation_failures: {
-                                                if let Some(label_e) = label_e {
-                                                    vec![FailedValidation {
-                                                        message: format!("{label_e}"),
-                                                    }]
-                                                } else {
-                                                    Vec::new()
-                                                }
-                                            },
-                                        },
-                                        column_type::Primitive::MarkdownText => Self::TextEntry {
-                                            data_table_oid,
-                                            data_column_oid,
-                                            data_row_oid,
-                                            label,
-                                            format: CellTextFormat::Markdown,
-                                            cell_identifier: CellIdentifier::VirtualCell {
-                                                column_oid,
-                                                query_filter,
-                                                isolated_cell_dependencies,
-                                                full_reload_cell_dependencies,
-                                            },
-                                            validation_failures: {
-                                                if let Some(label_e) = label_e {
-                                                    vec![FailedValidation {
-                                                        message: format!("{label_e}"),
-                                                    }]
-                                                } else {
-                                                    Vec::new()
-                                                }
-                                            },
-                                        },
-                                        column_type::Primitive::JsonText => Self::TextEntry {
-                                            data_table_oid,
-                                            data_column_oid,
-                                            data_row_oid,
-                                            label,
-                                            format: CellTextFormat::Json,
-                                            cell_identifier: CellIdentifier::VirtualCell {
-                                                column_oid,
-                                                query_filter,
-                                                isolated_cell_dependencies,
-                                                full_reload_cell_dependencies,
-                                            },
-                                            validation_failures: {
-                                                if let Some(label_e) = label_e {
-                                                    vec![FailedValidation {
-                                                        message: format!("{label_e}"),
-                                                    }]
-                                                } else {
-                                                    Vec::new()
-                                                }
-                                            },
-                                        },
-                                        column_type::Primitive::XmlText => Self::TextEntry {
-                                            data_table_oid,
-                                            data_column_oid,
-                                            data_row_oid,
-                                            label,
-                                            format: CellTextFormat::Xml,
-                                            cell_identifier: CellIdentifier::VirtualCell {
-                                                column_oid,
-                                                query_filter,
-                                                isolated_cell_dependencies,
-                                                full_reload_cell_dependencies,
-                                            },
-                                            validation_failures: {
-                                                if let Some(label_e) = label_e {
-                                                    vec![FailedValidation {
-                                                        message: format!("{label_e}"),
-                                                    }]
-                                                } else {
-                                                    Vec::new()
-                                                }
-                                            },
-                                        },
-                                        column_type::Primitive::Date => Self::DateEntry {
-                                            data_table_oid,
-                                            data_column_oid,
-                                            data_row_oid,
-                                            label,
-                                            cell_identifier: CellIdentifier::VirtualCell {
-                                                column_oid,
-                                                query_filter,
-                                                isolated_cell_dependencies,
-                                                full_reload_cell_dependencies,
-                                            },
-                                            validation_failures: {
-                                                if let Some(label_e) = label_e {
-                                                    vec![FailedValidation {
-                                                        message: format!("{label_e}"),
-                                                    }]
-                                                } else {
-                                                    Vec::new()
-                                                }
-                                            },
-                                        },
-                                        column_type::Primitive::Datetime => Self::DatetimeEntry {
-                                            data_table_oid,
-                                            data_column_oid,
-                                            data_row_oid,
-                                            label,
-                                            cell_identifier: CellIdentifier::VirtualCell {
-                                                column_oid,
-                                                query_filter,
-                                                isolated_cell_dependencies,
-                                                full_reload_cell_dependencies,
-                                            },
-                                            validation_failures: {
-                                                if let Some(label_e) = label_e {
-                                                    vec![FailedValidation {
-                                                        message: format!("{label_e}"),
-                                                    }]
-                                                } else {
-                                                    Vec::new()
-                                                }
-                                            },
-                                        },
-                                        column_type::Primitive::File => {
-                                            let (file_oid, file_oid_e) = if let Some(value) = value
-                                            {
-                                                match i64::from_str_radix(&value, 10) {
-                                                    Ok(i) => (Some(i), None),
-                                                    Err(e) => (None, Some(e)),
-                                                }
-                                            } else {
-                                                (None, None)
-                                            };
-
-                                            Self::FileEntry {
-                                                data_table_oid,
-                                                data_column_oid,
-                                                data_row_oid,
-                                                file_oid,
-                                                label,
-                                                cell_identifier: CellIdentifier::VirtualCell {
-                                                    column_oid,
-                                                    query_filter,
-                                                    isolated_cell_dependencies,
-                                                    full_reload_cell_dependencies,
-                                                },
-                                                validation_failures: {
-                                                    if let Some(file_oid_e) = file_oid_e {
-                                                        vec![FailedValidation {
-                                                            message: format!("{file_oid_e}"),
-                                                        }]
-                                                    } else {
-                                                        Vec::new()
-                                                    }
-                                                },
-                                            }
-                                        }
-                                        column_type::Primitive::Image => {
-                                            let (file_oid, file_oid_e) = if let Some(value) = value
-                                            {
-                                                match i64::from_str_radix(&value, 10) {
-                                                    Ok(i) => (Some(i), None),
-                                                    Err(e) => (None, Some(e)),
-                                                }
-                                            } else {
-                                                (None, None)
-                                            };
-
-                                            let (file, file_e) = if let Some(file_oid) = file_oid {
-                                                match file::File::get_transact(conn, file_oid) {
-                                                    Ok(file) => (Some(file), None),
-                                                    Err(e) => (None, Some(e)),
-                                                }
-                                            } else {
-                                                (None, None)
-                                            };
-
-                                            Self::ImageEntry {
-                                                data_table_oid,
-                                                data_column_oid,
-                                                data_row_oid,
-                                                label,
-                                                file,
-                                                cell_identifier: CellIdentifier::VirtualCell {
-                                                    column_oid,
-                                                    query_filter,
-                                                    isolated_cell_dependencies,
-                                                    full_reload_cell_dependencies,
-                                                },
-                                                validation_failures: {
-                                                    let mut failures: Vec<FailedValidation> =
-                                                        if let Some(file_oid_e) = file_oid_e {
-                                                            vec![FailedValidation {
-                                                                message: format!("{file_oid_e}"),
-                                                            }]
-                                                        } else {
-                                                            Vec::new()
-                                                        };
-                                                    if let Some(file_src_e) = file_e {
-                                                        failures.push(FailedValidation {
-                                                            message: format!(
-                                                                "Error while getting image src: {}",
-                                                                <Error as Into<String>>::into(
-                                                                    file_src_e
-                                                                )
-                                                            ),
-                                                        });
-                                                    }
-                                                    failures
-                                                },
-                                            }
-                                        }
-                                    },
-                                    column_type::ColumnType::Object {
-                                        table_oid: link_schema_oid,
-                                        ..
-                                    } => {
-                                        let (link_row_oid, link_row_oid_e) =
-                                            if let Some(value) = value {
-                                                match i64::from_str_radix(&value, 10) {
-                                                    Ok(i) => (Some(i), None),
-                                                    Err(e) => (None, Some(e)),
-                                                }
-                                            } else {
-                                                (None, None)
-                                            };
-
-                                        let (clipboard_data, clipboard_data_e) =
-                                            if let Some(link_row_oid) = link_row_oid {
-                                                match DataCellEntry::get_object_data(
-                                                    link_schema_oid.clone(),
-                                                    link_row_oid.clone(),
-                                                ) {
-                                                    Ok(clipboard_data) => {
-                                                        (Some(clipboard_data), None)
-                                                    }
-                                                    Err(e) => (None, Some(e)),
-                                                }
-                                            } else {
-                                                (None, None)
-                                            };
-
-                                        Self::ObjectLink {
-                                            data_table_oid,
-                                            data_column_oid,
-                                            data_row_oid,
-                                            label,
-                                            link_schema_oid,
-                                            link_query_filter: match link_row_oid {
-                                                Some(link_row_oid) => {
-                                                    Some(format!("OID={link_row_oid}"))
-                                                }
-                                                None => None,
-                                            },
-                                            link_row_oid,
-                                            clipboard_data,
-                                            cell_identifier: CellIdentifier::VirtualCell {
-                                                column_oid,
-                                                query_filter,
-                                                isolated_cell_dependencies,
-                                                full_reload_cell_dependencies,
-                                            },
-                                            validation_failures: {
-                                                let mut failures: Vec<FailedValidation> =
-                                                    if let Some(label_e) = label_e {
-                                                        vec![FailedValidation {
-                                                            message: format!("{label_e}"),
-                                                        }]
-                                                    } else {
-                                                        Vec::new()
-                                                    };
-                                                if let Some(link_row_oid_e) = link_row_oid_e {
-                                                    failures.push(FailedValidation {
-                                                        message: format!("{link_row_oid_e}"),
-                                                    });
-                                                }
-                                                failures
-                                            },
-                                        }
-                                    }
-                                    column_type::ColumnType::Select {
-                                        table_oid: dropdown_table_oid,
-                                        ..
-                                    } => {
-                                        let (dropdown_row_oid, dropdown_row_oid_e) =
-                                            if let Some(value) = value {
-                                                match i64::from_str_radix(&value, 10) {
-                                                    Ok(i) => (Some(i), None),
-                                                    Err(e) => (None, Some(e)),
-                                                }
-                                            } else {
-                                                (None, None)
-                                            };
-
-                                        Self::SingleSelectDropdown {
-                                            data_table_oid,
-                                            data_column_oid,
-                                            data_row_oid,
-                                            label,
-                                            dropdown_table_oid,
-                                            dropdown_row_oid,
-                                            cell_identifier: CellIdentifier::VirtualCell {
-                                                column_oid,
-                                                query_filter,
-                                                isolated_cell_dependencies,
-                                                full_reload_cell_dependencies,
-                                            },
-                                            validation_failures: {
-                                                if let Some(label_e) = dropdown_row_oid_e {
-                                                    vec![FailedValidation {
-                                                        message: format!("{label_e}"),
-                                                    }]
-                                                } else {
-                                                    Vec::new()
-                                                }
-                                            },
-                                        }
-                                    }
-                                    column_type::ColumnType::Multiselect {
-                                        table_oid: dropdown_table_oid,
-                                        ..
-                                    } => {
-                                        let dropdown_row_oid: Vec<i64> = if let Some(value) = value
-                                        {
-                                            value
-                                                .split(',')
-                                                .filter_map(|s| match i64::from_str_radix(s, 10) {
-                                                    Ok(i) => Some(i),
-                                                    Err(_) => None,
-                                                })
-                                                .collect()
-                                        } else {
-                                            Vec::new()
-                                        };
-
-                                        Self::MultiSelectDropdown {
-                                            data_table_oid,
-                                            data_column_oid,
-                                            data_row_oid,
-                                            label,
-                                            dropdown_table_oid,
-                                            dropdown_row_oid,
-                                            cell_identifier: CellIdentifier::VirtualCell {
-                                                column_oid,
-                                                query_filter,
-                                                isolated_cell_dependencies,
-                                                full_reload_cell_dependencies,
-                                            },
-                                            validation_failures: {
-                                                if let Some(label_e) = label_e {
-                                                    vec![FailedValidation {
-                                                        message: format!("{label_e}"),
-                                                    }]
-                                                } else {
-                                                    Vec::new()
-                                                }
-                                            },
-                                        }
-                                    }
-                                    _ => {
-                                        return Self::Readonly { 
-                                            cell_identifier: CellIdentifier::VirtualCell { column_oid, query_filter, isolated_cell_dependencies, full_reload_cell_dependencies },
-                                            label: None, 
-                                            format: CellTextFormat::Plain,
-                                            validation_failures: vec![FailedValidation {
-                                                message: format!("A data cell is not expected to belong to a {} column!", data_column_metadata.column_type.to_str())
-                                            }]
-                                        };
-                                    }
-                                };
-                            } else {
-                                // If the parameter does not point to a data cell but has a known type, return a readonly value
-                                return Self::Readonly {
-                                    label,
-                                    format: if param.starts_with("json") {
-                                        CellTextFormat::Json
-                                    } else {
-                                        CellTextFormat::Plain
-                                    },
-                                    validation_failures: Vec::new(),
-                                    cell_identifier: CellIdentifier::VirtualCell {
-                                        column_oid,
-                                        query_filter,
-                                        isolated_cell_dependencies,
-                                        full_reload_cell_dependencies,
-                                    },
-                                };
-                            }
-                        }
-
-                        // If the parameter does not point to a data cell and has an unknown type, return a readonly value
-                        return Self::Readonly {
-                            label,
-                            format: CellTextFormat::Plain,
-                            validation_failures: Vec::new(),
-                            cell_identifier: CellIdentifier::VirtualCell {
-                                column_oid,
-                                query_filter,
-                                isolated_cell_dependencies,
-                                full_reload_cell_dependencies,
-                            },
-                        };
+                        Self::new_formula_cell(row, CellIdentifier::VirtualCell { column_oid, query_filter }, value_ord, label_ord)
                     }
-                    column_type::ColumnType::Subreport {
-                        report_oid: link_schema_oid,
-                        ..
-                    } => {
-                        return Self::SchemaLink {
-                            label: Some(String::from("Subreport")),
-                            link_schema_oid,
-                            link_query_filter: query_filter.clone(),
-                            validation_failures: Vec::new(),
-                            cell_identifier: CellIdentifier::VirtualCell {
-                                column_oid,
-                                query_filter,
-                                isolated_cell_dependencies,
-                                full_reload_cell_dependencies,
-                            },
-                        }
+                    column_type::ColumnType::Subreport { report_oid: link_schema_oid, .. } => {
+                        Self::new_subreport(row, CellIdentifier::VirtualCell { column_oid, query_filter }, value_ord, label_ord, &link_schema_oid)
                     }
                     _ => {
                         return Self::Readonly {
                             label: None,
                             format: CellTextFormat::Plain,
+                            isolated_cell_dependencies: Vec::new(),
+                            full_reload_cell_dependencies: Vec::new(),
                             validation_failures: vec![FailedValidation {
                                 message: format!(
                                     "{} column cannot be on a report!",
@@ -1407,14 +640,742 @@ impl Cell {
                             cell_identifier: CellIdentifier::VirtualCell {
                                 column_oid,
                                 query_filter,
-                                isolated_cell_dependencies,
-                                full_reload_cell_dependencies,
                             },
                         };
                     }
                 }
             }
         }
+    }
+
+
+
+    /// Constructs a new data entry cell.
+    pub fn new_primitive(row: &rusqlite::Row, table_oid: i64, column_oid: i64, row_oid: i64, prim: &column_type::Primitive, value_ord: String, label_ord: String) -> Self {
+        let cell_identifier: CellIdentifier = CellIdentifier::DataCell { 
+            table_oid: table_oid.clone(), 
+            column_oid: column_oid.clone(), 
+            row_oid: row_oid.clone()
+        };
+
+        let isolated_cell_dependencies: Vec<CellDependency> = vec![CellDependency {
+            table_oid: table_oid.clone(),
+            column_oid: column_oid.clone(),
+            row_oid: Some(row_oid.clone())
+        }];
+        let full_reload_cell_dependencies: Vec<CellDependency> = Vec::new();
+
+        match prim {
+            column_type::Primitive::Boolean => {
+                let (is_checked, is_checked_e) = match row.get::<&str, Option<bool>>(&value_ord) {
+                    Ok(is_checked) => (is_checked, None),
+                    Err(e) => (None, Some(e))
+                };
+
+                Cell::CheckboxEntry {
+                    data_table_oid: table_oid,
+                    data_column_oid: column_oid,
+                    data_row_oid: row_oid,
+                    is_checked: if let Some(is_checked) = is_checked { is_checked } else { false },
+                    cell_identifier,
+                    isolated_cell_dependencies,
+                    full_reload_cell_dependencies,
+                    validation_failures: {
+                        if let Some(is_checked_e) = is_checked_e {
+                            vec![FailedValidation {
+                                message: format!("{is_checked_e}")
+                            }]
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                }
+            }
+            column_type::Primitive::Integer => {
+                let (value, value_e) = match row.get::<&str, Option<i64>>(&value_ord) {
+                    Ok(value) => (value, None),
+                    Err(e) => (None, Some(e))
+                };
+
+                Cell::IntegerEntry {
+                    data_table_oid: table_oid,
+                    data_column_oid: column_oid,
+                    data_row_oid: row_oid,
+                    value,
+                    cell_identifier,
+                    isolated_cell_dependencies,
+                    full_reload_cell_dependencies,
+                    validation_failures: {
+                        let mut failures: Vec<FailedValidation> = if let Some(value_e) = value_e {
+                            vec![FailedValidation {
+                                message: format!("{value_e}")
+                            }]
+                        } else {
+                            Vec::new()
+                        };
+                        failures
+                    }
+                }
+            }
+            column_type::Primitive::Number => {
+                let (value, value_e) = match row.get::<&str, Option<f64>>(&value_ord) {
+                    Ok(value) => (value, None),
+                    Err(e) => (None, Some(e))
+                };
+
+                Cell::NumberEntry {
+                    data_table_oid: table_oid,
+                    data_column_oid: column_oid,
+                    data_row_oid: row_oid,
+                    value,
+                    cell_identifier,
+                    isolated_cell_dependencies,
+                    full_reload_cell_dependencies,
+                    validation_failures: {
+                        let mut failures: Vec<FailedValidation> = if let Some(value_e) = value_e {
+                            vec![FailedValidation {
+                                message: format!("{value_e}")
+                            }]
+                        } else {
+                            Vec::new()
+                        };
+                        failures
+                    }
+                }
+            }
+            column_type::Primitive::PlainText
+            | column_type::Primitive::MarkdownText
+            | column_type::Primitive::JsonText
+            | column_type::Primitive::XmlText => {
+                let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
+                    Ok(label) => (label, None),
+                    Err(e) => (None, Some(e))
+                };
+
+                Cell::TextEntry  {
+                    data_table_oid: table_oid,
+                    data_column_oid: column_oid,
+                    data_row_oid: row_oid,
+                    label,
+                    format: match prim {
+                        column_type::Primitive::JsonText => CellTextFormat::Json,
+                        _ => CellTextFormat::Plain
+                    },
+                    cell_identifier,
+                    isolated_cell_dependencies,
+                    full_reload_cell_dependencies,
+                    validation_failures: {
+                        if let Some(label_e) = label_e {
+                            vec![FailedValidation {
+                                message: format!("{label_e}")
+                            }]
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                }
+            }
+            column_type::Primitive::Date => {
+                let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
+                    Ok(label) => (label, None),
+                    Err(e) => (None, Some(e))
+                };
+
+                Cell::DateEntry  {
+                    data_table_oid: table_oid,
+                    data_column_oid: column_oid,
+                    data_row_oid: row_oid,
+                    label,
+                    cell_identifier,
+                    isolated_cell_dependencies,
+                    full_reload_cell_dependencies,
+                    validation_failures: {
+                        if let Some(label_e) = label_e {
+                            vec![FailedValidation {
+                                message: format!("{label_e}")
+                            }]
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                }
+            }
+            column_type::Primitive::Datetime => {
+                let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
+                    Ok(label) => (label, None),
+                    Err(e) => (None, Some(e))
+                };
+
+                Cell::DatetimeEntry  {
+                    data_table_oid: table_oid,
+                    data_column_oid: column_oid,
+                    data_row_oid: row_oid,
+                    label,
+                    cell_identifier,
+                    isolated_cell_dependencies,
+                    full_reload_cell_dependencies,
+                    validation_failures: {
+                        if let Some(label_e) = label_e {
+                            vec![FailedValidation {
+                                message: format!("{label_e}")
+                            }]
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                }
+            }
+            column_type::Primitive::File => {
+                let (file_oid, file_oid_e) = match row.get::<&str, Option<i64>>(&value_ord) {
+                    Ok(file_oid) => (file_oid, None),
+                    Err(e) => (None, Some(e))
+                };
+                let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
+                    Ok(label) => (label, None),
+                    Err(e) => (None, Some(e))
+                };
+
+                Cell::FileEntry {
+                    data_table_oid: table_oid,
+                    data_column_oid: column_oid,
+                    data_row_oid: row_oid,
+                    file_oid,
+                    label,
+                    cell_identifier,
+                    isolated_cell_dependencies,
+                    full_reload_cell_dependencies,
+                    validation_failures: {
+                        let mut failures: Vec<FailedValidation> = if let Some(label_e) = label_e {
+                            vec![FailedValidation {
+                                message: format!("{label_e}")
+                            }]
+                        } else {
+                            Vec::new()
+                        };
+                        if let Some(file_oid_e) = file_oid_e {
+                            failures.push(FailedValidation {
+                                message: format!("{file_oid_e}")
+                            })
+                        }
+                        failures
+                    }
+                }
+            }
+            column_type::Primitive::Image => {
+                let (file_oid, file_oid_e) = match row.get::<&str, Option<i64>>(&value_ord) {
+                    Ok(file_oid) => (file_oid, None),
+                    Err(e) => (None, Some(e))
+                };
+                let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
+                    Ok(label) => (label, None),
+                    Err(e) => (None, Some(e))
+                };
+                let (file, file_e) = if let Some(file_oid) = file_oid {
+                    match file::File::get(file_oid) {
+                        Ok(file) => (Some(file), None),
+                        Err(e) => (None, Some(e))
+                    }
+                } else {
+                    (None, None) 
+                };
+
+                Cell::ImageEntry {
+                    data_table_oid: table_oid,
+                    data_column_oid: column_oid,
+                    data_row_oid: row_oid,
+                    label,
+                    file,
+                    cell_identifier,
+                    isolated_cell_dependencies,
+                    full_reload_cell_dependencies,
+                    validation_failures: {
+                        let mut failures: Vec<FailedValidation> = if let Some(label_e) = label_e {
+                            vec![FailedValidation {
+                                message: format!("{label_e}")
+                            }]
+                        } else {
+                            Vec::new()
+                        };
+                        if let Some(file_oid_e) = file_oid_e {
+                            failures.push(FailedValidation {
+                                message: format!("{file_oid_e}")
+                            })
+                        }
+                        if let Some(file_src_e) = file_e {
+                            failures.push(FailedValidation { 
+                                message: format!("Error while getting image src: {}", <Error as Into<String>>::into(file_src_e))
+                            });
+                        }
+                        failures
+                    }
+                }
+            }
+        }
+    }
+
+    /// Constructs a cell containing a dropdown where at most a single item can be selected.
+    pub fn new_single_select_dropdown(row: &rusqlite::Row, table_oid: i64, column_oid: i64, row_oid: i64, value_ord: String, label_ord: String, dropdown_table_oid: &i64) -> Self {
+        let cell_identifier: CellIdentifier = CellIdentifier::DataCell { 
+            table_oid: table_oid.clone(), 
+            column_oid: column_oid.clone(), 
+            row_oid: row_oid.clone()
+        };
+
+        // TODO extract dependencies due to label
+        let isolated_cell_dependencies: Vec<CellDependency> = vec![CellDependency {
+            table_oid: table_oid.clone(),
+            column_oid: column_oid.clone(),
+            row_oid: Some(row_oid.clone())
+        }];
+        let full_reload_cell_dependencies: Vec<CellDependency> = Vec::new();
+
+        let (dropdown_row_oid, dropdown_row_oid_e) = match row.get::<&str, Option<i64>>(&value_ord) {
+            Ok(dropdown_row_oid) => (dropdown_row_oid, None),
+            Err(e) => (None, Some(e))
+        };
+        let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
+            Ok(label) => (label, None),
+            Err(e) => (None, Some(e))
+        };
+
+        Cell::SingleSelectDropdown {
+            data_table_oid: table_oid,
+            data_column_oid: column_oid,
+            data_row_oid: row_oid,
+            label,
+            dropdown_table_oid: dropdown_table_oid.clone(),
+            dropdown_row_oid,
+            cell_identifier,
+            isolated_cell_dependencies,
+            full_reload_cell_dependencies,
+            validation_failures: {
+                let mut failures: Vec<FailedValidation> = if let Some(label_e) = label_e {
+                    vec![FailedValidation {
+                        message: format!("{label_e}")
+                    }]
+                } else {
+                    Vec::new()
+                };
+                if let Some(value_e) = dropdown_row_oid_e {
+                    failures.push(FailedValidation {
+                        message: format!("{value_e}")
+                    })
+                }
+                failures
+            }
+        }
+    }
+
+    /// Constructs a cell containing a dropdown where multiple items can be selected.
+    pub fn new_multiple_select_dropdown(row: &rusqlite::Row, table_oid: i64, column_oid: i64, row_oid: i64, value_ord: String, label_ord: String, dropdown_table_oid: &i64) -> Self {
+        let cell_identifier: CellIdentifier = CellIdentifier::DataCell { 
+            table_oid: table_oid.clone(), 
+            column_oid: column_oid.clone(), 
+            row_oid: row_oid.clone()
+        };
+
+        // TODO extract dependencies due to label
+        let isolated_cell_dependencies: Vec<CellDependency> = vec![CellDependency {
+            table_oid: table_oid.clone(),
+            column_oid: column_oid.clone(),
+            row_oid: Some(row_oid.clone())
+        }];
+        let full_reload_cell_dependencies: Vec<CellDependency> = Vec::new();
+
+        let (value, value_e) = match row.get::<&str, Option<String>>(&value_ord) {
+            Ok(value) => (value, None),
+            Err(e) => (None, Some(e))
+        };
+        let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
+            Ok(label) => (label, None),
+            Err(e) => (None, Some(e))
+        };
+        let dropdown_row_oid: Vec<i64> = if let Some(value) = value {
+            value.split(',').filter_map(|s| match i64::from_str_radix(s, 10) {
+                Ok(i) => Some(i),
+                Err(_) => None
+            }).collect()
+        } else {
+            Vec::new()
+        };
+
+        Cell::MultiSelectDropdown {
+            data_table_oid: table_oid,
+            data_column_oid: column_oid,
+            data_row_oid: row_oid,
+            label,
+            dropdown_table_oid: dropdown_table_oid.clone(),
+            dropdown_row_oid,
+            cell_identifier,
+            isolated_cell_dependencies,
+            full_reload_cell_dependencies,
+            validation_failures: {
+                let mut failures: Vec<FailedValidation> = if let Some(label_e) = label_e {
+                    vec![FailedValidation {
+                        message: format!("{label_e}")
+                    }]
+                } else {
+                    Vec::new()
+                };
+                if let Some(value_e) = value_e {
+                    failures.push(FailedValidation {
+                        message: format!("{value_e}")
+                    })
+                }
+                failures
+            }
+        }
+    }
+
+    /// Constructs a cell containing a link to an object.
+    pub fn new_object_link(row: &rusqlite::Row, table_oid: i64, column_oid: i64, row_oid: i64, value_ord: String, label_ord: String, link_schema_oid: &i64) -> Self {
+        let cell_identifier: CellIdentifier = CellIdentifier::DataCell { 
+            table_oid: table_oid.clone(), 
+            column_oid: column_oid.clone(), 
+            row_oid: row_oid.clone()
+        };
+
+        // TODO extract dependencies due to label
+        let isolated_cell_dependencies: Vec<CellDependency> = vec![CellDependency {
+            table_oid: table_oid.clone(),
+            column_oid: column_oid.clone(),
+            row_oid: Some(row_oid.clone())
+        }];
+        let full_reload_cell_dependencies: Vec<CellDependency> = Vec::new();
+
+        let (link_row_oid, link_row_oid_e) = match row.get::<&str, Option<i64>>(&value_ord) {
+            Ok(link_row_oid) => (link_row_oid, None),
+            Err(e) => (None, Some(e))
+        };
+        let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
+            Ok(label) => (label, None),
+            Err(e) => (None, Some(e))
+        };
+
+        let (clipboard_data, clipboard_data_e) = if let Some(link_row_oid) = link_row_oid {
+            match DataCellEntry::get_object_data(link_schema_oid.clone(), link_row_oid.clone()) {
+                Ok(clipboard_data) => (Some(clipboard_data), None),
+                Err(e) => (None, Some(e))
+            }
+        } else {
+            (None, None)
+        };
+
+        Cell::ObjectLink {
+            data_table_oid: table_oid,
+            data_column_oid: column_oid,
+            data_row_oid: row_oid,
+            label,
+            link_schema_oid: link_schema_oid.clone(),
+            link_query_filter: match link_row_oid {
+                Some(link_row_oid) => Some(format!("OID={link_row_oid}")),
+                None => None
+            },
+            link_row_oid,
+            clipboard_data,
+            cell_identifier,
+            isolated_cell_dependencies,
+            full_reload_cell_dependencies,
+            validation_failures: {
+                let mut failures: Vec<FailedValidation> = if let Some(label_e) = label_e {
+                    vec![FailedValidation {
+                        message: format!("{label_e}")
+                    }]
+                } else {
+                    Vec::new()
+                };
+                if let Some(link_row_oid_e) = link_row_oid_e {
+                    failures.push(FailedValidation {
+                        message: format!("{link_row_oid_e}")
+                    })
+                }
+                failures
+            }
+        }
+    }
+
+    /// Constructs a cell containing a link to a subreport.
+    pub fn new_subreport(row: &rusqlite::Row, cell_identifier: CellIdentifier, value_ord: String, label_ord: String, link_schema_oid: &i64) -> Self {
+        // TODO extract dependencies due to label
+        let (isolated_cell_dependencies, full_reload_cell_dependencies) = match &cell_identifier {
+            CellIdentifier::DataCell { table_oid, column_oid, row_oid } => {
+                let isolated_cell_dependencies: Vec<CellDependency> = vec![CellDependency {
+                    table_oid: table_oid.clone(),
+                    column_oid: column_oid.clone(),
+                    row_oid: Some(row_oid.clone())
+                }];
+                let full_reload_cell_dependencies: Vec<CellDependency> = Vec::new();
+
+                (isolated_cell_dependencies, full_reload_cell_dependencies)
+            }
+            CellIdentifier::VirtualCell { column_oid, query_filter } => {
+                (
+                    Vec::new(),
+                    Vec::new()
+                )
+            }
+        };
+
+        let (link_query_filter, value_e) = match row.get::<&str, Option<String>>(&value_ord) {
+            Ok(value) => (value, None),
+            Err(e) => (None, Some(e))
+        };
+        let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
+            Ok(label) => (label, None),
+            Err(e) => (None, Some(e))
+        };
+
+        Cell::SchemaLink { 
+            label, 
+            link_schema_oid: link_schema_oid.clone(), 
+            link_query_filter, 
+            isolated_cell_dependencies,
+            full_reload_cell_dependencies,
+            validation_failures: Vec::new(),
+            cell_identifier
+        }
+    }
+
+    /// Constructs a cell containing the value returned by a formula.
+    pub fn new_formula_cell(row: &rusqlite::Row, cell_identifier: CellIdentifier, value_ord: String, label_ord: String) -> Self {
+        let (param_ord, isolated_ord, full_reload_ord): (String, String, String) = match &cell_identifier {
+            CellIdentifier::DataCell { column_oid, .. }
+            | CellIdentifier::VirtualCell { column_oid, .. } => {
+                let param_ord: String = format!("COLUMN{column_oid}_CELL");
+                let isolated_ord: String = format!("COLUMN{column_oid}_ISOLATEDRELOAD");
+                let full_reload_ord: String = format!("COLUMN{column_oid}_FULLRELOAD");
+
+                (param_ord, isolated_ord, full_reload_ord)
+            }
+        };
+
+
+        let (param, param_e) = match row.get::<&str, Option<String>>(&param_ord) {
+            Ok(param) => (param, None),
+            Err(e) => (None, Some(e))
+        };
+        let (isolated_str, isolated_str_e) = match row.get::<&str, Option<String>>(&isolated_ord) {
+            Ok(isolated_str) => (isolated_str, None),
+            Err(e) => (None, Some(e))
+        };
+        let (full_reload_str, full_reload_str_e) = match row.get::<&str, Option<String>>(&isolated_ord) {
+            Ok(full_reload_str) => (full_reload_str, None),
+            Err(e) => (None, Some(e))
+        };
+        let (value, value_e) = match row.get::<&str, Option<String>>(&value_ord) {
+            Ok(value) => (value, None),
+            Err(e) => (None, Some(e))
+        };
+        let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
+            Ok(label) => (label, None),
+            Err(e) => (None, Some(e))
+        };
+
+        let mut validation_failures: Vec<FailedValidation> = vec![label_e, value_e, param_e, isolated_str_e, full_reload_str_e].into_iter()
+            .filter_map(|e| e)
+            .map(|e| FailedValidation { message: format!("{e}") })
+            .collect();
+
+        // Parse the cell dependencies that do not affect schema cardinality
+        let isolated_cell_dependencies: Vec<CellDependency> = {
+            if let Some(isolated_str) = isolated_str {
+                let mut isolated_cell_dependencies: Vec<CellDependency> = Vec::new();
+                for s in isolated_str.split(',') {
+                    let mut dep_oids = s.splitn(3, ':');
+                    if let Some(dep_table_oid_str) = dep_oids.next() {
+                        if let Some(dep_column_oid_str) = dep_oids.next() {
+                            if let Some(dep_row_oid_str) = dep_oids.next() {
+                                if let Ok(dep_table_oid) = i64::from_str_radix(dep_table_oid_str, 10) {
+                                    if let Ok(dep_column_oid) = i64::from_str_radix(dep_column_oid_str, 10) {
+                                        if dep_row_oid_str == "*" {
+                                            isolated_cell_dependencies.push(CellDependency { 
+                                                table_oid: dep_table_oid, 
+                                                column_oid: dep_column_oid, 
+                                                row_oid: None
+                                            });
+                                        } else if let Ok(dep_row_oid) = i64::from_str_radix(dep_row_oid_str, 10) {
+                                            isolated_cell_dependencies.push(CellDependency { 
+                                                table_oid: dep_table_oid, 
+                                                column_oid: dep_column_oid, 
+                                                row_oid: Some(dep_row_oid) 
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                isolated_cell_dependencies
+            } else {
+                Vec::new()
+            }
+        };
+
+        // Parse the cell dependencies that do affect schema cardinality
+        let full_reload_cell_dependencies: Vec<CellDependency> = {
+            if let Some(full_reload_str) = full_reload_str {
+                let mut full_reload_cell_dependencies: Vec<CellDependency> = Vec::new();
+                for s in full_reload_str.split(',') {
+                    let mut dep_oids = s.splitn(3, ':');
+                    if let Some(dep_table_oid_str) = dep_oids.next() {
+                        if let Some(dep_column_oid_str) = dep_oids.next() {
+                            if let Some(dep_row_oid_str) = dep_oids.next() {
+                                if let Ok(dep_table_oid) = i64::from_str_radix(dep_table_oid_str, 10) {
+                                    if let Ok(dep_column_oid) = i64::from_str_radix(dep_column_oid_str, 10) {
+                                        if dep_row_oid_str == "*" {
+                                            full_reload_cell_dependencies.push(CellDependency { 
+                                                table_oid: dep_table_oid, 
+                                                column_oid: dep_column_oid, 
+                                                row_oid: None
+                                            });
+                                        } else if let Ok(dep_row_oid) = i64::from_str_radix(dep_row_oid_str, 10) {
+                                            full_reload_cell_dependencies.push(CellDependency { 
+                                                table_oid: dep_table_oid, 
+                                                column_oid: dep_column_oid, 
+                                                row_oid: Some(dep_row_oid) 
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                full_reload_cell_dependencies
+            } else {
+                Vec::new()
+            }
+        };
+
+        // Check if the parameter points to a data cell
+        if let Some(param) = param {
+            let param_regex = Regex::new(r"[^:]*:(\d+):(\d+):(\d+)").unwrap();
+            if let Some(param_captures) = param_regex.captures(&param) {
+                // Extract the column and row of the data cell
+                let data_table_oid: i64 = param_captures.get(1).map_or(0, |s| match i64::from_str_radix(s.as_str(), 10) {
+                    Ok(i) => i,
+                    Err(_) => 0
+                });
+                let data_column_oid: i64 = param_captures.get(2).map_or(0, |s| match i64::from_str_radix(s.as_str(), 10) {
+                    Ok(i) => i,
+                    Err(_) => 0
+                });
+                let data_row_oid: i64 = param_captures.get(3).map_or(0, |s| match i64::from_str_radix(s.as_str(), 10) {
+                    Ok(i) => i,
+                    Err(_) => 0
+                });
+
+                // Retrieve the metadata of the data cell's column
+                let mut cell: Cell = match column::FullMetadata::get(data_column_oid) {
+                    Ok(data_column_metadata) => match data_column_metadata.column_type {
+                        column_type::ColumnType::Primitive(prim) => {
+                            Cell::new_primitive(row, data_table_oid, data_column_oid, data_row_oid, &prim, value_ord, label_ord)
+                        }
+                        column_type::ColumnType::Object { table_oid: link_schema_oid, .. } => {
+                            Cell::new_object_link(row, data_table_oid, data_column_oid, data_row_oid, value_ord, label_ord, &link_schema_oid)
+                        }
+                        column_type::ColumnType::Select { table_oid: dropdown_table_oid, .. } => {
+                            Cell::new_single_select_dropdown(row, data_table_oid, data_column_oid, data_row_oid, value_ord, label_ord, &dropdown_table_oid)
+                        }
+                        column_type::ColumnType::Multiselect { table_oid: dropdown_table_oid, .. } => {
+                            Cell::new_multiple_select_dropdown(row, data_table_oid, data_column_oid, data_row_oid, value_ord, label_ord, &dropdown_table_oid)
+                        }
+                        column_type::ColumnType::Subreport { report_oid: link_schema_oid, .. } => {
+                            Cell::new_subreport(row, cell_identifier.clone(), value_ord, label_ord, &link_schema_oid)
+                        }
+                        column_type::ColumnType::Formula { .. } => {
+                            Cell::Readonly { 
+                                cell_identifier: cell_identifier.clone(), 
+                                label: None, 
+                                format: CellTextFormat::Plain,
+                                isolated_cell_dependencies,
+                                full_reload_cell_dependencies,
+                                validation_failures: {
+                                    validation_failures.push(FailedValidation {
+                                        message: format!("A data cell is not expected to belong to a {} column!", data_column_metadata.column_type.to_str())
+                                    });
+                                    validation_failures
+                                }
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        Cell::Readonly {  
+                            label: None, 
+                            format: CellTextFormat::Plain,
+                            isolated_cell_dependencies,
+                            full_reload_cell_dependencies,
+                            validation_failures: {
+                                validation_failures.push(FailedValidation {
+                                    message: format!("Error while retrieving metadata of referenced column: {}", <Error as Into<String>>::into(e))
+                                });
+                                validation_failures
+                            },
+                            cell_identifier: cell_identifier.clone()
+                        }
+                    }
+                };
+
+                match &mut cell {
+                    Self::CheckboxEntry { cell_identifier: ci, .. }
+                    | Self::DateEntry { cell_identifier: ci, .. }
+                    | Self::DatetimeEntry { cell_identifier: ci, .. }
+                    | Self::FileEntry { cell_identifier: ci, .. }
+                    | Self::ImageEntry { cell_identifier: ci, .. }
+                    | Self::IntegerEntry { cell_identifier: ci, .. }
+                    | Self::MultiSelectDropdown { cell_identifier: ci, .. }
+                    | Self::NumberEntry { cell_identifier: ci, .. }
+                    | Self::ObjectLink { cell_identifier: ci, .. }
+                    | Self::Readonly { cell_identifier: ci, .. }
+                    | Self::SchemaLink { cell_identifier: ci, .. }
+                    | Self::SingleSelectDropdown { cell_identifier: ci, .. }
+                    | Self::TextEntry { cell_identifier: ci, .. } => {
+                        *ci = cell_identifier;
+                    }
+                }
+                return cell;
+            } else {
+                // If formula returns a value with known type but not associated with a data cell, send as a readonly value
+                Cell::Readonly {  
+                    label, 
+                    format: if param.starts_with(column_type::Primitive::JsonText.to_str()) {
+                        CellTextFormat::Json
+                    } else if param.starts_with(column_type::Primitive::XmlText.to_str()) {
+                        CellTextFormat::Xml
+                    } else if param.starts_with(column_type::Primitive::MarkdownText.to_str()) {
+                        CellTextFormat::Markdown  
+                    } else {
+                        CellTextFormat::Plain
+                    },
+                    isolated_cell_dependencies,
+                    full_reload_cell_dependencies,
+                    validation_failures: Vec::new(),
+                    cell_identifier
+                }
+            }
+        } else {
+            // If formula returns a value with unknown type, send as a readonly value
+            Cell::Readonly {  
+                label, 
+                format: CellTextFormat::Plain,
+                isolated_cell_dependencies,
+                full_reload_cell_dependencies,
+                validation_failures: Vec::new(),
+                cell_identifier
+            }
+        }
+    }
+
+
+    /// Emit signal to update cells related to the indicated cell.
+    pub fn emit_affected_cells(app: &AppHandle, table_oid: i64, column_oid: i64, row_oid: i64) -> Result<(), Error> {
+        app.emit(UPDATE_CELL_SIGNAL, CellIdentifier::DataCell { 
+            table_oid, 
+            column_oid, 
+            row_oid 
+        })?;
+        Ok(())
     }
 }
 
@@ -1590,242 +1551,8 @@ impl SchemaCellStream {
                             println!("Root datasource does not exist for row {index}. Skipping column {} ({})...", c.oid, c.column_type.to_str());
                             continue;
                         };
-                        let cell_identifier: CellIdentifier = CellIdentifier::DataCell { 
-                            table_oid: c.schema.oid.clone(), 
-                            column_oid: data_column_oid.clone(), 
-                            row_oid: data_row_oid.clone()
-                        };
 
-                        match prim {
-                            column_type::Primitive::Boolean => {
-                                let (is_checked, is_checked_e) = match row.get::<&str, Option<bool>>(&value_ord) {
-                                    Ok(is_checked) => (is_checked, None),
-                                    Err(e) => (None, Some(e))
-                                };
-
-                                Cell::CheckboxEntry {
-                                    data_table_oid,
-                                    data_column_oid,
-                                    data_row_oid,
-                                    is_checked: if let Some(is_checked) = is_checked { is_checked } else { false },
-                                    cell_identifier,
-                                    validation_failures: {
-                                        if let Some(is_checked_e) = is_checked_e {
-                                            vec![FailedValidation {
-                                                message: format!("{is_checked_e}")
-                                            }]
-                                        } else {
-                                            Vec::new()
-                                        }
-                                    }
-                                }
-                            }
-                            column_type::Primitive::Integer => {
-                                let (value, value_e) = match row.get::<&str, Option<i64>>(&value_ord) {
-                                    Ok(value) => (value, None),
-                                    Err(e) => (None, Some(e))
-                                };
-
-                                Cell::IntegerEntry {
-                                    data_table_oid,
-                                    data_column_oid,
-                                    data_row_oid,
-                                    value,
-                                    cell_identifier,
-                                    validation_failures: {
-                                        let mut failures: Vec<FailedValidation> = if let Some(value_e) = value_e {
-                                            vec![FailedValidation {
-                                                message: format!("{value_e}")
-                                            }]
-                                        } else {
-                                            Vec::new()
-                                        };
-                                        failures
-                                    }
-                                }
-                            }
-                            column_type::Primitive::Number => {
-                                let (value, value_e) = match row.get::<&str, Option<f64>>(&value_ord) {
-                                    Ok(value) => (value, None),
-                                    Err(e) => (None, Some(e))
-                                };
-
-                                Cell::NumberEntry {
-                                    data_table_oid,
-                                    data_column_oid,
-                                    data_row_oid,
-                                    value,
-                                    cell_identifier,
-                                    validation_failures: {
-                                        let mut failures: Vec<FailedValidation> = if let Some(value_e) = value_e {
-                                            vec![FailedValidation {
-                                                message: format!("{value_e}")
-                                            }]
-                                        } else {
-                                            Vec::new()
-                                        };
-                                        failures
-                                    }
-                                }
-                            }
-                            column_type::Primitive::PlainText
-                            | column_type::Primitive::MarkdownText
-                            | column_type::Primitive::JsonText
-                            | column_type::Primitive::XmlText => {
-                                let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
-                                    Ok(label) => (label, None),
-                                    Err(e) => (None, Some(e))
-                                };
-
-                                Cell::TextEntry  {
-                                    data_table_oid,
-                                    data_column_oid,
-                                    data_row_oid,
-                                    label,
-                                    format: match prim {
-                                        column_type::Primitive::JsonText => CellTextFormat::Json,
-                                        _ => CellTextFormat::Plain
-                                    },
-                                    cell_identifier,
-                                    validation_failures: {
-                                        if let Some(label_e) = label_e {
-                                            vec![FailedValidation {
-                                                message: format!("{label_e}")
-                                            }]
-                                        } else {
-                                            Vec::new()
-                                        }
-                                    }
-                                }
-                            }
-                            column_type::Primitive::Date => {
-                                let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
-                                    Ok(label) => (label, None),
-                                    Err(e) => (None, Some(e))
-                                };
-
-                                Cell::DateEntry  {
-                                    data_table_oid,
-                                    data_column_oid,
-                                    data_row_oid,
-                                    label,
-                                    cell_identifier,
-                                    validation_failures: {
-                                        if let Some(label_e) = label_e {
-                                            vec![FailedValidation {
-                                                message: format!("{label_e}")
-                                            }]
-                                        } else {
-                                            Vec::new()
-                                        }
-                                    }
-                                }
-                            }
-                            column_type::Primitive::Datetime => {
-                                let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
-                                    Ok(label) => (label, None),
-                                    Err(e) => (None, Some(e))
-                                };
-
-                                Cell::DatetimeEntry  {
-                                    data_table_oid,
-                                    data_column_oid,
-                                    data_row_oid,
-                                    label,
-                                    cell_identifier,
-                                    validation_failures: {
-                                        if let Some(label_e) = label_e {
-                                            vec![FailedValidation {
-                                                message: format!("{label_e}")
-                                            }]
-                                        } else {
-                                            Vec::new()
-                                        }
-                                    }
-                                }
-                            }
-                            column_type::Primitive::File => {
-                                let (file_oid, file_oid_e) = match row.get::<&str, Option<i64>>(&value_ord) {
-                                    Ok(file_oid) => (file_oid, None),
-                                    Err(e) => (None, Some(e))
-                                };
-                                let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
-                                    Ok(label) => (label, None),
-                                    Err(e) => (None, Some(e))
-                                };
-
-                                Cell::FileEntry {
-                                    data_table_oid,
-                                    data_column_oid,
-                                    data_row_oid,
-                                    file_oid,
-                                    label,
-                                    cell_identifier,
-                                    validation_failures: {
-                                        let mut failures: Vec<FailedValidation> = if let Some(label_e) = label_e {
-                                            vec![FailedValidation {
-                                                message: format!("{label_e}")
-                                            }]
-                                        } else {
-                                            Vec::new()
-                                        };
-                                        if let Some(file_oid_e) = file_oid_e {
-                                            failures.push(FailedValidation {
-                                                message: format!("{file_oid_e}")
-                                            })
-                                        }
-                                        failures
-                                    }
-                                }
-                            }
-                            column_type::Primitive::Image => {
-                                let (file_oid, file_oid_e) = match row.get::<&str, Option<i64>>(&value_ord) {
-                                    Ok(file_oid) => (file_oid, None),
-                                    Err(e) => (None, Some(e))
-                                };
-                                let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
-                                    Ok(label) => (label, None),
-                                    Err(e) => (None, Some(e))
-                                };
-                                let (file, file_e) = if let Some(file_oid) = file_oid {
-                                    match file::File::get(file_oid) {
-                                        Ok(file) => (Some(file), None),
-                                        Err(e) => (None, Some(e))
-                                    }
-                                } else {
-                                    (None, None) 
-                                };
-
-                                Cell::ImageEntry {
-                                    data_table_oid,
-                                    data_column_oid,
-                                    data_row_oid,
-                                    label,
-                                    file,
-                                    cell_identifier,
-                                    validation_failures: {
-                                        let mut failures: Vec<FailedValidation> = if let Some(label_e) = label_e {
-                                            vec![FailedValidation {
-                                                message: format!("{label_e}")
-                                            }]
-                                        } else {
-                                            Vec::new()
-                                        };
-                                        if let Some(file_oid_e) = file_oid_e {
-                                            failures.push(FailedValidation {
-                                                message: format!("{file_oid_e}")
-                                            })
-                                        }
-                                        if let Some(file_src_e) = file_e {
-                                            failures.push(FailedValidation { 
-                                                message: format!("Error while getting image src: {}", <Error as Into<String>>::into(file_src_e))
-                                            });
-                                        }
-                                        failures
-                                    }
-                                }
-                            }
-                        }
+                        Cell::new_primitive(&row, data_table_oid, data_column_oid, data_row_oid, prim, value_ord, label_ord)
                     }
                     column_type::ColumnType::Object { table_oid: link_schema_oid, .. } => {
                         let data_table_oid: i64 = c.schema.oid.clone();
@@ -1843,59 +1570,8 @@ impl SchemaCellStream {
                             println!("Root datasource does not exist for row {index}. Skipping column {} ({})...", c.oid, c.column_type.to_str());
                             continue;
                         };
-                        let cell_identifier: CellIdentifier = CellIdentifier::DataCell { 
-                            table_oid: c.schema.oid.clone(), 
-                            column_oid: data_column_oid.clone(), 
-                            row_oid: data_row_oid.clone()
-                        };
-
-                        let (link_row_oid, link_row_oid_e) = match row.get::<&str, Option<i64>>(&value_ord) {
-                            Ok(link_row_oid) => (link_row_oid, None),
-                            Err(e) => (None, Some(e))
-                        };
-                        let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
-                            Ok(label) => (label, None),
-                            Err(e) => (None, Some(e))
-                        };
-
-                        let (clipboard_data, clipboard_data_e) = if let Some(link_row_oid) = link_row_oid {
-                            match DataCellEntry::get_object_data(link_schema_oid.clone(), link_row_oid.clone()) {
-                                Ok(clipboard_data) => (Some(clipboard_data), None),
-                                Err(e) => (None, Some(e))
-                            }
-                        } else {
-                            (None, None)
-                        };
-
-                        Cell::ObjectLink {
-                            data_table_oid,
-                            data_column_oid,
-                            data_row_oid,
-                            label,
-                            link_schema_oid: link_schema_oid.clone(),
-                            link_query_filter: match link_row_oid {
-                                Some(link_row_oid) => Some(format!("OID={link_row_oid}")),
-                                None => None
-                            },
-                            link_row_oid,
-                            clipboard_data,
-                            cell_identifier,
-                            validation_failures: {
-                                let mut failures: Vec<FailedValidation> = if let Some(label_e) = label_e {
-                                    vec![FailedValidation {
-                                        message: format!("{label_e}")
-                                    }]
-                                } else {
-                                    Vec::new()
-                                };
-                                if let Some(link_row_oid_e) = link_row_oid_e {
-                                    failures.push(FailedValidation {
-                                        message: format!("{link_row_oid_e}")
-                                    })
-                                }
-                                failures
-                            }
-                        }
+                        
+                        Cell::new_object_link(&row, data_table_oid, data_column_oid, data_row_oid, value_ord, label_ord, link_schema_oid)
                     }
                     column_type::ColumnType::Select { table_oid: dropdown_table_oid, .. } => {
                         let data_table_oid: i64 = c.schema.oid.clone();
@@ -1913,45 +1589,8 @@ impl SchemaCellStream {
                             println!("Root datasource does not exist for row {index}. Skipping column {} ({})...", c.oid, c.column_type.to_str());
                             continue;
                         };
-                        let cell_identifier: CellIdentifier = CellIdentifier::DataCell { 
-                            table_oid: c.schema.oid.clone(), 
-                            column_oid: data_column_oid.clone(), 
-                            row_oid: data_row_oid.clone()
-                        };
-
-                        let (dropdown_row_oid, dropdown_row_oid_e) = match row.get::<&str, Option<i64>>(&value_ord) {
-                            Ok(dropdown_row_oid) => (dropdown_row_oid, None),
-                            Err(e) => (None, Some(e))
-                        };
-                        let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
-                            Ok(label) => (label, None),
-                            Err(e) => (None, Some(e))
-                        };
-
-                        Cell::SingleSelectDropdown {
-                            data_table_oid,
-                            data_column_oid,
-                            data_row_oid,
-                            label,
-                            dropdown_table_oid: dropdown_table_oid.clone(),
-                            dropdown_row_oid,
-                            cell_identifier,
-                            validation_failures: {
-                                let mut failures: Vec<FailedValidation> = if let Some(label_e) = label_e {
-                                    vec![FailedValidation {
-                                        message: format!("{label_e}")
-                                    }]
-                                } else {
-                                    Vec::new()
-                                };
-                                if let Some(value_e) = dropdown_row_oid_e {
-                                    failures.push(FailedValidation {
-                                        message: format!("{value_e}")
-                                    })
-                                }
-                                failures
-                            }
-                        }
+                        
+                        Cell::new_single_select_dropdown(row, data_table_oid, data_column_oid, data_row_oid, value_ord, label_ord, dropdown_table_oid)
                     }
                     column_type::ColumnType::Multiselect { table_oid: dropdown_table_oid, .. } => {
                         let data_table_oid: i64 = c.schema.oid.clone();
@@ -1969,53 +1608,8 @@ impl SchemaCellStream {
                             println!("Root datasource does not exist for row {index}. Skipping column {} ({})...", c.oid, c.column_type.to_str());
                             continue;
                         };
-                        let cell_identifier: CellIdentifier = CellIdentifier::DataCell { 
-                            table_oid: c.schema.oid.clone(), 
-                            column_oid: data_column_oid.clone(), 
-                            row_oid: data_row_oid.clone()
-                        };
-
-                        let (value, value_e) = match row.get::<&str, Option<String>>(&value_ord) {
-                            Ok(value) => (value, None),
-                            Err(e) => (None, Some(e))
-                        };
-                        let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
-                            Ok(label) => (label, None),
-                            Err(e) => (None, Some(e))
-                        };
-                        let dropdown_row_oid: Vec<i64> = if let Some(value) = value {
-                            value.split(',').filter_map(|s| match i64::from_str_radix(s, 10) {
-                                Ok(i) => Some(i),
-                                Err(_) => None
-                            }).collect()
-                        } else {
-                            Vec::new()
-                        };
-
-                        Cell::MultiSelectDropdown {
-                            data_table_oid,
-                            data_column_oid,
-                            data_row_oid,
-                            label,
-                            dropdown_table_oid: dropdown_table_oid.clone(),
-                            dropdown_row_oid,
-                            cell_identifier,
-                            validation_failures: {
-                                let mut failures: Vec<FailedValidation> = if let Some(label_e) = label_e {
-                                    vec![FailedValidation {
-                                        message: format!("{label_e}")
-                                    }]
-                                } else {
-                                    Vec::new()
-                                };
-                                if let Some(value_e) = value_e {
-                                    failures.push(FailedValidation {
-                                        message: format!("{value_e}")
-                                    })
-                                }
-                                failures
-                            }
-                        }
+                        
+                        Cell::new_multiple_select_dropdown(row, data_table_oid, data_column_oid, data_row_oid, value_ord, label_ord, dropdown_table_oid)
                     }
                     column_type::ColumnType::Formula { .. } => {
                         let cell_identifier: CellIdentifier = match &row_identifier {
@@ -2029,329 +1623,12 @@ impl SchemaCellStream {
                             RowIdentifier::ReportRow { object_filter } => {
                                 CellIdentifier::VirtualCell { 
                                     column_oid: c.oid.clone(), 
-                                    query_filter: object_filter.clone(), 
-                                    isolated_cell_dependencies: Vec::new(), 
-                                    full_reload_cell_dependencies: Vec::new() 
+                                    query_filter: object_filter.clone()
                                 }
                             }
                         };
 
-                        let param_ord: String = format!("COLUMN{}_PARAM", c.oid);
-                        let (param, param_e) = match row.get::<&str, Option<String>>(&param_ord) {
-                            Ok(param) => (param, None),
-                            Err(e) => (None, Some(e))
-                        };
-                        let (value, value_e) = match row.get::<&str, Option<String>>(&value_ord) {
-                            Ok(value) => (value, None),
-                            Err(e) => (None, Some(e))
-                        };
-                        let (label, label_e) = match row.get::<&str, Option<String>>(&label_ord) {
-                            Ok(label) => (label, None),
-                            Err(e) => (None, Some(e))
-                        };
-
-                        let mut validation_failures: Vec<FailedValidation> = {
-                            let mut failures: Vec<FailedValidation> = if let Some(label_e) = label_e {
-                                vec![FailedValidation {
-                                    message: format!("{label_e}")
-                                }]
-                            } else {
-                                Vec::new()
-                            };
-                            if let Some(value_e) = value_e {
-                                failures.push(FailedValidation {
-                                    message: format!("{value_e}")
-                                })
-                            }
-                            if let Some(param_e) = param_e {
-                                failures.push(FailedValidation {
-                                    message: format!("{param_e}")
-                                })
-                            }
-                            failures
-                        };
-
-                        // Check if the parameter points to a data cell
-                        if let Some(param) = param {
-                            let param_regex = Regex::new(r"[^:]*:(\d+):(\d+):(\d+)").unwrap();
-                            if let Some(param_captures) = param_regex.captures(&param) {
-                                // Extract the column and row of the data cell
-                                let data_table_oid: i64 = param_captures.get(0).map_or(0, |s| match i64::from_str_radix(s.as_str(), 10) {
-                                    Ok(i) => i,
-                                    Err(_) => 0
-                                });
-                                let data_column_oid: i64 = param_captures.get(1).map_or(0, |s| match i64::from_str_radix(s.as_str(), 10) {
-                                    Ok(i) => i,
-                                    Err(_) => 0
-                                });
-                                let data_row_oid: i64 = param_captures.get(2).map_or(0, |s| match i64::from_str_radix(s.as_str(), 10) {
-                                    Ok(i) => i,
-                                    Err(_) => 0
-                                });
-
-                                // Retrieve the metadata of the data cell's column
-                                match column::FullMetadata::get(data_column_oid) {
-                                    Ok(data_column_metadata) => match data_column_metadata.column_type {
-                                        column_type::ColumnType::Primitive(prim) => {
-                                            match prim {
-                                                column_type::Primitive::Boolean => {
-                                                    let (is_checked, is_checked_e) = if let Some(value) = value {
-                                                        match i64::from_str_radix(&value, 10) {
-                                                            Ok(i) => (i != 0, None),
-                                                            Err(e) => (false, Some(e))
-                                                        }
-                                                    } else {
-                                                        (false, None)
-                                                    };
-
-                                                    Cell::CheckboxEntry {
-                                                        data_table_oid,
-                                                        data_column_oid,
-                                                        data_row_oid,
-                                                        is_checked,
-                                                        cell_identifier,
-                                                        validation_failures: {
-                                                            if let Some(is_checked_e) = is_checked_e {
-                                                                validation_failures.push(FailedValidation {
-                                                                    message: format!("{is_checked_e}")
-                                                                })
-                                                            }
-                                                            validation_failures
-                                                        }
-                                                    }
-                                                }
-                                                column_type::Primitive::Integer
-                                                | column_type::Primitive::Number
-                                                | column_type::Primitive::PlainText
-                                                | column_type::Primitive::MarkdownText
-                                                | column_type::Primitive::JsonText
-                                                | column_type::Primitive::XmlText
-                                                | column_type::Primitive::Date
-                                                | column_type::Primitive::Datetime => {
-                                                    Cell::TextEntry  {
-                                                        data_table_oid,
-                                                        data_column_oid,
-                                                        data_row_oid,
-                                                        label,
-                                                        format: match prim {
-                                                            column_type::Primitive::JsonText => CellTextFormat::Json,
-                                                            _ => CellTextFormat::Plain
-                                                        },
-                                                        cell_identifier,
-                                                        validation_failures
-                                                    }
-                                                }
-                                                column_type::Primitive::File => {
-                                                    let (file_oid, file_oid_e) = if let Some(value) = value {
-                                                        match i64::from_str_radix(&value, 10) {
-                                                            Ok(i) => (Some(i), None),
-                                                            Err(e) => (None, Some(e))
-                                                        }
-                                                    } else {
-                                                        (None, None)
-                                                    };
-
-                                                    Cell::FileEntry {
-                                                        data_table_oid,
-                                                        data_column_oid,
-                                                        data_row_oid,
-                                                        file_oid,
-                                                        label,
-                                                        cell_identifier,
-                                                        validation_failures: {
-                                                            if let Some(file_oid_e) = file_oid_e {
-                                                                validation_failures.push(FailedValidation {
-                                                                    message: format!("{file_oid_e}")
-                                                                })
-                                                            }
-                                                            validation_failures
-                                                        }
-                                                    }
-                                                }
-                                                column_type::Primitive::Image => {
-                                                    let (file_oid, file_oid_e) = if let Some(value) = value {
-                                                        match i64::from_str_radix(&value, 10) {
-                                                            Ok(i) => (Some(i), None),
-                                                            Err(e) => (None, Some(e))
-                                                        }
-                                                    } else {
-                                                        (None, None)
-                                                    };
-
-                                                    let (file, file_e) = if let Some(file_oid) = file_oid {
-                                                        match file::File::get(file_oid) {
-                                                            Ok(file) => (Some(file), None),
-                                                            Err(e) => (None, Some(e))
-                                                        }
-                                                    } else {
-                                                        (None, None) 
-                                                    };
-
-                                                    Cell::ImageEntry {
-                                                        data_table_oid,
-                                                        data_column_oid,
-                                                        data_row_oid,
-                                                        label,
-                                                        file,
-                                                        cell_identifier,
-                                                        validation_failures: {
-                                                            if let Some(file_oid_e) = file_oid_e {
-                                                                validation_failures.push(FailedValidation {
-                                                                    message: format!("{file_oid_e}")
-                                                                });
-                                                            }
-                                                            if let Some(file_src_e) = file_e {
-                                                                validation_failures.push(FailedValidation { 
-                                                                    message: format!("Error while getting image src: {}", <Error as Into<String>>::into(file_src_e))
-                                                                });
-                                                            }
-                                                            validation_failures
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        column_type::ColumnType::Object { table_oid: link_schema_oid, .. } => {
-                                            let (link_row_oid, link_row_oid_e) = if let Some(value) = value {
-                                                match i64::from_str_radix(&value, 10) {
-                                                    Ok(i) => (Some(i), None),
-                                                    Err(e) => (None, Some(e))
-                                                }
-                                            } else {
-                                                (None, None)
-                                            };
-
-                                            let (clipboard_data, clipboard_data_e) = if let Some(link_row_oid) = link_row_oid {
-                                                match DataCellEntry::get_object_data(link_schema_oid.clone(), link_row_oid.clone()) {
-                                                    Ok(clipboard_data) => (Some(clipboard_data), None),
-                                                    Err(e) => (None, Some(e))
-                                                }
-                                            } else {
-                                                (None, None)
-                                            };
-
-                                            Cell::ObjectLink {
-                                                data_table_oid,
-                                                data_column_oid,
-                                                data_row_oid,
-                                                label,
-                                                link_schema_oid,
-                                                link_query_filter: match link_row_oid {
-                                                    Some(link_row_oid) => Some(format!("OID={link_row_oid}")),
-                                                    None => None
-                                                },
-                                                clipboard_data,
-                                                link_row_oid,
-                                                cell_identifier,
-                                                validation_failures: {
-                                                    if let Some(link_row_oid_e) = link_row_oid_e {
-                                                        validation_failures.push(FailedValidation {
-                                                            message: format!("{link_row_oid_e}")
-                                                        })
-                                                    }
-                                                    validation_failures
-                                                }
-                                            }
-                                        }
-                                        column_type::ColumnType::Select { table_oid: dropdown_table_oid, .. } => {
-                                            let (dropdown_row_oid, dropdown_row_oid_e) = if let Some(value) = value {
-                                                match i64::from_str_radix(&value, 10) {
-                                                    Ok(i) => (Some(i), None),
-                                                    Err(e) => (None, Some(e))
-                                                }
-                                            } else {
-                                                (None, None)
-                                            };
-
-                                            Cell::SingleSelectDropdown {
-                                                data_table_oid,
-                                                data_column_oid,
-                                                data_row_oid,
-                                                label,
-                                                dropdown_table_oid,
-                                                dropdown_row_oid,
-                                                cell_identifier,
-                                                validation_failures: {
-                                                    if let Some(dropdown_row_oid_e) = dropdown_row_oid_e {
-                                                        validation_failures.push(FailedValidation {
-                                                            message: format!("{dropdown_row_oid_e}")
-                                                        });
-                                                    }
-                                                    validation_failures
-                                                }
-                                            }
-                                        }
-                                        column_type::ColumnType::Multiselect { table_oid: dropdown_table_oid, .. } => {
-                                            let dropdown_row_oid: Vec<i64> = if let Some(value) = value {
-                                                value.split(',').filter_map(|s| match i64::from_str_radix(s, 10) {
-                                                    Ok(i) => Some(i),
-                                                    Err(_) => None
-                                                }).collect()
-                                            } else {
-                                                Vec::new()
-                                            };
-
-                                            Cell::MultiSelectDropdown {
-                                                data_table_oid,
-                                                data_column_oid,
-                                                data_row_oid,
-                                                label,
-                                                dropdown_table_oid,
-                                                dropdown_row_oid,
-                                                cell_identifier,
-                                                validation_failures
-                                            }
-                                        }
-                                        _ => {
-                                            Cell::Readonly { 
-                                                cell_identifier, 
-                                                label: None, 
-                                                format: CellTextFormat::Plain,
-                                                validation_failures: {
-                                                    validation_failures.push(FailedValidation {
-                                                        message: format!("A data cell is not expected to belong to a {} column!", data_column_metadata.column_type.to_str())
-                                                    });
-                                                    validation_failures
-                                                }
-                                            }
-                                        }
-                                    },
-                                    Err(e) => {
-                                        Cell::Readonly {  
-                                            label: None, 
-                                            format: CellTextFormat::Plain,
-                                            validation_failures: {
-                                                validation_failures.push(FailedValidation {
-                                                    message: format!("Error while retrieving metadata of referenced column: {}", <Error as Into<String>>::into(e))
-                                                });
-                                                validation_failures
-                                            },
-                                            cell_identifier
-                                        }
-                                    }
-                                }
-                            } else {
-                                // If formula returns a value with known type but not associated with a data cell, send as a readonly value
-                                Cell::Readonly {  
-                                    label, 
-                                    format: if param.starts_with("json") {
-                                        CellTextFormat::Json
-                                    } else {
-                                        CellTextFormat::Plain
-                                    },
-                                    validation_failures: Vec::new(),
-                                    cell_identifier
-                                }
-                            }
-                        } else {
-                            // If formula returns a value with unknown type, send as a readonly value
-                            Cell::Readonly {  
-                                label, 
-                                format: CellTextFormat::Plain,
-                                validation_failures: Vec::new(),
-                                cell_identifier
-                            }
-                        }
+                        Cell::new_formula_cell(row, cell_identifier, value_ord, label_ord)
                     }
                     column_type::ColumnType::Subreport { report_oid: link_schema_oid, .. } => {
                         let cell_identifier: CellIdentifier = match &row_identifier {
@@ -2365,20 +1642,12 @@ impl SchemaCellStream {
                             RowIdentifier::ReportRow { object_filter } => {
                                 CellIdentifier::VirtualCell { 
                                     column_oid: c.oid.clone(), 
-                                    query_filter: object_filter.clone(), 
-                                    isolated_cell_dependencies: Vec::new(), 
-                                    full_reload_cell_dependencies: Vec::new() 
+                                    query_filter: object_filter.clone()
                                 }
                             }
                         };
 
-                        Cell::SchemaLink { 
-                            label: row.get::<&str, Option<String>>(&label_ord)?, 
-                            link_schema_oid: link_schema_oid.clone(), 
-                            link_query_filter: row.get::<&str, String>(&value_ord)?, 
-                            validation_failures: Vec::new(),
-                            cell_identifier
-                        }
+                        Cell::new_subreport(row, cell_identifier, value_ord, label_ord, link_schema_oid)
                     }
                 }))?;
             }
@@ -2512,7 +1781,7 @@ pub enum DataCellValue {
 #[serde(rename_all = "camelCase")]
 pub struct DataCellEntry {
     pub table_oid: i64,
-    column_oid: i64,
+    pub column_oid: i64,
     pub row_oid: i64,
     value: DataCellValue,
 }

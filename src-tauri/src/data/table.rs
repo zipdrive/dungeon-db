@@ -129,7 +129,7 @@ impl DropdownValue {
     pub fn emit_table_row_labels(app: AppHandle, processid: i64, table_oid: i64) -> Result<(), Error> {
         let conn = db::open()?;
         
-        let select_sql: String = format!("SELECT l.OID, l.SELECT_LABEL AS LABEL FROM SCHEMA{table_oid}_VIEW s INNER JOIN TABLE{table_oid}_LABEL_VIEW l ON s.OID = l.OID ORDER BY s.ROW_INDEX");
+        let select_sql: String = format!("SELECT l.OID, COALESCE(l.PLAIN_LABEL, l.JSON_LABEL) AS LABEL FROM SCHEMA{table_oid}_VIEW l ORDER BY l.ROW_INDEX");
         println!("{select_sql}");
         let mut select_stmt = conn.prepare(&select_sql)?;
         let select_rows = select_stmt.query_and_then([], |row| Ok::<(i64, String), rusqlite::Error>((row.get::<_, i64>("OID")?, row.get::<_, String>("LABEL")?)))?;

@@ -153,6 +153,7 @@ if (urlParamSchemaOid) {
                 // Construct an "Add New Row" button
                 grid.addNewRowButton(streamedCellContent.addNewRowButton);
             } else {
+                console.debug(streamedCellContent.cell);
                 try {
                     // Add cell to last row of grid
                     const cellContent: CellContent = streamedCellContent.cell;
@@ -160,7 +161,6 @@ if (urlParamSchemaOid) {
                         reload();
                     });
                 } catch (e) {
-                    console.debug(streamedCellContent.cell);
                     console.debug(e);
                 }
             }

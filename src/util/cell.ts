@@ -33,7 +33,7 @@ type ValidationFailures = {
 type CellDependency = {
     tableOid: number,
     columnOid: number,
-    rowOid: number
+    rowOid: number | null
 };
 
 export type CellIdentifier = {
@@ -42,9 +42,7 @@ export type CellIdentifier = {
     rowOid: number
 } | {
     columnOid: number,
-    queryFilter: string,
-    isolatedCellDependencies: CellDependency[],
-    fullReloadCellDependencies: CellDependency[]
+    queryFilter: string
 };
 
 export type File = {
@@ -86,6 +84,8 @@ type ReadonlyCellContent = {
     cellIdentifier: CellIdentifier,
     label: string | null,
     format: CellContentTextFormat,
+    isolatedCellDependencies: CellDependency[],
+    fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures
 };
 type TextEntryCellContent = {
@@ -95,6 +95,8 @@ type TextEntryCellContent = {
     dataRowOid: number,
     label: string | null,
     format: CellContentTextFormat,
+    isolatedCellDependencies: CellDependency[],
+    fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures 
 };
 type IntegerEntryCellContent = {
@@ -103,6 +105,8 @@ type IntegerEntryCellContent = {
     dataColumnOid: number,
     dataRowOid: number,
     value: number | null,
+    isolatedCellDependencies: CellDependency[],
+    fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures 
 };
 type NumberEntryCellContent = {
@@ -111,6 +115,8 @@ type NumberEntryCellContent = {
     dataColumnOid: number,
     dataRowOid: number,
     value: number | null,
+    isolatedCellDependencies: CellDependency[],
+    fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures 
 };
 type DateEntryCellContent = {
@@ -119,6 +125,8 @@ type DateEntryCellContent = {
     dataColumnOid: number,
     dataRowOid: number,
     label: string | null,
+    isolatedCellDependencies: CellDependency[],
+    fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures 
 };
 type DatetimeEntryCellContent = {
@@ -127,6 +135,8 @@ type DatetimeEntryCellContent = {
     dataColumnOid: number,
     dataRowOid: number,
     label: string | null,
+    isolatedCellDependencies: CellDependency[],
+    fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures 
 };
 type CheckboxEntryCellContent = {
@@ -135,6 +145,8 @@ type CheckboxEntryCellContent = {
     dataColumnOid: number,
     dataRowOid: number,
     isChecked: boolean | null,
+    isolatedCellDependencies: CellDependency[],
+    fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures 
 };
 type FileEntryCellContent = {
@@ -144,6 +156,8 @@ type FileEntryCellContent = {
     dataRowOid: number,
     label: string | null,
     fileOid: number | null,
+    isolatedCellDependencies: CellDependency[],
+    fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures
 };
 type ImageEntryCellContent = {
@@ -154,6 +168,8 @@ type ImageEntryCellContent = {
     file: File | null,
     label: string | null,
     fileSrc: string | null,
+    isolatedCellDependencies: CellDependency[],
+    fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures
 };
 type SchemaLinkCellContent = {
@@ -161,6 +177,8 @@ type SchemaLinkCellContent = {
     label: string | null,
     linkSchemaOid: number,
     linkQueryFilter: string | null,
+    isolatedCellDependencies: CellDependency[],
+    fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures
 };
 type ObjectLinkCellContent = {
@@ -173,6 +191,8 @@ type ObjectLinkCellContent = {
     linkRowOid: number | null,
     linkQueryFilter: string | null,
     clipboardData: [number, DataCellEntry[]] | null,
+    isolatedCellDependencies: CellDependency[],
+    fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures
 };
 type SingleSelectDropdownCellContent = {
@@ -183,6 +203,8 @@ type SingleSelectDropdownCellContent = {
     label: string | null,
     dropdownTableOid: number,
     dropdownRowOid: number | null,
+    isolatedCellDependencies: CellDependency[],
+    fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures
 };
 type MultiSelectDropdownCellContent = {
@@ -193,6 +215,8 @@ type MultiSelectDropdownCellContent = {
     label: string | null,
     dropdownTableOid: number,
     dropdownRowOid: number[],
+    isolatedCellDependencies: CellDependency[],
+    fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures
 };
 
@@ -489,6 +513,16 @@ export class Cell {
     elem: HTMLTableCellElement;
     content: CellContent;
     cellIdentifier: CellIdentifier;
+
+    /**
+     * Dependencies where only this cell has to be reloaded.
+     */
+    hotReloadDependencies: CellDependency[] = [];
+
+    /**
+     * Dependencies where the entire enclosing schema has to be reloaded.
+     */
+    fullReloadDependencies: CellDependency[] = [];
 
     /**
      * Begins editing the cell.
@@ -1006,40 +1040,33 @@ export class Cell {
         this.#unlistenForReload = await listen<CellIdentifier>('cell', async (event) => {
             const cellIdentifier = event.payload;
             if ('tableOid' in cellIdentifier) {
-                if ('tableOid' in this.cellIdentifier) {
-                    if (cellIdentifier.tableOid == this.cellIdentifier.tableOid
-                        && cellIdentifier.columnOid == this.cellIdentifier.columnOid
-                        && cellIdentifier.rowOid == this.cellIdentifier.rowOid
-                    ) {
-                        // Only a hot reload of this cell is required
-                        if (hotReloadCallbackFn) {
-                            const newCell: Cell = await this.getReloadedCellAsync();
-                            this.elem.replaceWith(newCell.elem);
-                            this.destroy();
-                            await hotReloadCallbackFn(newCell);
-                        }
+                console.debug(cellIdentifier);
+
+                console.debug(this.fullReloadDependencies);
+                console.debug(this.hotReloadDependencies);
+
+                if (this.fullReloadDependencies.some(cellDependency => (
+                    cellIdentifier.tableOid == cellDependency.tableOid
+                    && cellIdentifier.columnOid == cellDependency.columnOid
+                    && (cellDependency.rowOid === null || cellIdentifier.rowOid == cellDependency.rowOid)
+                ))) {
+                    console.debug(`Full reload is required.`);
+                    // Requires a full reload of the schema
+                    if (fullReloadCallbackFn) {
+                        await fullReloadCallbackFn();
                     }
-                } else {
-                    if (this.cellIdentifier.fullReloadCellDependencies.some(cellDependency => (
-                        cellIdentifier.tableOid == cellDependency.tableOid
-                        && cellIdentifier.columnOid == cellDependency.columnOid
-                        && cellIdentifier.rowOid == cellDependency.rowOid
-                    ))) {
-                        // Requires a full reload of the schema
-                        if (fullReloadCallbackFn)
-                            await fullReloadCallbackFn();
-                    } else if (this.cellIdentifier.isolatedCellDependencies.some(cellDependency => (
-                        cellIdentifier.tableOid == cellDependency.tableOid
-                        && cellIdentifier.columnOid == cellDependency.columnOid
-                        && cellIdentifier.rowOid == cellDependency.rowOid
-                    ))) {
-                        // Only a hot reload of this cell is required
-                        if (hotReloadCallbackFn) {
-                            const newCell: Cell = await this.getReloadedCellAsync();
-                            this.elem.replaceWith(newCell.elem);
-                            this.destroy();
-                            await hotReloadCallbackFn(newCell);
-                        }
+                } else if (this.hotReloadDependencies.some(cellDependency => (
+                    cellIdentifier.tableOid == cellDependency.tableOid
+                    && cellIdentifier.columnOid == cellDependency.columnOid
+                    && (cellDependency.rowOid === null || cellIdentifier.rowOid == cellDependency.rowOid)
+                ))) {
+                    console.debug(`Hot reload is required.`);
+                    // Only a hot reload of this cell is required
+                    if (hotReloadCallbackFn) {
+                        const newCell: Cell = await this.getReloadedCellAsync();
+                        this.elem.replaceWith(newCell.elem);
+                        this.destroy();
+                        await hotReloadCallbackFn(newCell);
                     }
                 }
             }
@@ -1187,7 +1214,9 @@ export class Cell {
      * @param content The content of a text entry cell.
      */
     #constructTextEntryCell(cwd: Document, content: TextEntryCellContent): HTMLTableCellElement {
-        
+        this.hotReloadDependencies = content.isolatedCellDependencies;
+        this.fullReloadDependencies = content.fullReloadCellDependencies;
+
         const elem: HTMLTableCellElement = cwd.createElement('td');
         elem.setAttribute('label', content.label || '');
 
@@ -1287,6 +1316,8 @@ export class Cell {
      * @param content The content of an integer entry cell.
      */
     #constructIntegerEntryCell(cwd: Document, content: IntegerEntryCellContent): HTMLTableCellElement {
+        this.hotReloadDependencies = content.isolatedCellDependencies;
+        this.fullReloadDependencies = content.fullReloadCellDependencies;
         
         const elem: HTMLTableCellElement = cwd.createElement('td');
         elem.setAttribute('label', content.value?.toString() || '');
@@ -1386,6 +1417,8 @@ export class Cell {
      * @param content The content of a number entry cell.
      */
     #constructNumberEntryCell(cwd: Document, content: NumberEntryCellContent): HTMLTableCellElement {
+        this.hotReloadDependencies = content.isolatedCellDependencies;
+        this.fullReloadDependencies = content.fullReloadCellDependencies;
         
         const elem: HTMLTableCellElement = cwd.createElement('td');
         elem.setAttribute('label', content.value?.toString() || '');
@@ -1486,6 +1519,8 @@ export class Cell {
      * @param content The content of a date entry cell.
      */
     #constructDateEntryCell(cwd: Document, content: DateEntryCellContent): HTMLTableCellElement {
+        this.hotReloadDependencies = content.isolatedCellDependencies;
+        this.fullReloadDependencies = content.fullReloadCellDependencies;
         
         const elem: HTMLTableCellElement = cwd.createElement('td');
         elem.setAttribute('label', content.label || '');
@@ -1577,6 +1612,8 @@ export class Cell {
      * @param content The content of a datetime entry cell.
      */
     #constructDatetimeEntryCell(cwd: Document, content: DatetimeEntryCellContent): HTMLTableCellElement {
+        this.hotReloadDependencies = content.isolatedCellDependencies;
+        this.fullReloadDependencies = content.fullReloadCellDependencies;
         
         const elem: HTMLTableCellElement = cwd.createElement('td');
         elem.setAttribute('label', content.label || '');
@@ -1671,6 +1708,8 @@ export class Cell {
      * @returns 
      */
     #constructCheckboxEntryCell(cwd: Document, content: CheckboxEntryCellContent): HTMLTableCellElement {
+        this.hotReloadDependencies = content.isolatedCellDependencies;
+        this.fullReloadDependencies = content.fullReloadCellDependencies;
         
         const label: string = content.isChecked === null ? '' : (content.isChecked ? '✔' : '✘');
         const elem: HTMLTableCellElement = cwd.createElement('td');
@@ -1717,6 +1756,9 @@ export class Cell {
      * @returns 
      */
     #constructFileInput(cwd: Document, content: FileEntryCellContent): { div: HTMLDivElement, getFileOidAsync: () => Promise<number | null> } {
+        this.hotReloadDependencies = content.isolatedCellDependencies;
+        this.fullReloadDependencies = content.fullReloadCellDependencies;
+
         let fileOid: number | null = content.fileOid;
 
         // Set up the tabs
@@ -1879,6 +1921,8 @@ export class Cell {
      * @returns 
      */
     #constructFileEntryCell(cwd: Document, content: FileEntryCellContent): HTMLTableCellElement {
+        this.hotReloadDependencies = content.isolatedCellDependencies;
+        this.fullReloadDependencies = content.fullReloadCellDependencies;
         
         const elem: HTMLTableCellElement = cwd.createElement('td');
         elem.setAttribute('label', content.label || '');
@@ -1969,6 +2013,8 @@ export class Cell {
      * @returns 
      */
     #constructImageEntryCell(cwd: Document, content: ImageEntryCellContent): HTMLTableCellElement {
+        this.hotReloadDependencies = content.isolatedCellDependencies;
+        this.fullReloadDependencies = content.fullReloadCellDependencies;
         
         const elem: HTMLTableCellElement = cwd.createElement('td');
         elem.setAttribute('label', content.label || '');
@@ -1993,6 +2039,8 @@ export class Cell {
             dataRowOid: content.dataRowOid,
             fileOid: (content.file ? ('path' in content.file ? content.file.path.oid : content.file.blob.oid) : null),
             label: content.label,
+            isolatedCellDependencies: content.isolatedCellDependencies,
+            fullReloadCellDependencies: content.fullReloadCellDependencies,
             validationFailures: content.validationFailures
         });
 
@@ -2054,6 +2102,8 @@ export class Cell {
                         dataRowOid: content.dataRowOid,
                         fileOid: (content.file ? ('path' in content.file ? content.file.path.oid : content.file.blob.oid) : null),
                         label: content.label,
+                        isolatedCellDependencies: content.isolatedCellDependencies,
+                        fullReloadCellDependencies: content.fullReloadCellDependencies,
                         validationFailures: content.validationFailures
                     }));
                 }
@@ -2134,13 +2184,6 @@ export class Cell {
                             }
                         }
                     });
-                    console.debug(`Now listening for processid ${processid}`);
-                    await queryAsync({
-                        tableRowLabels: {
-                            processid: processid, 
-                            tableOid: content.dropdownTableOid
-                        }
-                    });
 
                     // Set up the stopEditingAsync callback
                     this.#stopEditingAsync = async () => {
@@ -2207,6 +2250,14 @@ export class Cell {
                     elem.removeChild(readonly);
                     elem.appendChild(input);
                     dropdown.open();
+
+                    console.debug(`Now listening for processid ${processid}`);
+                    await queryAsync({
+                        tableRowLabels: {
+                            processid: processid, 
+                            tableOid: content.dropdownTableOid
+                        }
+                    });
                     
                 }
             });
@@ -2222,6 +2273,9 @@ export class Cell {
      * @returns 
      */
     #constructSingleSelectDropdownCell(cwd: Document, content: SingleSelectDropdownCellContent): HTMLTableCellElement {
+        this.hotReloadDependencies = content.isolatedCellDependencies;
+        this.fullReloadDependencies = content.fullReloadCellDependencies;
+
         return this.#constructDropdownCell(cwd, {
             cellIdentifier: content.cellIdentifier,
             dataTableOid: content.dataTableOid,
@@ -2242,6 +2296,9 @@ export class Cell {
      * @returns 
      */
     #constructMultiSelectDropdownCell(cwd: Document, content: MultiSelectDropdownCellContent): HTMLTableCellElement {
+        this.hotReloadDependencies = content.isolatedCellDependencies;
+        this.fullReloadDependencies = content.fullReloadCellDependencies;
+
         return this.#constructDropdownCell(cwd, {
             cellIdentifier: content.cellIdentifier,
             dataTableOid: content.dataTableOid,
@@ -2264,6 +2321,8 @@ export class Cell {
      * @returns 
      */
     #constructSchemaLinkCell(cwd: Document, content: SchemaLinkCellContent): HTMLTableCellElement {
+        this.hotReloadDependencies = content.isolatedCellDependencies;
+        this.fullReloadDependencies = content.fullReloadCellDependencies;
         
         const elem: HTMLTableCellElement = cwd.createElement('td');
         elem.setAttribute('label', content.label || '');
@@ -2296,6 +2355,8 @@ export class Cell {
      * @returns 
      */
     #constructObjectLinkCell(cwd: Document, content: ObjectLinkCellContent): HTMLTableCellElement {
+        this.hotReloadDependencies = content.isolatedCellDependencies;
+        this.fullReloadDependencies = content.fullReloadCellDependencies;
         
         const elem: HTMLTableCellElement = cwd.createElement('td');
         elem.setAttribute('label', content.label || '');
@@ -2328,6 +2389,8 @@ export class Cell {
      * @returns 
      */
     #constructReadonlyCell(cwd: Document, content: ReadonlyCellContent): HTMLTableCellElement {
+        this.hotReloadDependencies = content.isolatedCellDependencies;
+        this.fullReloadDependencies = content.fullReloadCellDependencies;
         
         const elem: HTMLTableCellElement = cwd.createElement('td');
         elem.classList.add('readonly');
