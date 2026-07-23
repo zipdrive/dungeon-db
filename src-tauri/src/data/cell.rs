@@ -1420,7 +1420,7 @@ impl Cell {
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
-enum RowIdentifier {
+pub enum RowIdentifier {
     TableRow {
         table_oid: i64,
         row_oid: i64
@@ -1453,6 +1453,10 @@ pub enum SchemaCellStream {
     /// A button to add a new row to the schema.
     AddNewRowButton {
         table_oid: i64,
+
+        /// The first item in the tuple is the OID of the parent datasource table.
+        /// The second item in the tuple is the OID of the row in the parent datasource table.
+        /// The third item in the tuple is the metadata of the column defining the relationship between the parent datasource and the child table.
         fixed_parent_datasource: Option<(i64, i64, column::FullMetadata)>,
     },
 
@@ -1491,11 +1495,15 @@ impl SchemaCellStream {
 
         // Page-level filter
         let where_expr: String = {
-            let schema_view_name: String = format!("SCHEMA{schema_oid}_VIEW");
             let mut where_clauses: Vec<String> = Vec::new();
-            for (filter_oid_column, filter_oid_value) in filters {
-                if conn.query_one("SELECT (sql LIKE ?1 || ',') AS CONTAINS_COLUMN FROM sqlite_schema WHERE tbl_name = ?2", params![filter_oid_column, &schema_view_name], |row| row.get::<_, bool>("CONTAINS_COLUMN"))? {
-                    where_clauses.push(format!("{filter_oid_column} = {filter_oid_value}"));
+            let pragma_sql: String = format!("PRAGMA table_info(SCHEMA{schema_oid}_VIEW)");
+            for column_result in conn.prepare(&pragma_sql)?.query_map([], |row| row.get("NAME"))? {
+                let column_name: String = column_result?;
+                match filters.iter().find(|(filter_column_name, _)| *filter_column_name == column_name) {
+                    Some((filter_column_name, filter_value)) => {
+                        where_clauses.push(format!("{filter_column_name} = {filter_value}"));
+                    }
+                    _ => {}
                 }
             }
             if where_clauses.len() > 0 {
@@ -2386,7 +2394,76 @@ impl SchemaCellStream {
             })?;
         } else {
             // Is a report, so only send Add New Row over at the end if there is a single unfixed datasource
-            // TODO read the datasources from the SQL definition
+
+            // First, get all basis datasources queried by the report
+            let mut basis_datasources: HashSet<Datasource> = HashSet::new();
+            let pragma_sql: String = format!("PRAGMA table_info(SCHEMA{schema_oid}_VIEW)");
+            for column_result in conn.prepare(&pragma_sql)?.query_map([], |row| row.get("NAME"))? {
+                let column_name: String = column_result?;
+                if column_name.ends_with("_OID") {
+                    let datasource_alias: String = column_name.replace("_OID", "");
+                    let datasource: Datasource = Datasource::from_alias_transact(&conn, datasource_alias)?;
+                    let basis_datasource: Datasource = datasource.seek_basis()?;
+                    basis_datasources.insert(basis_datasource);
+                }
+            }
+            // If there is only one basis datasource, this is trivial
+            if basis_datasources.len() == 1 {
+                let basis_datasource: Datasource = basis_datasources.into_iter().next().unwrap();
+                let table_oid: i64 = basis_datasource.get_schema_oid()?;
+                match basis_datasource {
+                    Datasource::Column { parent_datasource, column } => {
+                        let parent_datasource_row_oid_column_name: String = format!("{}_OID", parent_datasource.get_alias());
+                        if let Some((_, parent_datasource_row_oid)) = filters.iter().find(|(filtered_column_name, _)| *filtered_column_name == parent_datasource_row_oid_column_name) {
+                            cell_sender.send(Self::AddNewRowButton {
+                                table_oid,
+                                fixed_parent_datasource: Some((parent_datasource.get_schema_oid()?, parent_datasource_row_oid.clone(), column))
+                            })?;
+                        }
+                    }
+                    _ => {
+                        cell_sender.send(Self::AddNewRowButton {
+                            table_oid,
+                            fixed_parent_datasource: None
+                        })?;
+                    }
+                }
+            }
+            // Otherwise, if there is at least one datasource...
+            else if basis_datasources.len() > 0 {
+                // Check that every basis datasource forms a chain
+                let mut sorted_basis_datasources: Vec<Datasource> = basis_datasources.into_iter().collect();
+                sorted_basis_datasources.sort_by_key(|datasource| datasource.get_alias());
+                if sorted_basis_datasources.iter().enumerate().all(|(i, datasource)| if i < sorted_basis_datasources.len() - 1 {
+                    sorted_basis_datasources[i + 1].get_alias().starts_with(&datasource.get_alias())
+                } else {
+                    true
+                }) {
+                    let basis_datasource: Datasource = sorted_basis_datasources.last().unwrap().clone();
+                    let table_oid: i64 = basis_datasource.get_schema_oid()?;
+                    match basis_datasource {
+                        Datasource::Column { parent_datasource, column } => {
+                            let parent_datasource_row_oid_column_name: String = format!("{}_OID", parent_datasource.get_alias());
+                            println!("Checking if {parent_datasource_row_oid_column_name} is filtered...");
+                            if let Some((_, parent_datasource_row_oid)) = filters.iter().find(|(filtered_column_name, _)| *filtered_column_name == parent_datasource_row_oid_column_name) {
+                                println!("It is! Sending an AddNewRowButton...");
+                                cell_sender.send(Self::AddNewRowButton {
+                                    table_oid,
+                                    fixed_parent_datasource: Some((parent_datasource.get_schema_oid()?, parent_datasource_row_oid.clone(), column))
+                                })?;
+                            } else {
+                                println!("It is not! The filters are: {:?}", filters);
+                            }
+                        }
+                        _ => {
+                            cell_sender.send(Self::AddNewRowButton {
+                                table_oid,
+                                fixed_parent_datasource: None
+                            })?;
+                        }
+                    }
+                }
+            }
         }
         Ok(())
     }

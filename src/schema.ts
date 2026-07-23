@@ -28,7 +28,7 @@ if (urlParamSchemaOid) {
     // Get filters from query parameters
     const filters: [string, number][] = [];
     urlParams.forEach((urlParamValue, urlParamKey) => {
-        if (new Set([
+        if (!new Set([
             'schema_oid', 
             'page_num', 
             'page_size', 

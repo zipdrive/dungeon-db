@@ -907,10 +907,13 @@ impl SelectConstructorType {
                     }
                 };
                 
-                let oid_columns: String = oid_list.iter().fold(String::from(""), |acc, e| format!("{acc}, w.{e}"));
-                
                 if recursions.len() > 0 {
                     // Need to make a recursive CTE
+                    let group_by_expr: String = if oid_list.len() > 0 {
+                        format!("GROUP BY {}", oid_list.iter().map(|oid| format!("w.{oid}")).reduce(|acc, e| format!("{acc}, {e}")).unwrap())
+                    } else {
+                        String::from("")
+                    };
                     format!(
                         "
                         WITH {}, 
@@ -919,6 +922,7 @@ impl SelectConstructorType {
                                 {all_columns_norecursion}
                             FROM WRAPPER w
                             WHERE {}
+                            {group_by_expr}
 
                             UNION
 
@@ -926,6 +930,7 @@ impl SelectConstructorType {
                                 {all_columns_recursion}
                             FROM WRAPPER w
                             {}
+                            {group_by_expr}
                         ) 
                         
                         SELECT * FROM LABEL_CTE 
@@ -934,6 +939,7 @@ impl SelectConstructorType {
                             {all_columns_norecursion}
                         FROM WRAPPER w
                         WHERE {}
+                        {group_by_expr}
                         ",
 
                         // All of the non-recursive CTEs, including the wrapper
@@ -967,10 +973,17 @@ impl SelectConstructorType {
                         SELECT 
                             {all_columns_norecursion}
                         FROM WRAPPER w
+                        {}
                         ",
 
                         // All of the CTEs, including the wrapper
-                        cte_list.join(", ")
+                        cte_list.join(", "),
+
+                        if oid_list.len() > 0 {
+                            format!("GROUP BY {}", oid_list.iter().map(|oid| format!("w.{oid}")).reduce(|acc, e| format!("{acc}, {e}")).unwrap())
+                        } else {
+                            String::from("")
+                        }
                     )          
                 }
             }
@@ -1069,7 +1082,7 @@ impl SelectConstructor {
             }
         }
 
-        for row_result in trans.prepare("SELECT COLUMN_OID FROM METADATA_SCHEMA_COLUMN_VIEW WHERE SCHEMA_OID = ?1 AND IS_PRIMARY_KEY AND IS_REQUIRED ORDER BY IS_SUBREPORT ASC")?.query_map(params![schema_oid], |row| row.get::<_, i64>("COLUMN_OID"))? {
+        for row_result in trans.prepare("SELECT COLUMN_OID FROM METADATA_SCHEMA_COLUMN_VIEW WHERE SCHEMA_OID = ?1 ORDER BY IS_SUBREPORT ASC")?.query_map(params![schema_oid], |row| row.get::<_, i64>("COLUMN_OID"))? {
             let column_oid = row_result?;
             let column: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid.clone())?;
             let column_type: column_type::ColumnType = column.column_type.clone();

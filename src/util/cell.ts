@@ -2269,8 +2269,8 @@ export class Cell {
         elem.setAttribute('label', content.label || '');
         
         const readonly: HTMLDivElement = this.#constructLabel(cwd, elem, content.label || '', 'plain');
-        readonly.classList.add('clickable');
-        readonly.addEventListener('click', async () => {
+        elem.classList.add('clickable');
+        elem.addEventListener('click', async () => {
             // Open schema using the provided query string
             await openDialogAsync({
                 schema: {
