@@ -1,6 +1,7 @@
 use crate::data::datasource::Datasource;
 use crate::data::{column, column_type};
-use crate::util::db;
+use crate::util::db::{self, sql_zero_or_one};
+use crate::util::db::{sql_iter, sql_map_then_iter, sql_one};
 use crate::util::error::Error;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use serde_json::{json, Map, Value};
@@ -40,13 +41,26 @@ fn get_columns<'a, 'b>(
     }
 
     let mut cols: Vec<column::FullMetadata> = Vec::new();
-    for row_result in conn.prepare("SELECT COLUMN_OID FROM METADATA_SCHEMA_COLUMN_VIEW WHERE IS_REQUIRED AND SCHEMA_OID = ?1 ORDER BY ORDERING")?.query_map(params![schema_oid], |row| row.get::<_, i64>("COLUMN_OID"))? {
-        let column_oid: i64 = row_result?;
-        let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(conn, column_oid)?;
+    sql_map_then_iter(
+        conn,
+        "
+        SELECT 
+            COLUMN_OID 
+        FROM METADATA_SCHEMA_COLUMN_VIEW 
+        WHERE IS_REQUIRED 
+            AND SCHEMA_OID = ?1 
+        ORDER BY ORDERING
+        ",
+        params![schema_oid],
+        |row| row.get::<_, i64>("COLUMN_OID"),
+        |column_oid| {
+            let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(conn, column_oid)?;
 
-        // Add to the list of columns
-        cols.push(column_metadata);
-    }
+            // Add to the list of columns
+            cols.push(column_metadata);
+            Ok(None::<()>)
+        }
+    )?;
     columns_by_schema.insert(schema_oid.clone(), cols);
     return Ok(columns_by_schema.get(schema_oid).unwrap());
 }
@@ -198,7 +212,7 @@ fn construct_row_object(
                                 match i64::from_str_radix(&value, 10) {
                                     Ok(i) => json!(i != 0),
                                     Err(_) => {
-                                        return Err(Error::AdhocError("Expected a boolean value."));
+                                        return Err(Error::adhoc("Expected a boolean value."));
                                     }
                                 }
                             } else if param.starts_with("integer") {
@@ -207,11 +221,11 @@ fn construct_row_object(
                                 match i64::from_str_radix(&value, 10) {
                                     Ok(i) => json!(i),
                                     Err(_) => {
-                                        return Err(Error::AdhocError("Expected a boolean value."));
+                                        return Err(Error::adhoc("Expected a boolean value."));
                                     }
                                 }
                             } else {
-                                return Err(Error::AdhocError("Unknown formula return type."));
+                                return Err(Error::adhoc("Unknown formula return type."));
                             }
                         }
                         None => Value::Null,
@@ -228,7 +242,8 @@ fn construct_row_object(
                             if let Some(query_filter) =
                                 row.get::<_, Option<String>>("QUERY_FILTER")?
                             {
-                                let report_view_def: String = report_conn.query_one(
+                                let report_view_def: String = sql_one(
+                                    &report_conn,
                                     "SELECT sql FROM sqlite_schema WHERE tbl_name = ?1",
                                     params![format!("SCHEMA{report_oid}_VIEW")],
                                     |row| row.get::<_, String>("sql"),
@@ -298,18 +313,30 @@ fn export_object_row(
     oid_column: &Option<String>,
     type_column: &Option<String>,
 ) -> Result<Value, Error> {
-    let select_polymorphism_sql: String = format!("SELECT t.TABLE_OID, s.TABLE_NAME, t.ROW_OID FROM TABLE{table_oid}_POLYMORPHISM_VIEW t INNER JOIN METADATA_SCHEMA s ON s.OID = t.TABLE_OID WHERE t.OID = ?1");
+    todo!("Stop using the old POLYMORPHISM view.");
     Ok(
-        if let Some((table_oid, table_name, row_oid)) = conn
-            .query_one(&select_polymorphism_sql, params![row_oid], |row| {
+        if let Some((table_oid, table_name, row_oid)) = sql_zero_or_one(
+            conn,
+            format!(
+                "
+                SELECT 
+                    t.TABLE_OID, 
+                    s.TABLE_NAME, 
+                    t.ROW_OID 
+                FROM TABLE{table_oid}_POLYMORPHISM_VIEW t 
+                INNER JOIN METADATA_SCHEMA s ON s.OID = t.TABLE_OID 
+                WHERE t.OID = ?1
+                "
+            ), 
+            params![row_oid], 
+            |row| {
                 Ok((
                     row.get::<_, i64>("TABLE_OID")?,
                     row.get::<_, String>("TABLE_NAME")?,
                     row.get::<_, i64>("ROW_OID")?,
                 ))
-            })
-            .optional()?
-        {
+            }
+        )? {
             // Query the row from the table
             let select_sql: String = format!("SELECT * FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
             let mut select_stmt = conn.prepare(&select_sql)?;
@@ -330,7 +357,7 @@ fn export_object_row(
                 }
                 row_value
             } else {
-                return Err(Error::AdhocError(
+                return Err(Error::adhoc(
                     "Expected to find a row that does not exist.",
                 ));
             }
@@ -351,21 +378,31 @@ fn export_schema_individual(
 ) -> Result<Value, Error> {
     let mut array_rows: Vec<Value> = Vec::new();
 
-    for row_result in conn
-        .prepare("SELECT OID FROM TABLE{schema_oid} WHERE NOT TRASH")?
-        .query_map([], |row| row.get::<_, i64>("OID"))?
-    {
-        let row_oid = row_result?;
-        array_rows.push(export_object_row(
-            conn,
-            columns_by_schema,
-            &table_oid,
-            &row_oid,
-            &index_column,
-            &oid_column,
-            &type_column,
-        )?);
-    }
+    sql_map_then_iter(
+        conn,
+        format!(
+            "
+            SELECT 
+                OID 
+            FROM TABLE{table_oid} 
+            WHERE NOT TRASH
+            "
+        ),
+        [],
+        |row| row.get::<_, i64>("OID"),
+        |row_oid| {
+            array_rows.push(export_object_row(
+                conn,
+                columns_by_schema,
+                &table_oid,
+                &row_oid,
+                &index_column,
+                &oid_column,
+                &type_column,
+            )?);
+            Ok(None::<()>)
+        }
+    )?;
     Ok(json!(array_rows))
 }
 
@@ -478,7 +515,7 @@ pub fn export(filepath: String, schemas: Vec<ExportSchema>) -> Result<(), Error>
     let mut file = match FilesystemFile::create(filepath) {
         Ok(f) => f,
         Err(_) => {
-            return Err(Error::AdhocError("Unable to open file."));
+            return Err(Error::adhoc("Unable to open file."));
         }
     };
 
@@ -486,7 +523,7 @@ pub fn export(filepath: String, schemas: Vec<ExportSchema>) -> Result<(), Error>
     match file.write_all(json.as_bytes()) {
         Ok(_) => {}
         Err(_) => {
-            return Err(Error::AdhocError("Unable to write to file."));
+            return Err(Error::adhoc("Unable to write to file."));
         }
     }
     Ok(())

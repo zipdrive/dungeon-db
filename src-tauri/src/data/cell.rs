@@ -1,5 +1,6 @@
 use crate::data::{column, column_type, datasource, query, schema, table};
 use crate::data::{datasource::Datasource, file, row};
+use crate::util::db::{sql_iter, sql_map_then_iter, sql_one, sql_zero_or_one, sql_execute};
 use crate::util::channel::Sender;
 use crate::util::{db, formula};
 use crate::util::error::Error;
@@ -1437,36 +1438,48 @@ impl SchemaCellStream {
         let conn: Connection = db::open()?;
 
         // Query the columns of the schema
-        let root_datasource_alias: Option<String> = match Datasource::get_default_datasource_transact(&conn, schema_oid)?
+        let root_datasource_alias: Option<String> = match Datasource::check_default_datasource_transact(&conn, schema_oid)?
         {
             Some(root_datasource) => Some(root_datasource.get_alias()),
             None => None,
         };
         let mut cols: Vec<(column::FullMetadata, String)> = Vec::new();
-        for row_result in conn.prepare("SELECT COLUMN_OID, DATASOURCE_PATH FROM METADATA_SCHEMA_COLUMN_VIEW WHERE IS_REQUIRED AND SCHEMA_OID = ?1 ORDER BY ORDERING")?.query_map(params![schema_oid], |row| Ok((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, String>("DATASOURCE_PATH")?)))? {
-            let (column_oid, datasource_path) = row_result?;
-            let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(&conn, column_oid)?;
+        sql_map_then_iter(
+            &conn,
+            "SELECT COLUMN_OID, DATASOURCE_PATH FROM METADATA_SCHEMA_COLUMN_VIEW WHERE IS_REQUIRED AND SCHEMA_OID = ?1 ORDER BY ORDERING",
+            params![schema_oid],
+            |row| Ok((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, String>("DATASOURCE_PATH")?)),
+            |(column_oid, datasource_path)| {
+                let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(&conn, column_oid)?;
 
-            // Send the column
-            column_sender.send(column_metadata.clone())?;
+                // Send the column
+                column_sender.send(column_metadata.clone())?;
 
-            // Add to the list of columns
-            cols.push((column_metadata, datasource_path));
-        }
+                // Add to the list of columns
+                cols.push((column_metadata, datasource_path));
+                Ok(None::<()>)
+            }
+        )?;
 
         // Page-level filter
         let where_expr: String = {
             let mut where_clauses: Vec<String> = Vec::new();
             let pragma_sql: String = format!("PRAGMA table_info(SCHEMA{schema_oid}_VIEW)");
-            for column_result in conn.prepare(&pragma_sql)?.query_map([], |row| row.get("NAME"))? {
-                let column_name: String = column_result?;
-                match filters.iter().find(|(filter_column_name, _)| *filter_column_name == column_name) {
-                    Some((filter_column_name, filter_value)) => {
-                        where_clauses.push(format!("{filter_column_name} = {filter_value}"));
+            sql_iter(
+                &conn,
+                &pragma_sql,
+                [],
+                |row| row.get::<_, String>("NAME"),
+                |column_name| {
+                    match filters.iter().find(|(filter_column_name, _)| *filter_column_name == column_name) {
+                        Some((filter_column_name, filter_value)) => {
+                            where_clauses.push(format!("{filter_column_name} = {filter_value}"));
+                        }
+                        _ => {}
                     }
-                    _ => {}
+                    Ok(None::<()>)
                 }
-            }
+            )?;
             if where_clauses.len() > 0 {
                 format!(
                     "WHERE {}",
@@ -1491,12 +1504,21 @@ impl SchemaCellStream {
 
         // Send over the MAX index, for purposes of determining page count
         let max_index: i64 = {
-            let max_sql: String =
-                format!("SELECT COUNT(*) AS MAX_INDEX FROM SCHEMA{schema_oid}_VIEW {where_expr}");
-            conn.query_one(&max_sql, [], |row| row.get::<_, Option<i64>>("MAX_INDEX"))
-                .optional()?
-                .unwrap_or(Some(0))
-                .unwrap_or(0)
+            sql_zero_or_one(
+                &conn, 
+                format!(
+                    "
+                    SELECT 
+                        COUNT(*) AS MAX_INDEX 
+                    FROM SCHEMA{schema_oid}_VIEW 
+                    {where_expr}
+                    "
+                ), 
+                [], 
+                |row| row.get::<_, Option<i64>>("MAX_INDEX")
+            )?
+            .unwrap_or(Some(0))
+            .unwrap_or(0)
         };
         cell_sender.send(Self::MaxIndex(max_index.clone()))?;
 
@@ -1667,26 +1689,32 @@ impl SchemaCellStream {
             // First, get all basis datasources queried by the report
             let mut basis_datasources: HashSet<Datasource> = HashSet::new();
             let pragma_sql: String = format!("PRAGMA table_info(SCHEMA{schema_oid}_VIEW)");
-            for column_result in conn.prepare(&pragma_sql)?.query_map([], |row| row.get("NAME"))? {
-                let column_name: String = column_result?;
-                if column_name.ends_with("_OID") {
-                    let datasource_alias: String = column_name.replace("_OID", "");
-                    let datasource: Datasource = Datasource::from_alias_transact(&conn, datasource_alias)?;
-                    let basis_datasource: Datasource = datasource.seek_basis()?;
-                    basis_datasources.insert(basis_datasource);
+            sql_map_then_iter(
+                &conn,
+                &pragma_sql,
+                [],
+                |row| row.get::<_, String>("NAME"),
+                |column_name| {
+                    if column_name.ends_with("_OID") {
+                        let datasource_alias: String = column_name.replace("_OID", "");
+                        let datasource: Datasource = Datasource::from_alias_transact(&conn, datasource_alias)?;
+                        let basis_datasource: Datasource = datasource.seek_basis()?;
+                        basis_datasources.insert(basis_datasource);
+                    }
+                    Ok(None::<()>)
                 }
-            }
+            )?;
             // If there is only one basis datasource, this is trivial
             if basis_datasources.len() == 1 {
                 let basis_datasource: Datasource = basis_datasources.into_iter().next().unwrap();
-                let table_oid: i64 = basis_datasource.get_schema_oid()?;
+                let table_oid: i64 = basis_datasource.get_table_oid()?;
                 match basis_datasource {
                     Datasource::Column { parent_datasource, column } => {
                         let parent_datasource_row_oid_column_name: String = format!("{}_OID", parent_datasource.get_alias());
                         if let Some((_, parent_datasource_row_oid)) = filters.iter().find(|(filtered_column_name, _)| *filtered_column_name == parent_datasource_row_oid_column_name) {
                             cell_sender.send(Self::AddNewRowButton {
                                 table_oid,
-                                fixed_parent_datasource: Some((parent_datasource.get_schema_oid()?, parent_datasource_row_oid.clone(), column))
+                                fixed_parent_datasource: Some((parent_datasource.get_table_oid()?, parent_datasource_row_oid.clone(), column))
                             })?;
                         }
                     }
@@ -1709,7 +1737,7 @@ impl SchemaCellStream {
                     true
                 }) {
                     let basis_datasource: Datasource = sorted_basis_datasources.last().unwrap().clone();
-                    let table_oid: i64 = basis_datasource.get_schema_oid()?;
+                    let table_oid: i64 = basis_datasource.get_table_oid()?;
                     match basis_datasource {
                         Datasource::Column { parent_datasource, column } => {
                             let parent_datasource_row_oid_column_name: String = format!("{}_OID", parent_datasource.get_alias());
@@ -1718,7 +1746,7 @@ impl SchemaCellStream {
                                 println!("It is! Sending an AddNewRowButton...");
                                 cell_sender.send(Self::AddNewRowButton {
                                     table_oid,
-                                    fixed_parent_datasource: Some((parent_datasource.get_schema_oid()?, parent_datasource_row_oid.clone(), column))
+                                    fixed_parent_datasource: Some((parent_datasource.get_table_oid()?, parent_datasource_row_oid.clone(), column))
                                 })?;
                             } else {
                                 println!("It is not! The filters are: {:?}", filters);
@@ -1799,14 +1827,26 @@ impl DataCellEntry {
         table_oid: i64,
         row_oid: i64,
     ) -> Result<(i64, Vec<Self>), Error> {
-        let select_sql: String =
-            format!("SELECT TABLE_OID, ROW_OID FROM TABLE{table_oid}_POLYMORPHISM WHERE OID = ?1");
-        let (table_oid, row_oid) = conn.query_one(&select_sql, params![row_oid], |row| {
-            Ok((
-                row.get::<_, i64>("TABLE_OID")?,
-                row.get::<_, i64>("ROW_OID")?,
-            ))
-        })?;
+        todo!("Need to redo this to use new SCHEMA view.");
+        let (table_oid, row_oid) = sql_one(
+            &conn,
+            format!(
+                "
+                SELECT 
+                    TABLE_OID, 
+                    ROW_OID 
+                FROM TABLE{table_oid}_POLYMORPHISM 
+                WHERE OID = ?1
+                "
+            ), 
+            params![row_oid], 
+            |row| {
+                Ok((
+                    row.get::<_, i64>("TABLE_OID")?,
+                    row.get::<_, i64>("ROW_OID")?,
+                ))
+            }
+        )?;
         Ok((
             table_oid,
             Self::get_row_data_transact(conn, table_oid, row_oid)?,
@@ -1821,19 +1861,25 @@ impl DataCellEntry {
     ) -> Result<Vec<Self>, Error> {
         // Get the columns of the table
         let mut cols: Vec<(column::FullMetadata, String)> = Vec::new();
-        for row_result in conn.prepare("SELECT COLUMN_OID, DATASOURCE_PATH FROM METADATA_SCHEMA_COLUMN_VIEW WHERE IS_REQUIRED AND SCHEMA_OID = ?1 ORDER BY ORDERING")?.query_map(params![table_oid], |row| Ok((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, String>("DATASOURCE_PATH")?)))? {
-            let (column_oid, datasource_path) = row_result?;
-            let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(&conn, column_oid)?;
+        sql_map_then_iter(
+            conn,
+            "SELECT COLUMN_OID, DATASOURCE_PATH FROM METADATA_SCHEMA_COLUMN_VIEW WHERE IS_REQUIRED AND SCHEMA_OID = ?1 ORDER BY ORDERING",
+            params![table_oid],
+            |row| Ok((row.get::<_, i64>("COLUMN_OID")?, row.get::<_, String>("DATASOURCE_PATH")?)),
+            |(column_oid, datasource_path)| {
+                let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(&conn, column_oid)?;
 
-            // Add to the list of columns
-            cols.push((column_metadata, datasource_path));
-        }
+                // Add to the list of columns
+                cols.push((column_metadata, datasource_path));
+                Ok(None::<()>)
+            }
+        )?;
 
         // Query for root datasource
-        let root_datasource_alias: String = if let Some(root_datasource) = Datasource::get_default_datasource_transact(conn, table_oid)? {
+        let root_datasource_alias: String = if let Some(root_datasource) = Datasource::check_default_datasource_transact(conn, table_oid)? {
             root_datasource.get_alias()
         } else {
-            return Err(Error::AdhocError("Table does not have a default datasource!"));
+            return Err(Error::adhoc("Table does not have a default datasource!"));
         };
 
         // Query row from
@@ -1942,7 +1988,7 @@ impl DataCellEntry {
                                     }
                                 } else if let Some(object_cap) = object_regex.captures(&param) {
                                     let Ok(object_table_oid) = i64::from_str(object_cap.get(1).map_or("", |m| m.as_str())) else {
-                                        return Err(Error::AdhocError("Unable to parse object table OID from formula return type."));
+                                        return Err(Error::adhoc("Unable to parse object table OID from formula return type."));
                                     };
                                     let (object_subtype_table_oid, object_data) = Self::get_object_data(object_table_oid, row.get::<&str, _>(&value_ord)?)?;
                                     DataCellValue::Object { 
@@ -2008,57 +2054,103 @@ impl DataCellEntry {
         let old_value: DataCellValue = match &self.value {
             DataCellValue::Text(value) => {
                 // Store the old value
-                let sql_get: String = format!(
-                    "SELECT COLUMN{} AS VALUE FROM TABLE{} WHERE OID = ?1",
-                    self.column_oid, self.table_oid
-                );
-                let old_value: Option<String> =
-                    trans.query_one(&sql_get, params![self.row_oid], |row| row.get("VALUE"))?;
+                let old_value: Option<String> = sql_one(
+                    trans,
+                    format!(
+                        "
+                        SELECT 
+                            COLUMN{} AS VALUE 
+                        FROM TABLE{} 
+                        WHERE OID = ?1
+                        ",
+                        self.column_oid, self.table_oid
+                    ),
+                    params![self.row_oid],
+                    |row| row.get("VALUE")
+                )?;
 
                 // Update with the new value
-                let sql_update: String = format!(
-                    "UPDATE TABLE{} SET COLUMN{} = ?1 WHERE OID = ?2",
-                    self.table_oid, self.column_oid
-                );
-                trans.execute(&sql_update, params![value, self.row_oid])?;
+                sql_execute(
+                    trans,
+                    format!(
+                        "
+                        UPDATE TABLE{} SET 
+                            COLUMN{} = ?1 
+                        WHERE OID = ?2
+                        ",
+                        self.table_oid, self.column_oid
+                    ), 
+                    params![value, self.row_oid]
+                )?;
 
                 // Return the old value
                 DataCellValue::Text(old_value)
             }
             DataCellValue::Boolean(value) => {
                 // Store the old value
-                let sql_get: String = format!(
-                    "SELECT COLUMN{} AS VALUE FROM TABLE{} WHERE OID = ?1",
-                    self.column_oid, self.table_oid
-                );
-                let old_value: Option<bool> =
-                    trans.query_one(&sql_get, params![self.row_oid], |row| row.get("VALUE"))?;
+                let old_value: Option<bool> =sql_one(
+                    trans,
+                    format!(
+                        "
+                        SELECT 
+                            COLUMN{} AS VALUE 
+                        FROM TABLE{} 
+                        WHERE OID = ?1
+                        ",
+                        self.column_oid, self.table_oid
+                    ),
+                    params![self.row_oid],
+                    |row| row.get("VALUE")
+                )?;
 
                 // Update with the new value
-                let sql_update: String = format!(
-                    "UPDATE TABLE{} SET COLUMN{} = ?1 WHERE OID = ?2",
-                    self.table_oid, self.column_oid
-                );
-                trans.execute(&sql_update, params![value, self.row_oid])?;
+                sql_execute(
+                    trans,
+                    format!(
+                        "
+                        UPDATE TABLE{} SET 
+                            COLUMN{} = ?1 
+                        WHERE OID = ?2
+                        ",
+                        self.table_oid, self.column_oid
+                    ), 
+                    params![value, self.row_oid]
+                )?;
 
                 // Return the old value
                 DataCellValue::Boolean(old_value)
             }
             DataCellValue::Integer(value) => {
                 // Store the old value
-                let sql_get: String = format!(
-                    "SELECT COLUMN{} AS VALUE FROM TABLE{} WHERE OID = ?1",
-                    self.column_oid, self.table_oid
-                );
-                let old_value: Option<i64> =
-                    trans.query_one(&sql_get, params![self.row_oid], |row| row.get("VALUE"))?;
+                let old_value: Option<i64> = sql_one(
+                    trans,
+                    format!(
+                        "
+                        SELECT 
+                            COLUMN{} AS VALUE 
+                        FROM TABLE{} 
+                        WHERE OID = ?1
+                        ",
+                        self.column_oid, self.table_oid
+                    ),
+                    params![self.row_oid],
+                    |row| row.get("VALUE")
+                )?;
 
                 // Update with the new value
-                let sql_update: String = format!(
-                    "UPDATE TABLE{} SET COLUMN{} = ?1 WHERE OID = ?2",
-                    self.table_oid, self.column_oid
-                );
-                trans.execute(&sql_update, params![value, self.row_oid])?;
+                sql_execute(
+                    trans, 
+                    format!(
+                        "
+                        UPDATE TABLE{} SET 
+                            COLUMN{} = ?1 
+                        WHERE OID = ?2
+                        ",
+                        self.table_oid, 
+                        self.column_oid
+                    ), 
+                    params![value, self.row_oid]
+                )?;
 
                 // Return the old value
                 DataCellValue::Integer(old_value)
@@ -2067,19 +2159,34 @@ impl DataCellEntry {
                 linked_row_oid: value,
             } => {
                 // Store the old value
-                let sql_get: String = format!(
-                    "SELECT COLUMN{} AS VALUE FROM TABLE{} WHERE OID = ?1",
-                    self.column_oid, self.table_oid
-                );
-                let old_value: Option<i64> =
-                    trans.query_one(&sql_get, params![self.row_oid], |row| row.get("VALUE"))?;
+                let old_value: Option<i64> = sql_one(
+                    trans,
+                    format!(
+                        "
+                        SELECT 
+                            COLUMN{} AS VALUE 
+                        FROM TABLE{} 
+                        WHERE OID = ?1
+                        ",
+                        self.column_oid, self.table_oid
+                    ),
+                    params![self.row_oid],
+                    |row| row.get("VALUE")
+                )?;
 
                 // Update with the new value
-                let sql_update: String = format!(
-                    "UPDATE TABLE{} SET COLUMN{} = ?1 WHERE OID = ?2",
-                    self.table_oid, self.column_oid
-                );
-                trans.execute(&sql_update, params![value, self.row_oid])?;
+                sql_execute(
+                    trans,
+                    format!(
+                        "
+                        UPDATE TABLE{} SET 
+                            COLUMN{} = ?1 
+                        WHERE OID = ?2
+                        ",
+                        self.table_oid, self.column_oid
+                    ), 
+                    params![value, self.row_oid]
+                )?;
 
                 // Return the old value
                 DataCellValue::Select {
@@ -2088,74 +2195,135 @@ impl DataCellEntry {
             }
             DataCellValue::Number(value) => {
                 // Store the old value
-                let sql_get: String = format!(
-                    "SELECT COLUMN{} AS VALUE FROM TABLE{} WHERE OID = ?1",
-                    self.column_oid, self.table_oid
-                );
-                let old_value: Option<f64> =
-                    trans.query_one(&sql_get, params![self.row_oid], |row| row.get("VALUE"))?;
+                let old_value: Option<f64> = sql_one(
+                    trans,
+                    format!(
+                        "
+                        SELECT 
+                            COLUMN{} AS VALUE 
+                        FROM TABLE{} 
+                        WHERE OID = ?1
+                        ",
+                        self.column_oid, self.table_oid
+                    ),
+                    params![self.row_oid],
+                    |row| row.get("VALUE")
+                )?;
 
                 // Update with the new value
-                let sql_update: String = format!(
-                    "UPDATE TABLE{} SET COLUMN{} = ?1 WHERE OID = ?2",
-                    self.table_oid, self.column_oid
-                );
-                trans.execute(&sql_update, params![value, self.row_oid])?;
+                sql_execute(
+                    trans,
+                    format!(
+                        "
+                        UPDATE TABLE{} SET 
+                            COLUMN{} = ?1 
+                        WHERE OID = ?2
+                        ",
+                        self.table_oid, self.column_oid
+                    ), 
+                    params![value, self.row_oid]
+                )?;
 
                 // Return the old value
                 DataCellValue::Number(old_value)
             }
             DataCellValue::Date { label } => {
                 // Store the old value
-                let sql_get: String = format!(
-                    "SELECT DATE(COLUMN{}, 'julianday') AS VALUE FROM TABLE{} WHERE OID = ?1",
-                    self.column_oid, self.table_oid
-                );
-                let old_label: Option<String> =
-                    trans.query_one(&sql_get, params![self.row_oid], |row| row.get("VALUE"))?;
+                let old_label: Option<String> = sql_one(
+                    trans,
+                    format!(
+                        "
+                        SELECT 
+                            DATE(COLUMN{}, 'julianday') AS VALUE 
+                        FROM TABLE{} 
+                        WHERE OID = ?1
+                        ",
+                        self.column_oid, self.table_oid
+                    ),
+                    params![self.row_oid],
+                    |row| row.get("VALUE")
+                )?;
 
                 // Update with the new value
-                let sql_update: String = format!(
-                    "UPDATE TABLE{} SET COLUMN{} = JULIANDAY(?1, 'start of day') WHERE OID = ?2",
-                    self.table_oid, self.column_oid
-                );
-                trans.execute(&sql_update, params![label, self.row_oid])?;
+                sql_execute(
+                    trans,
+                    format!(
+                        "
+                        UPDATE TABLE{} SET 
+                            COLUMN{} = JULIANDAY(?1, 'start of day') 
+                        WHERE OID = ?2
+                        ",
+                        self.table_oid, self.column_oid
+                    ), 
+                    params![label, self.row_oid]
+                )?;
 
                 // Return the old value
                 DataCellValue::Date { label: old_label }
             }
             DataCellValue::Datetime { label } => {
                 // Store the old value
-                let sql_get: String = format!("SELECT STRFTIME('%FT%TZ', COLUMN{}, 'julianday') AS VALUE FROM TABLE{} WHERE OID = ?1", self.column_oid, self.table_oid);
-                let old_label: Option<String> =
-                    trans.query_one(&sql_get, params![self.row_oid], |row| row.get("VALUE"))?;
+                let old_label: Option<String> = sql_one(
+                    trans,
+                    format!(
+                        "
+                        SELECT 
+                            STRFTIME('%FT%TZ', COLUMN{}, 'julianday') AS VALUE 
+                        FROM TABLE{} 
+                        WHERE OID = ?1
+                        ",
+                        self.column_oid, self.table_oid
+                    ),
+                    params![self.row_oid],
+                    |row| row.get("VALUE")
+                )?;
 
                 // Update with the new value
-                let sql_update: String = format!(
-                    "UPDATE TABLE{} SET COLUMN{} = JULIANDAY(?1) WHERE OID = ?2",
-                    self.table_oid, self.column_oid
-                );
-                trans.execute(&sql_update, params![label, self.row_oid])?;
+                sql_execute(
+                    trans,
+                    format!(
+                        "
+                        UPDATE TABLE{} SET 
+                            COLUMN{} = JULIANDAY(?1) 
+                        WHERE OID = ?2
+                        ",
+                        self.table_oid, self.column_oid
+                    ), 
+                    params![label, self.row_oid]
+                )?;
 
                 // Return the old value
                 DataCellValue::Datetime { label: old_label }
             }
             DataCellValue::File { file_oid } => {
                 // Store the old value
-                let sql_get: String = format!(
-                    "SELECT COLUMN{} AS VALUE FROM TABLE{} WHERE OID = ?1",
-                    self.column_oid, self.table_oid
-                );
-                let old_value: Option<i64> =
-                    trans.query_one(&sql_get, params![self.row_oid], |row| {
-                        row.get::<_, Option<i64>>("VALUE")
-                    })?;
+                let old_value: Option<i64> = sql_one(
+                    trans,
+                    format!(
+                        "
+                        SELECT 
+                            COLUMN{} AS VALUE 
+                        FROM TABLE{} 
+                        WHERE OID = ?1
+                        ",
+                        self.column_oid, self.table_oid
+                    ),
+                    params![self.row_oid],
+                    |row| row.get("VALUE")
+                )?;
 
-                let sql_update: String = format!(
-                    "UPDATE TABLE{} SET COLUMN{} = ?1 WHERE OID = ?2",
-                    self.table_oid, self.column_oid
-                );
-                trans.execute(&sql_update, params![file_oid, self.row_oid])?;
+                sql_execute(
+                    trans,
+                    format!(
+                        "
+                        UPDATE TABLE{} SET 
+                            COLUMN{} = ?1 
+                        WHERE OID = ?2
+                        ",
+                        self.table_oid, self.column_oid
+                    ), 
+                    params![file_oid, self.row_oid]
+                )?;
 
                 // Return the old value
                 DataCellValue::File {
@@ -2166,15 +2334,34 @@ impl DataCellEntry {
                 linked_row_oid: value,
             } => {
                 // Store the old value
-                let sql_get: String = format!(
-                    "SELECT COLUMN{} AS VALUE FROM TABLE{} WHERE OID = ?1",
-                    self.column_oid, self.table_oid
-                );
-                let old_value: Option<i64> =
-                    trans.query_one(&sql_get, params![self.row_oid], |row| row.get("VALUE"))?;
+                let old_value: Option<i64> = sql_one(
+                    trans,
+                    format!(
+                        "
+                        SELECT 
+                            COLUMN{} AS VALUE 
+                        FROM TABLE{} 
+                        WHERE OID = ?1
+                        ",
+                        self.column_oid, self.table_oid
+                    ),
+                    params![self.row_oid],
+                    |row| row.get("VALUE")
+                )?;
 
                 // Get the table OID of the Object column
-                let object_table_oid: i64 = trans.query_one("SELECT typ.TABLE_OID FROM METADATA_COLUMN c INNER JOIN METADATA_COLUMN_TYPE__OBJECT typ ON c.TYPE_OID = typ.OID WHERE c.OID = ?1", params![self.column_oid], |row| row.get("TABLE_OID"))?;
+                let object_table_oid: i64 = sql_one(
+                    trans,
+                    "
+                    SELECT 
+                        typ.TABLE_OID 
+                    FROM METADATA_COLUMN c 
+                    INNER JOIN METADATA_COLUMN_TYPE__OBJECT typ ON c.TYPE_OID = typ.OID 
+                    WHERE c.OID = ?1
+                    ", 
+                    params![self.column_oid], 
+                    |row| row.get("TABLE_OID")
+                )?;
                 // Check if the old Object value needs to be trashed
                 if let Some(old_value) = old_value {
                     // Trash the old Object value
@@ -2190,7 +2377,18 @@ impl DataCellEntry {
                 match value {
                     DataCellObjectBehavior::New => {
                         // Get the table OID of the Object column
-                        let object_table_oid: i64 = trans.query_one("SELECT typ.TABLE_OID FROM METADATA_COLUMN c INNER JOIN METADATA_COLUMN_TYPE__OBJECT typ ON c.TYPE_OID = typ.OID WHERE c.OID = ?1", params![self.column_oid], |row| row.get("TABLE_OID"))?;
+                        let object_table_oid: i64 = sql_one(
+                            trans,
+                            "
+                            SELECT 
+                                typ.TABLE_OID 
+                            FROM METADATA_COLUMN c 
+                            INNER JOIN METADATA_COLUMN_TYPE__OBJECT typ ON c.TYPE_OID = typ.OID 
+                            WHERE c.OID = ?1
+                            ", 
+                            params![self.column_oid], 
+                            |row| row.get("TABLE_OID")
+                        )?;
 
                         // Create a new Object row
                         let mut object_master_rows: HashMap<i64, i64> = HashMap::new();
@@ -2202,19 +2400,33 @@ impl DataCellEntry {
                         )?;
 
                         // Overwrite old reference with the newly-created Object row
-                        let sql_update: String = format!(
-                            "UPDATE TABLE{} SET COLUMN{} = ?1 WHERE OID = ?2",
-                            self.table_oid, self.column_oid
-                        );
-                        trans.execute(&sql_update, params![object_row_oid, self.row_oid])?;
+                        sql_execute(
+                            trans,
+                            format!(
+                                "
+                                UPDATE TABLE{} SET 
+                                    COLUMN{} = ?1 
+                                WHERE OID = ?2
+                                ",
+                                self.table_oid, self.column_oid
+                            ), 
+                            params![object_row_oid, self.row_oid]
+                        )?;
                     }
                     DataCellObjectBehavior::SetExisting(row_oid) => {
                         // Update with the specific row OID indicated
-                        let sql_update: String = format!(
-                            "UPDATE TABLE{} SET COLUMN{} = ?1 WHERE OID = ?2",
-                            self.table_oid, self.column_oid
-                        );
-                        trans.execute(&sql_update, params![row_oid, self.row_oid])?;
+                        sql_execute(
+                            trans,
+                            format!(
+                                "
+                                UPDATE TABLE{} SET 
+                                    COLUMN{} = ?1 
+                                WHERE OID = ?2
+                                ",
+                                self.table_oid, self.column_oid
+                            ), 
+                            params![row_oid, self.row_oid]
+                        )?;
 
                         // Untrash the specified row
                         let mut completed_table_oid: HashSet<i64> = HashSet::new();
@@ -2240,19 +2452,33 @@ impl DataCellEntry {
 
                         // Update with the OID of that Object row
                         let row_oid: i64 = object_master_rows[&object_table_oid];
-                        let sql_update: String = format!(
-                            "UPDATE TABLE{} SET COLUMN{} = ?1 WHERE OID = ?2",
-                            self.table_oid, self.column_oid
-                        );
-                        trans.execute(&sql_update, params![row_oid, self.row_oid])?;
+                        sql_execute(
+                            trans,
+                            format!(
+                                "
+                                UPDATE TABLE{} SET 
+                                    COLUMN{} = ?1 
+                                WHERE OID = ?2
+                                ",
+                                self.table_oid, self.column_oid
+                            ), 
+                            params![row_oid, self.row_oid]
+                        )?;
                     }
                     DataCellObjectBehavior::Delete => {
                         // Remove any reference to an Object row
-                        let sql_update: String = format!(
-                            "UPDATE TABLE{} SET COLUMN{} = NULL WHERE OID = ?1",
-                            self.table_oid, self.column_oid
-                        );
-                        trans.execute(&sql_update, params![self.row_oid])?;
+                        sql_execute(
+                            trans,
+                            format!(
+                                "
+                                UPDATE TABLE{} SET 
+                                    COLUMN{} = NULL 
+                                WHERE OID = ?1
+                                ",
+                                self.table_oid, self.column_oid
+                            ), 
+                            params![self.row_oid]
+                        )?;
                     }
                 }
 
@@ -2266,26 +2492,52 @@ impl DataCellEntry {
             }
             DataCellValue::Multiselect { linked_row_oid } => {
                 // Get the table OID of the Multiselect column
-                let multiselect_table_oid: i64 = trans.query_one("SELECT typ.TABLE_OID FROM METADATA_COLUMN c INNER JOIN METADATA_COLUMN_TYPE__MULTISELECT typ ON c.TYPE_OID = typ.OID WHERE c.OID = ?1", params![self.column_oid], |row| row.get("TABLE_OID"))?;
+                let multiselect_table_oid: i64 = sql_one(
+                    trans,
+                    "
+                    SELECT 
+                        typ.TABLE_OID 
+                    FROM METADATA_COLUMN c 
+                    INNER JOIN METADATA_COLUMN_TYPE__MULTISELECT typ ON c.TYPE_OID = typ.OID 
+                    WHERE c.OID = ?1
+                    ", 
+                    params![self.column_oid], 
+                    |row| row.get("TABLE_OID")
+                )?;
 
                 // Store the old value
-                let sql_get: String = format!("SELECT TABLE{multiselect_table_oid}_OID AS VALUE FROM MULTISELECT{} WHERE TABLE{}_OID = ?1", self.column_oid, self.table_oid);
                 let mut old_value: Vec<i64> = Vec::new();
-                for row_result in trans
-                    .prepare(&sql_get)?
-                    .query_and_then(params![self.row_oid], |row| row.get::<_, i64>("VALUE"))?
-                {
-                    old_value.push(row_result?);
-                }
+                sql_iter(
+                    trans, 
+                    format!(
+                        "
+                        SELECT 
+                            TABLE{multiselect_table_oid}_OID AS VALUE 
+                        FROM MULTISELECT{} 
+                        WHERE TABLE{}_OID = ?1
+                        ", 
+                        self.column_oid, self.table_oid
+                    ), 
+                    params![self.row_oid], 
+                    |row| row.get::<_, i64>("VALUE"), 
+                    |old_value_oid| {
+                        old_value.push(old_value_oid);
+                        Ok(None::<()>)
+                    }
+                )?;
 
                 // Delete the rows selected in the database that were deselected
-                let sql_delete: String = format!(
-                    "DELETE FROM MULTISELECT{} WHERE TABLE{}_OID = ?1 AND TABLE{multiselect_table_oid}_OID NOT IN rarray(?2)",
-                    self.column_oid,
-                    self.table_oid
-                );
-                trans.execute(
-                    &sql_delete,
+                sql_execute(
+                    trans,
+                    format!(
+                        "
+                        DELETE FROM MULTISELECT{} 
+                        WHERE TABLE{}_OID = ?1 
+                            AND TABLE{multiselect_table_oid}_OID NOT IN rarray(?2)
+                        ",
+                        self.column_oid,
+                        self.table_oid
+                    ),
                     params![
                         self.row_oid,
                         Array::new(
@@ -2298,13 +2550,19 @@ impl DataCellEntry {
                 )?;
 
                 // Insert the selected rows
-                let sql_insert: String = format!(
-                    "INSERT OR IGNORE INTO MULTISELECT{} (TABLE{}_OID, TABLE{multiselect_table_oid}_OID) VALUES (?1, ?2)",
-                    self.column_oid,
-                    self.table_oid
-                );
                 for selected_oid in linked_row_oid.iter() {
-                    trans.execute(&sql_insert, params![self.row_oid, selected_oid])?;
+                    sql_execute(
+                        trans,
+                        format!(
+                            "
+                            INSERT OR IGNORE INTO MULTISELECT{} (TABLE{}_OID, TABLE{multiselect_table_oid}_OID) 
+                            VALUES (?1, ?2)
+                            ",
+                            self.column_oid,
+                            self.table_oid
+                        ), 
+                        params![self.row_oid, selected_oid]
+                    )?;
                 }
 
                 // Return the old value

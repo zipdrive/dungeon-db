@@ -1,4 +1,5 @@
 use crate::util::db;
+use crate::util::db::{sql_one, sql_zero_or_one, sql_execute};
 use crate::util::error::Error;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
@@ -74,7 +75,8 @@ impl ColumnType {
     }
 
     pub fn get_transact(conn: &Connection, oid: i64) -> Result<Self, Error> {
-        Ok(conn.query_one(
+        Ok(sql_one(
+            conn,
             "
             SELECT
                 MODE,
@@ -190,37 +192,52 @@ impl ColumnType {
         match self {
             Self::Formula { formula, .. } => {
                 // Create the column type metadata
-                trans.execute("INSERT INTO METADATA_COLUMN_TYPE DEFAULT VALUES", [])?;
+                sql_execute(trans, "INSERT INTO METADATA_COLUMN_TYPE DEFAULT VALUES", [])?;
                 let oid: i64 = trans.last_insert_rowid();
 
                 // Create the formula column type metadata
-                trans.execute(
-                    "INSERT INTO METADATA_COLUMN_TYPE__FORMULA (OID, FORMULA) VALUES (?1, ?2)",
+                sql_execute(
+                    trans,
+                    "
+                    INSERT INTO METADATA_COLUMN_TYPE__FORMULA 
+                        (OID, FORMULA) 
+                        VALUES 
+                        (?1, ?2)
+                    ",
                     params![oid, formula],
                 )?;
 
                 return Ok(Self::Formula { oid, formula });
             }
             Self::Subreport { report_oid, .. } => {
-                match trans
-                    .query_one(
-                        "SELECT OID FROM METADATA_COLUMN_TYPE__SUBREPORT WHERE REPORT_OID = ?1",
-                        params![report_oid],
-                        |row| row.get(0),
-                    )
-                    .optional()?
-                {
+                match sql_zero_or_one(
+                    trans,
+                    "
+                    SELECT 
+                        OID 
+                    FROM METADATA_COLUMN_TYPE__SUBREPORT 
+                    WHERE REPORT_OID = ?1
+                    ",
+                    params![report_oid],
+                    |row| row.get(0),
+                )? {
                     Some(oid) => {
                         return Ok(Self::Subreport { oid, report_oid });
                     }
                     None => {
                         // Create the column type metadata
-                        trans.execute("INSERT INTO METADATA_COLUMN_TYPE DEFAULT VALUES", [])?;
+                        sql_execute(trans, "INSERT INTO METADATA_COLUMN_TYPE DEFAULT VALUES", [])?;
                         let oid: i64 = trans.last_insert_rowid();
 
                         // Create the subreport column type metadata
-                        trans.execute(
-                            "INSERT INTO METADATA_COLUMN_TYPE__SUBREPORT (OID, REPORT_OID) VALUES (?1, ?2)", 
+                        sql_execute(
+                            trans,
+                            "
+                            INSERT INTO METADATA_COLUMN_TYPE__SUBREPORT 
+                                (OID, REPORT_OID) 
+                                VALUES 
+                                (?1, ?2)
+                            ", 
                             params![oid, report_oid]
                         )?;
 
@@ -232,48 +249,72 @@ impl ColumnType {
                 return Ok(self);
             }
             Self::Object { table_oid, .. } => {
-                match trans
-                    .query_one(
-                        "SELECT OID FROM METADATA_COLUMN_TYPE__OBJECT WHERE TABLE_OID = ?1",
-                        params![table_oid],
-                        |row| row.get(0),
-                    )
-                    .optional()?
-                {
+                match sql_zero_or_one(
+                    trans,
+                    "
+                    SELECT 
+                        OID 
+                    FROM METADATA_COLUMN_TYPE__OBJECT 
+                    WHERE TABLE_OID = ?1
+                    ",
+                    params![table_oid],
+                    |row| row.get(0),
+                )? {
                     Some(oid) => {
                         return Ok(Self::Object { oid, table_oid });
                     }
                     None => {
                         // Create the column type metadata
-                        trans.execute("INSERT INTO METADATA_COLUMN_TYPE DEFAULT VALUES", [])?;
+                        sql_execute(trans, "INSERT INTO METADATA_COLUMN_TYPE DEFAULT VALUES", [])?;
                         let oid: i64 = trans.last_insert_rowid();
 
                         // Create the object column type metadata
-                        trans.execute("INSERT INTO METADATA_COLUMN_TYPE__OBJECT (OID, TABLE_OID) VALUES (?1, ?2)", params![oid, table_oid])?;
+                        sql_execute(
+                            trans, 
+                            "
+                            INSERT INTO METADATA_COLUMN_TYPE__OBJECT 
+                                (OID, TABLE_OID) 
+                                VALUES 
+                                (?1, ?2)
+                            ", 
+                            params![oid, table_oid]
+                        )?;
 
                         return Ok(Self::Object { oid, table_oid });
                     }
                 }
             }
             Self::Select { table_oid, .. } => {
-                match trans
-                    .query_one(
-                        "SELECT OID FROM METADATA_COLUMN_TYPE__SELECT WHERE TABLE_OID = ?1",
-                        params![table_oid],
-                        |row| row.get(0),
-                    )
-                    .optional()?
-                {
+                match sql_zero_or_one(
+                    trans,
+                    "
+                    SELECT 
+                        OID 
+                    FROM METADATA_COLUMN_TYPE__SELECT 
+                    WHERE TABLE_OID = ?1
+                    ",
+                    params![table_oid],
+                    |row| row.get(0),
+                )? {
                     Some(oid) => {
                         return Ok(Self::Select { oid, table_oid });
                     }
                     None => {
                         // Create the column type metadata
-                        trans.execute("INSERT INTO METADATA_COLUMN_TYPE DEFAULT VALUES", [])?;
+                        sql_execute(trans, "INSERT INTO METADATA_COLUMN_TYPE DEFAULT VALUES", [])?;
                         let oid: i64 = trans.last_insert_rowid();
 
                         // Create the select column type metadata
-                        trans.execute("INSERT INTO METADATA_COLUMN_TYPE__SELECT (OID, TABLE_OID) VALUES (?1, ?2)", params![oid, table_oid])?;
+                        sql_execute(
+                            trans, 
+                            "
+                            INSERT INTO METADATA_COLUMN_TYPE__SELECT 
+                                (OID, TABLE_OID) 
+                                VALUES
+                                (?1, ?2)
+                            ", 
+                            params![oid, table_oid]
+                        )?;
 
                         return Ok(Self::Select { oid, table_oid });
                     }
@@ -283,11 +324,20 @@ impl ColumnType {
                 // Always create a new Multiselect column type
 
                 // Create the column type metadata
-                trans.execute("INSERT INTO METADATA_COLUMN_TYPE DEFAULT VALUES", [])?;
+                sql_execute(trans, "INSERT INTO METADATA_COLUMN_TYPE DEFAULT VALUES", [])?;
                 let oid: i64 = trans.last_insert_rowid();
 
                 // Create the multiselect column type metadata
-                trans.execute("INSERT INTO METADATA_COLUMN_TYPE__MULTISELECT (OID, TABLE_OID) VALUES (?1, ?2)", params![oid, table_oid])?;
+                sql_execute(
+                    trans, 
+                    "
+                    INSERT INTO METADATA_COLUMN_TYPE__MULTISELECT 
+                        (OID, TABLE_OID) 
+                        VALUES 
+                        (?1, ?2)
+                    ", 
+                    params![oid, table_oid]
+                )?;
 
                 return Ok(Self::Multiselect { oid, table_oid });
             }

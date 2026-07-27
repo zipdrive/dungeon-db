@@ -3,6 +3,7 @@ use crate::data::column;
 use crate::data::column_type;
 use crate::util::db;
 use crate::util::error::Error;
+use crate::util::db::{sql_iter, sql_map_then_iter, sql_one, sql_zero_or_one, sql_execute};
 use rusqlite::Connection;
 use rusqlite::{params, OptionalExtension, Transaction};
 use std::collections::{HashMap, HashSet};
@@ -17,15 +18,38 @@ fn map_all_master_tables(
     if !mapped_table_oid.contains_key(&table_oid) {
         mapped_table_oid.insert(table_oid, Some(row_oid));
 
-        for master_table_oid_result in conn.prepare("SELECT inh.MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW inh INNER JOIN METADATA_SCHEMA s ON s.OID = inh.MASTER_SCHEMA_OID WHERE inh.INHERITOR_SCHEMA_OID = ?1")?.query_map(params![table_oid], |row| row.get::<_, i64>(0))? {
-            // Query for the associated row in the master table
-            let master_table_oid: i64 = master_table_oid_result?;
-            let sql_select: String = format!("SELECT MASTER{master_table_oid}_OID FROM TABLE{table_oid} WHERE OID = ?1");
-            let master_row_oid: i64 = conn.query_one(&sql_select, params![row_oid], |row| row.get(0))?;
+        sql_map_then_iter(
+            conn, 
+            "
+            SELECT 
+                inh.MASTER_SCHEMA_OID 
+            FROM METADATA_SCHEMA_INHERITANCE_VIEW inh 
+            INNER JOIN METADATA_SCHEMA s ON s.OID = inh.MASTER_SCHEMA_OID 
+            WHERE inh.INHERITOR_SCHEMA_OID = ?1
+            ", 
+            params![table_oid], 
+            |row| row.get::<_, i64>(0), 
+            |master_table_oid| {
+                let master_row_oid: i64 = sql_one(
+                    conn,
+                    format!(
+                        "
+                        SELECT 
+                            MASTER{master_table_oid}_OID 
+                        FROM 
+                        TABLE{table_oid} 
+                        WHERE OID = ?1
+                        "
+                    ), 
+                    params![row_oid], 
+                    |row| row.get(0)
+                )?;
 
-            // Map all master tables of the master table
-            map_all_master_tables(conn, master_table_oid, master_row_oid, mapped_table_oid)?;
-        }
+                // Map all master tables of the master table
+                map_all_master_tables(conn, master_table_oid, master_row_oid, mapped_table_oid)?;
+                Ok(None::<()>)
+            }
+        )?;
     }
     Ok(())
 }
@@ -43,28 +67,51 @@ fn map_all_inheritor_tables(
         let mut deepest_level: usize = 0;
         let mut deepest_table_oid: Option<i64> = None;
 
-        for inheritor_table_oid_result in conn.prepare("SELECT inh.INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW inh INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID WHERE inh.MASTER_SCHEMA_OID = ?1")?.query_map(params![table_oid], |row| row.get::<_, i64>(0))? {
-            // Query for the associated row in the inheritor table
-            let inheritor_table_oid: i64 = inheritor_table_oid_result?;
-            let sql_select: String = format!("SELECT OID, TRASH FROM TABLE{inheritor_table_oid} WHERE MASTER{table_oid}_OID = ?1");
-            if let Some(row_oid) = row_oid {
-                match conn.query_one(&sql_select, params![row_oid], |row| Ok((row.get::<_, i64>("OID")?, row.get::<_, bool>("TRASH")?))).optional()? {
-                    Some((inheritor_row_oid, inheritor_row_is_trashed)) => {
-                        // Map all inheritor tables of the inheritor table
-                        let (deepest_mapped_level, deepest_mapped_table_oid) = map_all_inheritor_tables(conn, inheritor_table_oid, Some(inheritor_row_oid), mapped_table_oid)?;
-                        if !inheritor_row_is_trashed && deepest_mapped_level > deepest_level {
-                            deepest_level = deepest_mapped_level;
-                            deepest_table_oid = deepest_mapped_table_oid;
+        sql_map_then_iter(
+            conn,
+            "
+            SELECT 
+                inh.INHERITOR_SCHEMA_OID 
+            FROM METADATA_SCHEMA_INHERITANCE_VIEW inh 
+            INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID 
+            WHERE inh.MASTER_SCHEMA_OID = ?1
+            ",
+            params![table_oid],
+            |row| row.get::<_, i64>(0),
+            |inheritor_table_oid| {
+                if let Some(row_oid) = row_oid {
+                    match sql_zero_or_one(
+                        conn,
+                        format!(
+                            "
+                            SELECT 
+                                OID, 
+                                TRASH 
+                            FROM TABLE{inheritor_table_oid} 
+                            WHERE MASTER{table_oid}_OID = ?1
+                            "
+                        ), 
+                        params![row_oid], 
+                        |row| Ok((row.get::<_, i64>("OID")?, row.get::<_, bool>("TRASH")?))
+                    )? {
+                        Some((inheritor_row_oid, inheritor_row_is_trashed)) => {
+                            // Map all inheritor tables of the inheritor table
+                            let (deepest_mapped_level, deepest_mapped_table_oid) = map_all_inheritor_tables(conn, inheritor_table_oid, Some(inheritor_row_oid), mapped_table_oid)?;
+                            if !inheritor_row_is_trashed && deepest_mapped_level > deepest_level {
+                                deepest_level = deepest_mapped_level;
+                                deepest_table_oid = deepest_mapped_table_oid;
+                            }
+                        }
+                        None => {
+                            map_all_inheritor_tables(conn, inheritor_table_oid, None, mapped_table_oid)?;        
                         }
                     }
-                    None => {
-                        map_all_inheritor_tables(conn, inheritor_table_oid, None, mapped_table_oid)?;        
-                    }
+                } else {
+                    map_all_inheritor_tables(conn, inheritor_table_oid, None, mapped_table_oid)?;
                 }
-            } else {
-                map_all_inheritor_tables(conn, inheritor_table_oid, None, mapped_table_oid)?;
-            };
-        }
+                Ok(None::<()>)
+            }
+        )?;
         return Ok((deepest_level + 1, deepest_table_oid));
     }
     Ok((0, None))
@@ -84,78 +131,107 @@ pub fn insert_transact(
 
     // Add a related row to every master table
     let mut cols: Vec<(String, String)> = Vec::new();
-    let mut query_master_cmd = trans.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE INHERITOR_SCHEMA_OID = ?1")?;
-    for master_schema_oid_result in
-        query_master_cmd.query_and_then(params![table_oid], |row| row.get(0))?
-    {
-        let master_schema_oid: i64 = master_schema_oid_result?;
-        let master_table_name: String = format!("TABLE{master_schema_oid}");
-        if trans.table_exists(Some("main"), &master_table_name)? {
-            let master_schema_row_oid: i64 =
-                insert_transact(trans, master_schema_oid, None, master_rows)?;
-            cols.push((
-                format!("MASTER{master_schema_oid}_OID"),
-                format!("{}", master_schema_row_oid),
-            ));
+    sql_iter(
+        trans,
+        "
+        SELECT 
+            MASTER_SCHEMA_OID 
+        FROM METADATA_SCHEMA_INHERITANCE_VIEW 
+        WHERE INHERITOR_SCHEMA_OID = ?1
+        ",
+        params![table_oid],
+        |row| row.get(0),
+        |master_schema_oid| {
+            let master_table_name: String = format!("TABLE{master_schema_oid}");
+            if trans.table_exists(Some("main"), &master_table_name)? {
+                let master_schema_row_oid: i64 = insert_transact(
+                    trans, 
+                    master_schema_oid, 
+                    None, 
+                    master_rows
+                )?;
+
+                cols.push((
+                    format!("MASTER{master_schema_oid}_OID"),
+                    format!("{}", master_schema_row_oid),
+                ));
+            }
+            Ok(None::<()>)
         }
-    }
+    )?;
 
     // Add a related row for every non-nullable Object column
-    {
-        let mut col_query_stmt = trans.prepare(
-            "
-            SELECT c.OID, typ.TABLE_OID 
-            FROM METADATA_COLUMN c
-            INNER JOIN METADATA_COLUMN_TYPE__OBJECT typ ON typ.OID = c.TYPE_OID
-            WHERE c.SCHEMA_OID = ?1 
-                AND NOT c.IS_NULLABLE
-            ",
-        )?;
-        let col_query_rows = col_query_stmt.query_map(params![table_oid], |row| {
+    sql_map_then_iter(
+        trans,
+        "
+        SELECT c.OID, typ.TABLE_OID 
+        FROM METADATA_COLUMN c
+        INNER JOIN METADATA_COLUMN_TYPE__OBJECT typ ON typ.OID = c.TYPE_OID
+        WHERE c.SCHEMA_OID = ?1 
+            AND NOT c.IS_NULLABLE
+        ",
+        params![table_oid],
+        |row| {
             let column_oid: i64 = row.get("OID")?;
             let object_schema_oid: i64 = row.get("TABLE_OID")?;
             Ok::<(String, i64), rusqlite::Error>((format!("COLUMN{column_oid}"), object_schema_oid))
-        })?;
-        for col_query_row_result in col_query_rows {
-            let (column_name, object_schema_oid) = col_query_row_result?;
-
+        },
+        |(column_name, object_schema_oid)| {
             let mut object_master_rows: HashMap<i64, i64> = HashMap::new();
-            let object_row_oid: i64 =
-                insert_transact(trans, object_schema_oid, None, &mut object_master_rows)?;
+            let object_row_oid: i64 = insert_transact(trans, object_schema_oid, None, &mut object_master_rows)?;
 
             cols.push((column_name, format!("{object_row_oid}")));
+            Ok(None::<()>)
         }
-    }
+    )?;
 
     // Query for any default values that need to be populated
-    {
-        let mut col_query_stmt = trans.prepare(
-            "
-            SELECT c.OID, c.DEFAULT_VALUE 
-            FROM METADATA_COLUMN c
-            INNER JOIN METADATA_COLUMN_TYPE__PRIMITIVE typ ON typ.OID = c.TYPE_OID
-            WHERE c.SCHEMA_OID = ?1 
-                AND c.DEFAULT_VALUE IS NOT NULL 
-                AND typ.MODE NOT IN ('file', 'image')
-            ",
-        )?;
-        let _ = col_query_stmt.query_and_then(params![table_oid], |row| {
-            let column_oid: i64 = row.get("OID")?;
-            let default_value: String = row.get("DEFAULT_VALUE")?;
+    sql_iter(
+        trans,
+        "
+        SELECT c.OID, c.DEFAULT_VALUE 
+        FROM METADATA_COLUMN c
+        INNER JOIN METADATA_COLUMN_TYPE__PRIMITIVE typ ON typ.OID = c.TYPE_OID
+        WHERE c.SCHEMA_OID = ?1 
+            AND c.DEFAULT_VALUE IS NOT NULL 
+            AND typ.MODE NOT IN ('file', 'image')
+        ",
+        params![table_oid],
+        |row| Ok((
+            row.get::<_, i64>("OID")?,
+            row.get::<_, String>("DEFAULT_VALUE")?
+        )),
+        |(column_oid, default_value)| {
             cols.push((format!("COLUMN{column_oid}"), default_value));
-            Ok::<(), rusqlite::Error>(())
-        })?;
-    }
+            Ok(None::<()>)
+        }
+    )?;
 
     // Handle insertion at a specific location in the table
     if let Some(o) = row_oid {
         // Make space for the new row at the designated OID
-        let sql_invert_oids: String =
-            format!("UPDATE TABLE{table_oid} SET OID = -OID WHERE OID >= ?1");
-        trans.execute(&sql_invert_oids, params![o])?;
-        let sql_revert_oids: String =
-            format!("UPDATE TABLE{table_oid} SET OID = 1 - OID WHERE OID < 0");
-        trans.execute(&sql_revert_oids, [])?;
+        sql_execute(
+            trans, 
+            format!(
+                "
+                UPDATE TABLE{table_oid} SET 
+                    OID = -OID 
+                WHERE OID >= ?1
+                "
+            ), 
+            params![o]
+        )?;
+        sql_execute(
+            trans, 
+            format!(
+                "
+                UPDATE TABLE{table_oid} SET 
+                    OID = 1 - OID 
+                WHERE OID < 0
+                "
+            ), 
+            []
+        )?;
 
         // Add initial value for the OID
         cols.push((String::from("OID"), format!("{o}")));
@@ -166,34 +242,34 @@ pub fn insert_transact(
         .iter()
         .map(|(_, column_value)| column_value.clone())
         .collect();
-    let sql_insert_row: String = format!(
-        "INSERT INTO TABLE{} {}",
-        table_oid,
-        if cols.len() == 0 {
-            String::from("DEFAULT VALUES")
-        } else {
-            let (column_names, column_params) = cols.into_iter().enumerate().fold(
-                (String::from(""), String::from("")),
-                |(acc_column_names, acc_column_params), (e_idx, (e_column_name, _))| {
-                    (
-                        if acc_column_names == "" {
-                            e_column_name
-                        } else {
-                            format!("{acc_column_names}, {e_column_name}")
-                        },
-                        if acc_column_params == "" {
-                            format!("?{}", e_idx + 1)
-                        } else {
-                            format!("{acc_column_params}, ?{}", e_idx + 1)
-                        },
-                    )
-                },
-            );
-            format!("({column_names}) VALUES ({column_params})")
-        }
-    );
-    trans.execute(
-        &sql_insert_row,
+    sql_execute(
+        trans,
+        format!(
+            "INSERT INTO TABLE{} {}",
+            table_oid,
+            if cols.len() == 0 {
+                String::from("DEFAULT VALUES")
+            } else {
+                let (column_names, column_params) = cols.into_iter().enumerate().fold(
+                    (String::from(""), String::from("")),
+                    |(acc_column_names, acc_column_params), (e_idx, (e_column_name, _))| {
+                        (
+                            if acc_column_names == "" {
+                                e_column_name
+                            } else {
+                                format!("{acc_column_names}, {e_column_name}")
+                            },
+                            if acc_column_params == "" {
+                                format!("?{}", e_idx + 1)
+                            } else {
+                                format!("{acc_column_params}, ?{}", e_idx + 1)
+                            },
+                        )
+                    },
+                );
+                format!("({column_names}) VALUES ({column_params})")
+            }
+        ),
         rusqlite::params_from_iter(sql_insert_row_params.into_iter()),
     )?;
 
@@ -233,39 +309,46 @@ pub fn insert(
                     == fixed_parent_datasource_table_oid
                 {
                     // Select columns on the parent datasource's schema have a *-to-1 relationship with their child datasource, so throw an error
-                    return Err(Error::AdhocError("The new row has a fixed parent datasource joined to it by a Select column on the parent datasource, so creating a new row is not allowed."));
+                    return Err(Error::adhoc("The new row has a fixed parent datasource joined to it by a Select column on the parent datasource, so creating a new row is not allowed."));
                 } else {
                     // Automatically set the Select column of the created row to match the fixed parent datasource row
-                    let sql_fix_parent: String = format!(
-                        "UPDATE TABLE{} SET COLUMN{} = ?1 WHERE OID = ?2",
-                        table_oid, fixed_parent_datasource_relationship_column.oid
-                    );
-                    trans.execute(
-                        &sql_fix_parent,
+                    sql_execute(
+                        &trans,
+                        format!(
+                            "
+                            UPDATE TABLE{} SET 
+                                COLUMN{} = ?1 
+                            WHERE OID = ?2
+                            ",
+                            table_oid, fixed_parent_datasource_relationship_column.oid
+                        ),
                         params![fixed_parent_datasource_row_oid, row_oid],
                     )?;
                 }
             }
             column_type::ColumnType::Multiselect { .. } => {
                 // Automatically add a Multiselect choice to link the parent datasource row with the newly-created row
-                let sql_fix_parent: String = format!(
-                    "INSERT INTO MULTISELECT{} (TABLE{}_OID, TABLE{}_OID) VALUES (?1, ?2)",
-                    fixed_parent_datasource_relationship_column.oid,
-                    fixed_parent_datasource_table_oid,
-                    table_oid
-                );
-                trans.execute(
-                    &sql_fix_parent,
+                sql_execute(
+                    &trans,
+                    format!(
+                        "
+                        INSERT INTO MULTISELECT{} (TABLE{}_OID, TABLE{}_OID) 
+                        VALUES (?1, ?2)
+                        ",
+                        fixed_parent_datasource_relationship_column.oid,
+                        fixed_parent_datasource_table_oid,
+                        table_oid
+                    ),
                     params![fixed_parent_datasource_row_oid, row_oid],
                 )?;
             }
             column_type::ColumnType::Object { .. } => {
                 // Object columns have a 1-to-1 relationship between the parent and child datasources, so throw an error
-                return Err(Error::AdhocError("The new row has a fixed parent datasource joined to it by an Object column, so creating a new row is not allowed."));
+                return Err(Error::adhoc("The new row has a fixed parent datasource joined to it by an Object column, so creating a new row is not allowed."));
             }
             _ => {
                 // No other case should ever occur, so throw an error
-                return Err(Error::AdhocError("The new row has a fixed parent datasource supposedly joined to it by a column without a relationship to that parent datasource."));
+                return Err(Error::adhoc("The new row has a fixed parent datasource supposedly joined to it by a column without a relationship to that parent datasource."));
             }
         }
     }
@@ -304,78 +387,123 @@ pub fn trash_transact(
     completed_table_oid: &mut HashSet<i64>,
 ) -> Result<Option<(i64, i64)>, Error> {
     // Check if the row is already trashed
-    let sql_is_trashed: String = format!("SELECT TRASH FROM TABLE{table_oid} WHERE OID = ?1");
-    if trans.query_one(&sql_is_trashed, params![row_oid], |row| {
-        row.get::<_, bool>("TRASH")
-    })? {
+    if sql_one(
+        trans,
+        format!(
+            "
+            SELECT 
+                TRASH 
+            FROM TABLE{table_oid} 
+            WHERE OID = ?1
+            "
+        ), 
+        params![row_oid], 
+        |row| row.get::<_, bool>("TRASH")
+    )? {
         return Ok(None); // If it is already trashed, then all of its children should be trash, and its master rows can be handled elsewhere in the recursion tree
     }
     // Trash the row
-    let sql_trash: String = format!("UPDATE TABLE{table_oid} SET TRASH = TRUE WHERE OID = ?1");
-    trans.execute(&sql_trash, params![row_oid])?;
+    sql_execute(
+        trans, 
+        format!(
+            "
+            UPDATE TABLE{table_oid} SET 
+                TRASH = TRUE 
+            WHERE OID = ?1
+            "
+        ), 
+        params![row_oid]
+    )?;
 
     // Trash upwards in the inheritance tree
-    let mut query_master_cmd = trans.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE INHERITOR_SCHEMA_OID = ?1")?;
-    for master_schema_oid_result in
-        query_master_cmd.query_map(params![table_oid], |row| row.get(0))?
-    {
-        let master_schema_oid: i64 = master_schema_oid_result?;
-        let master_table_name: String = format!("TABLE{master_schema_oid}");
-        if !completed_table_oid.contains(&master_schema_oid)
-            && trans.table_exists(Some("main"), &master_table_name)?
-        {
-            completed_table_oid.insert(master_schema_oid);
-            let sql_master_schema_row_oid: String = format!(
-                "SELECT MASTER{master_schema_oid}_OID FROM TABLE{table_oid} WHERE OID = ?1"
-            );
-            let master_schema_row_oid: i64 =
-                trans.query_one(&sql_master_schema_row_oid, params![row_oid], |row| {
-                    row.get(0)
-                })?;
-            trash_transact(
-                trans,
-                master_schema_oid,
-                master_schema_row_oid,
-                completed_table_oid,
-            )?;
+    sql_map_then_iter(
+        trans,
+        "
+        SELECT 
+            MASTER_SCHEMA_OID 
+        FROM METADATA_SCHEMA_INHERITANCE_VIEW 
+        WHERE INHERITOR_SCHEMA_OID = ?1
+        ",
+        params![table_oid],
+        |row| row.get(0),
+        |master_schema_oid| {
+            let master_table_name: String = format!("TABLE{master_schema_oid}");
+            if !completed_table_oid.contains(&master_schema_oid) && trans.table_exists(Some("main"), &master_table_name)?
+            {
+                completed_table_oid.insert(master_schema_oid);
+                let master_schema_row_oid: i64 = sql_one(
+                    trans,
+                    format!(
+                        "
+                        SELECT 
+                            MASTER{master_schema_oid}_OID 
+                        FROM TABLE{table_oid} 
+                        WHERE OID = ?1
+                        "
+                    ), 
+                    params![row_oid], 
+                    |row| row.get(0)
+                )?;
+                trash_transact(
+                    trans,
+                    master_schema_oid,
+                    master_schema_row_oid,
+                    completed_table_oid,
+                )?;
+            }
+            Ok(None::<()>)
         }
-    }
+    )?;
 
     // Trash deeper in the inheritance tree
-    let mut query_inheritor_cmd = trans.prepare("SELECT INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE MASTER_SCHEMA_OID = ?1")?;
-    for inheritor_schema_oid_result in
-        query_inheritor_cmd.query_map(params![table_oid], |row| row.get(0))?
-    {
-        let inheritor_schema_oid: i64 = inheritor_schema_oid_result?;
-        let inheritor_table_name: String = format!("TABLE{inheritor_schema_oid}");
-        if !completed_table_oid.contains(&inheritor_schema_oid)
-            && trans.table_exists(Some("main"), &inheritor_table_name)?
-        {
-            completed_table_oid.insert(inheritor_schema_oid);
-            let sql_inheritor_schema_row_oid: String = format!(
-                "SELECT OID FROM TABLE{inheritor_schema_oid} WHERE MASTER{table_oid}_OID = ?1"
-            );
-            if let Some(inheritor_schema_row_oid) = trans
-                .query_one(&sql_inheritor_schema_row_oid, params![row_oid], |row| {
-                    row.get(0)
-                })
-                .optional()?
+    if let Some(deepest_trashed_inheritor) = sql_map_then_iter(
+        trans,
+        "
+        SELECT 
+            INHERITOR_SCHEMA_OID 
+        FROM METADATA_SCHEMA_INHERITANCE_VIEW 
+        WHERE MASTER_SCHEMA_OID = ?1
+        ",
+        params![table_oid],
+        |row| row.get(0),
+        |inheritor_schema_oid| {
+            let inheritor_table_name: String = format!("TABLE{inheritor_schema_oid}");
+            if !completed_table_oid.contains(&inheritor_schema_oid)
+                && trans.table_exists(Some("main"), &inheritor_table_name)?
             {
-                // Stop iteration at the first inheritor schema found to have been previously untrashed
-                if let Some(deepest_level_trashed_table_and_row) = trash_transact(
+                completed_table_oid.insert(inheritor_schema_oid);
+                if let Some(inheritor_schema_row_oid) = sql_zero_or_one(
                     trans,
-                    inheritor_schema_oid,
-                    inheritor_schema_row_oid,
-                    completed_table_oid,
+                    format!(
+                        "
+                        SELECT 
+                            OID 
+                        FROM TABLE{inheritor_schema_oid} 
+                        WHERE MASTER{table_oid}_OID = ?1
+                        "
+                    ), 
+                    params![row_oid], 
+                    |row| row.get(0)
                 )? {
-                    return Ok(Some(deepest_level_trashed_table_and_row));
+                    // Stop iteration at the first inheritor schema found to have been previously untrashed
+                    if let Some(deepest_level_trashed_table_and_row) = trash_transact(
+                        trans,
+                        inheritor_schema_oid,
+                        inheritor_schema_row_oid,
+                        completed_table_oid,
+                    )? {
+                        return Ok(Some(deepest_level_trashed_table_and_row));
+                    }
                 }
             }
+            Ok(None)
         }
+    )? {
+        Ok(Some(deepest_trashed_inheritor))
+    } else {
+        // If no inheritor schema was trashed, this is the deepest level that was trashed, so return (table_oid, row_oid)
+        Ok(Some((table_oid, row_oid)))
     }
-
-    // If no inheritor schema was trashed, this is the deepest level that was trashed, so return (table_oid, row_oid)
-    Ok(Some((table_oid, row_oid)))
 }
 
 /// Sets the flag labelling a row for garbage collection.
@@ -402,35 +530,58 @@ pub fn untrash_transact(
     completed_table_oid: &mut HashSet<i64>,
 ) -> Result<(), Error> {
     // Untrash the row
-    let sql_trash: String = format!("UPDATE TABLE{table_oid} SET TRASH = FALSE WHERE OID = ?1");
-    trans.execute(&sql_trash, params![row_oid])?;
+    sql_execute(
+        trans, 
+        format!(
+            "
+            UPDATE TABLE{table_oid} SET 
+                TRASH = FALSE 
+            WHERE OID = ?1
+            "
+        ), 
+        params![row_oid]
+    )?;
 
     // Untrash upwards in the inheritance tree
-    let mut query_master_cmd = trans.prepare("SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE INHERITOR_SCHEMA_OID = ?1")?;
-    for master_schema_oid_result in
-        query_master_cmd.query_map(params![table_oid], |row| row.get(0))?
-    {
-        let master_schema_oid: i64 = master_schema_oid_result?;
-        let master_table_name: String = format!("TABLE{master_schema_oid}");
-        if !completed_table_oid.contains(&master_schema_oid)
-            && trans.table_exists(Some("main"), &master_table_name)?
-        {
-            completed_table_oid.insert(master_schema_oid);
-            let sql_master_schema_row_oid: String = format!(
-                "SELECT MASTER{master_schema_oid}_OID FROM TABLE{table_oid} WHERE OID = ?1"
-            );
-            let master_schema_row_oid: i64 =
-                trans.query_one(&sql_master_schema_row_oid, params![row_oid], |row| {
-                    row.get(0)
-                })?;
-            untrash_transact(
-                trans,
-                master_schema_oid,
-                master_schema_row_oid,
-                completed_table_oid,
-            )?;
+    sql_iter(
+        trans,
+        "
+        SELECT 
+            MASTER_SCHEMA_OID 
+        FROM METADATA_SCHEMA_INHERITANCE_VIEW 
+        WHERE INHERITOR_SCHEMA_OID = ?1
+        ",
+        params![table_oid],
+        |row| row.get(0),
+        |master_schema_oid| {
+            let master_table_name: String = format!("TABLE{master_schema_oid}");
+            if !completed_table_oid.contains(&master_schema_oid)
+                && trans.table_exists(Some("main"), &master_table_name)?
+            {
+                completed_table_oid.insert(master_schema_oid);
+                let master_schema_row_oid: i64 = sql_one(
+                    trans,
+                    format!(
+                        "
+                        SELECT 
+                            MASTER{master_schema_oid}_OID 
+                        FROM TABLE{table_oid} 
+                        WHERE OID = ?1
+                        "
+                    ), 
+                    params![row_oid], 
+                    |row| row.get(0)
+                )?;
+                untrash_transact(
+                    trans,
+                    master_schema_oid,
+                    master_schema_row_oid,
+                    completed_table_oid,
+                )?;
+            }
+            Ok(None::<()>)
         }
-    }
+    )?;
     Ok(())
 }
 
@@ -470,9 +621,17 @@ pub fn change_object_type(
     let trans: Transaction = conn.transaction()?;
     for (related_table_oid, related_row_oid) in mapped_table_oid.iter() {
         if let Some(related_row_oid) = related_row_oid {
-            let sql_update: String =
-                format!("UPDATE TABLE{related_table_oid} SET TRASH = TRUE WHERE OID = ?1");
-            trans.execute(&sql_update, params![related_row_oid])?;
+            sql_execute(
+                &trans, 
+                format!(
+                    "
+                    UPDATE TABLE{related_table_oid} SET 
+                        TRASH = TRUE 
+                    WHERE OID = ?1
+                    "
+                ), 
+                params![related_row_oid]
+            )?;
         }
     }
 
@@ -515,35 +674,73 @@ pub fn reorder(table_oid: i64, row_oid: i64, new_row_oid: Option<i64>) -> Result
     let new_row_oid: i64 = match new_row_oid {
         Some(new_row_oid) => {
             // Make room for the row OID
-            let sql_update1: String =
-                format!("UPDATE TABLE{table_oid} SET OID = -OID WHERE OID >= ?1 AND OID != ?2");
-            trans.execute(&sql_update1, params![new_row_oid, row_oid])?;
+            sql_execute(
+                &trans, 
+                format!(
+                    "
+                    UPDATE TABLE{table_oid} SET 
+                        OID = -OID 
+                    WHERE OID >= ?1 
+                        AND OID != ?2
+                    "
+                ), 
+                params![new_row_oid, row_oid]
+            )?;
 
             // Change the row OID
-            let sql_update2: String =
-                format!("UPDATE TABLE{table_oid} SET OID = ?1 WHERE OID = ?2");
-            trans.execute(&sql_update2, params![new_row_oid, row_oid])?;
+            sql_execute(
+                &trans, 
+                format!(
+                    "
+                    UPDATE TABLE{table_oid} SET 
+                        OID = ?1 
+                    WHERE OID = ?2
+                    "
+                ), 
+                params![new_row_oid, row_oid]
+            )?;
 
             // Move back the other row OIDs
-            let sql_update3: String =
-                format!("UPDATE TABLE{table_oid} SET OID = 1 - OID WHERE OID < 0");
-            trans.execute(&sql_update3, [])?;
+            sql_execute(
+                &trans, 
+                format!(
+                    "
+                    UPDATE TABLE{table_oid} SET 
+                        OID = 1 - OID 
+                    WHERE OID < 0
+                    "), 
+                    []
+            )?;
 
             new_row_oid
         }
         None => {
             // Query for the next OID
-            let sql_select: String = format!("SELECT MAX(OID) + 1 FROM TABLE{table_oid}");
-            let new_row_oid: i64 = trans
-                .query_one(&sql_select, [], |row| row.get::<_, Option<i64>>(0))
-                .optional()?
-                .unwrap_or(Some(1))
-                .unwrap_or(1);
+            let new_row_oid: i64 = sql_zero_or_one(
+                &trans,
+                format!(
+                    "
+                    SELECT 
+                        MAX(OID) + 1 
+                    FROM TABLE{table_oid}
+                    "
+                ), 
+                [], 
+                |row| row.get::<_, Option<i64>>(0)
+            )?.unwrap_or(Some(1)).unwrap_or(1);
 
             // Change the row OID
-            let sql_update2: String =
-                format!("UPDATE TABLE{table_oid} SET OID = ?1 WHERE OID = ?2");
-            trans.execute(&sql_update2, params![new_row_oid, row_oid])?;
+            sql_execute(
+                &trans, 
+                format!(
+                    "
+                    UPDATE TABLE{table_oid} SET 
+                        OID = ?1 
+                    WHERE OID = ?2
+                    "
+                ), 
+                params![new_row_oid, row_oid]
+            )?;
 
             new_row_oid
         }

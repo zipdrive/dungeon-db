@@ -5,6 +5,7 @@ use crate::data::schema;
 use crate::data::view::regenerate_schema_views;
 use crate::util::channel::Sender;
 use crate::util::db;
+use crate::util::db::{sql_execute, sql_iter};
 use crate::util::error::Error;
 use rocket::serde::{Serialize as RocketSerialize};
 use rusqlite::{params, OptionalExtension, Transaction};
@@ -58,28 +59,39 @@ impl FullMetadata {
         self.schema.create(&trans)?;
 
         // Create the table
-        let create_table_cmd: String = format!(
-            "
-            CREATE TABLE TABLE{} (
-                OID INTEGER PRIMARY KEY, 
-                TRASH INTEGER NOT NULL DEFAULT 0
-            ) STRICT;
-            ",
-            self.schema.oid
-        );
-        trans.execute(&create_table_cmd, [])?;
+        sql_execute(
+            &trans, 
+            format!(
+                "
+                CREATE TABLE TABLE{} (
+                    OID INTEGER PRIMARY KEY, 
+                    TRASH INTEGER NOT NULL DEFAULT 0
+                ) STRICT;
+                ",
+                self.schema.oid
+            ), 
+            []
+        )?;
 
         // To update the inheritance, now that there is a constructed table for it
         self.schema.set(&trans)?;
 
         // Create the table metadata
-        trans.execute(
-            "INSERT INTO METADATA_TABLE (OID) VALUES (?1)",
+        sql_execute(
+            &trans,
+            "
+            INSERT INTO METADATA_TABLE (OID) 
+            VALUES (?1)
+            ",
             params![self.schema.oid],
         )?;
         // Create a datasource for the table
-        trans.execute(
-            "INSERT INTO METADATA_DATASOURCE (TABLE_OID) VALUES (?1)",
+        sql_execute(
+            &trans,
+            "
+            INSERT INTO METADATA_DATASOURCE (TABLE_OID) 
+            VALUES (?1)
+            ",
             params![self.schema.oid],
         )?;
 
@@ -129,21 +141,33 @@ impl DropdownValue {
     pub fn emit_table_row_labels(app: AppHandle, processid: i64, table_oid: i64) -> Result<(), Error> {
         let conn = db::open()?;
         
-        let select_sql: String = format!("SELECT l.OID, COALESCE(l.PLAIN_LABEL, l.JSON_LABEL) AS LABEL FROM SCHEMA{table_oid}_VIEW l ORDER BY l.ROW_INDEX");
-        println!("{select_sql}");
-        let mut select_stmt = conn.prepare(&select_sql)?;
-        let select_rows = select_stmt.query_and_then([], |row| Ok::<(i64, String), rusqlite::Error>((row.get::<_, i64>("OID")?, row.get::<_, String>("LABEL")?)))?;
-        for row_result in select_rows {
-            let (oid, label) = row_result?;
-            println!("Sending processid={processid}, id={oid}, name={label}");
-            app.emit(PUSH_DROPDOWN_VALUE_SIGNAL, DropdownValueEmit {
-                processid: processid.clone(),
-                dropdown_value: Self { 
-                    id: oid, 
-                    name: label 
-                }
-            })?;
-        }
+        sql_iter(
+            &conn,
+            format!(
+                "
+                SELECT 
+                    l.OID, 
+                    COALESCE(l.PLAIN_LABEL, l.JSON_LABEL) AS LABEL 
+                FROM SCHEMA{table_oid}_VIEW l 
+                ORDER BY l.ROW_INDEX
+                "
+            ),
+            [],
+            |row| Ok((
+                row.get::<_, i64>("OID")?, 
+                row.get::<_, String>("LABEL")?
+            )),
+            |(oid, label)| {
+                app.emit(PUSH_DROPDOWN_VALUE_SIGNAL, DropdownValueEmit {
+                    processid: processid.clone(),
+                    dropdown_value: Self { 
+                        id: oid, 
+                        name: label 
+                    }
+                })?;
+                Ok(None::<()>)
+            }
+        )?;
 
         Ok(())
     }

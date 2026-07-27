@@ -2,6 +2,7 @@ use crate::data::column::DropdownValue;
 use crate::data::{column, column_type, schema, table};
 use crate::util::channel::Sender;
 use crate::util::db;
+use crate::util::db::{sql_iter, sql_map_then_iter, sql_one, sql_zero_or_one};
 use crate::util::error::Error;
 use regex::Regex;
 use rusqlite::types::Value;
@@ -104,7 +105,7 @@ impl Datasource {
                 );
             }
 
-            return Err(Error::AdhocError(
+            return Err(Error::adhoc(
                 "Datasource path contains an unknown link type.",
             ));
         }
@@ -114,7 +115,7 @@ impl Datasource {
     pub fn from_alias(alias: String) -> Result<Self, Error> {
         let path: Vec<String> = alias.split('_').map(|s| String::from(s)).collect();
         if path.len() == 0 {
-            return Err(Error::AdhocError("Datasource cannot be empty!"));
+            return Err(Error::adhoc("Datasource cannot be empty!"));
         }
 
         // Check for root datasource
@@ -125,7 +126,7 @@ impl Datasource {
             let root: Self = Self::get(root_datasource_oid)?;
             return Self::from_parent_and_path(root, &path[1..]);
         } else {
-            return Err(Error::AdhocError(
+            return Err(Error::adhoc(
                 "Root datasource is expected to be an OID of a row in METADATA_DATASOURCE.",
             ));
         };
@@ -135,7 +136,7 @@ impl Datasource {
     pub fn from_alias_transact(conn: &Connection, alias: String) -> Result<Self, Error> {
         let path: Vec<String> = alias.split('_').map(|s| String::from(s)).collect();
         if path.len() == 0 {
-            return Err(Error::AdhocError("Datasource cannot be empty!"));
+            return Err(Error::adhoc("Datasource cannot be empty!"));
         }
 
         // Check for root datasource
@@ -146,7 +147,7 @@ impl Datasource {
             let root: Self = Self::get_transact(conn, root_datasource_oid)?;
             return Self::from_parent_and_path(root, &path[1..]);
         } else {
-            return Err(Error::AdhocError(
+            return Err(Error::adhoc(
                 "Root datasource is expected to be an OID of a row in METADATA_DATASOURCE.",
             ));
         };
@@ -209,7 +210,8 @@ impl Datasource {
 
     /// Retrieve a root datasource by OID, as part of a transaction.
     pub fn get_transact(conn: &Connection, oid: i64) -> Result<Self, Error> {
-        let (table_oid, label) = conn.query_one(
+        let (table_oid, label) = sql_one(
+            conn,
             "
             SELECT
                 d.TABLE_OID,
@@ -236,18 +238,37 @@ impl Datasource {
         Self::get_transact(&conn, oid)
     }
 
+
+
+
+
+    /// Retrieves the OID of the default root datasource for a particular schema.
+    /// Returns None if the schema has no default root datasource.
+    pub fn check_default_datasource_oid_transact(
+        conn: &Connection,
+        schema_oid: i64,
+    ) -> Result<Option<i64>, Error> {
+        sql_zero_or_one(
+            conn,
+            "
+            SELECT 
+                OID 
+            FROM METADATA_DATASOURCE 
+            WHERE TABLE_OID = ?1
+            LIMIT 1
+            ",
+            params![schema_oid],
+            |row| row.get(0),
+        )
+    }
+
     /// Retrieves the default root datasource for a particular schema.
     /// Returns None if the schema has no default root datasource.
-    pub fn get_default_datasource_transact(
+    pub fn check_default_datasource_transact(
         conn: &Connection,
         schema_oid: i64,
     ) -> Result<Option<Self>, Error> {
-        let datasource_oid: Option<i64> = conn.query_row(
-            "SELECT OID FROM METADATA_DATASOURCE WHERE TABLE_OID = ?1",
-            params![schema_oid],
-            |row| row.get(0),
-        ).optional()?;
-        Ok(match datasource_oid {
+        Ok(match Self::check_default_datasource_oid_transact(conn, schema_oid.clone())? {
             Some(datasource_oid) => Some(Self::Table {
                 oid: datasource_oid,
                 table_oid: schema_oid,
@@ -255,6 +276,35 @@ impl Datasource {
             None => None
         })
     }
+
+    /// Retrieves the OID of the default root datasource for a particular table.
+    pub fn get_default_datasource_oid_transact(
+        conn: &Connection,
+        table_oid: i64 
+    ) -> Result<i64, Error> {
+        Ok(match Self::check_default_datasource_oid_transact(conn, table_oid.clone())? {
+            Some(datasource_oid) => datasource_oid,
+            None => {
+                return Err(Error::adhoc(format!("Expected table with OID {table_oid} to have a default datasource!")));
+            }
+        })
+    }
+
+    /// Retrieves the OID of the default root datasource for a particular table.
+    pub fn get_default_datasource_transact(
+        conn: &Connection,
+        table_oid: i64 
+    ) -> Result<Self, Error> {
+        Ok(match Self::check_default_datasource_transact(conn, table_oid.clone())? {
+            Some(datasource) => datasource,
+            None => {
+                return Err(Error::adhoc(format!("Expected table with OID {table_oid} to have a default datasource!")));
+            }
+        })
+    }
+
+
+
 
     /// Gets the alias of the datasource.
     pub fn get_alias(&self) -> String {
@@ -288,7 +338,7 @@ impl Datasource {
     }
 
     /// Gets the OID of the schema that this datasource points towards.
-    pub fn get_schema_oid(&self) -> Result<i64, Error> {
+    pub fn get_table_oid(&self) -> Result<i64, Error> {
         Ok(match self {
             Self::Table { table_oid, .. }
             | Self::MasterTable { table_oid, .. }
@@ -297,8 +347,8 @@ impl Datasource {
                 parent_datasource,
                 column,
             } => {
-                let parent_datasource_schema_oid: i64 = parent_datasource.get_schema_oid()?;
-                if parent_datasource_schema_oid == column.schema.oid {
+                let parent_datasource_table_oid: i64 = parent_datasource.get_table_oid()?;
+                if parent_datasource_table_oid == column.schema.oid {
                     match &column.column_type {
                         column_type::ColumnType::Object { table_oid, .. }
                         | column_type::ColumnType::Select { table_oid, .. }
@@ -306,7 +356,7 @@ impl Datasource {
                             table_oid.clone()
                         }
                         _ => {
-                            return Err(Error::AdhocError("Only columns of types Object, Select, and Multiselect can be used as links to a datasource."));
+                            return Err(Error::adhoc("Only columns of types Object, Select, and Multiselect can be used as links to a datasource."));
                         }
                     }
                 } else {
@@ -320,9 +370,10 @@ impl Datasource {
     /// Queries for all root datasources.
     pub fn query_roots(mut sender: Sender<DatasourceDropdownValue>) -> Result<(), Error> {
         let conn: Connection = db::open()?;
-        for root_result in conn
-            .prepare(
-                "
+        
+        sql_iter(
+            &conn, 
+            "
             SELECT 
                 d.OID, 
                 d.TABLE_OID, 
@@ -333,37 +384,38 @@ impl Datasource {
             ORDER BY 
                 d.LABEL NULLS FIRST, 
                 s.NAME
-            ",
-            )?
-            .query_and_then([], |row| {
-                Ok::<(i64, i64, String), rusqlite::Error>((
-                    row.get("OID")?,
-                    row.get("TABLE_OID")?,
-                    row.get("LABEL")?,
+            ", 
+            [], 
+            |row| {
+                Ok((
+                    row.get::<_, i64>("OID")?,
+                    row.get::<_, i64>("TABLE_OID")?,
+                    row.get::<_, String>("LABEL")?,
                 ))
-            })?
-        {
-            let (datasource_oid, table_oid, datasource_label) = root_result?;
-            sender.send(DatasourceDropdownValue {
-                value: Self::Table {
-                    oid: datasource_oid,
-                    table_oid,
-                },
-                label: datasource_label,
-            })?;
-        }
+            }, 
+            |(datasource_oid, table_oid, datasource_label)| {
+                sender.send(DatasourceDropdownValue {
+                    value: Self::Table {
+                        oid: datasource_oid,
+                        table_oid,
+                    },
+                    label: datasource_label,
+                })?;
+                Ok(None::<()>)
+            }
+        )?;
         Ok(())
     }
 
     /// Queries for links from this datasource to another.
     pub fn query_links(&self, mut sender: Sender<DatasourceDropdownValue>) -> Result<(), Error> {
         let conn: Connection = db::open()?;
-        let table_oid: i64 = self.get_schema_oid()?;
+        let table_oid: i64 = self.get_table_oid()?;
 
         // Query for columns on the schema for self
-        for column_oid_result in conn
-            .prepare(
-                "
+        sql_map_then_iter(
+            &conn,
+            "
             SELECT 
                 c.OID
             FROM METADATA_COLUMN c
@@ -377,26 +429,26 @@ impl Datasource {
                     SELECT OID FROM METADATA_COLUMN_TYPE__MULTISELECT
                 )
             ",
-            )?
-            .query_map(params![table_oid], |row| row.get("OID"))?
-        {
-            let column_oid = column_oid_result?;
-            let column_metadata: column::FullMetadata =
-                column::FullMetadata::get_transact(&conn, column_oid)?;
-            let datasource_label: String = format!("REFERENCE: {}", column_metadata.name);
-            sender.send(DatasourceDropdownValue {
-                value: Self::Column {
-                    parent_datasource: Box::new(self.clone()),
-                    column: column_metadata,
-                },
-                label: datasource_label,
-            })?;
-        }
+            params![table_oid],
+            |row| row.get("OID"),
+            |column_oid| {
+                let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(&conn, column_oid)?;
+                let datasource_label: String = format!("REFERENCE: {}", column_metadata.name);
+                sender.send(DatasourceDropdownValue {
+                    value: Self::Column {
+                        parent_datasource: Box::new(self.clone()),
+                        column: column_metadata,
+                    },
+                    label: datasource_label,
+                })?;
+                Ok(None::<()>)
+            }
+        )?;
 
         // Query for master tables
-        for master_table_result in conn
-            .prepare(
-                "
+        sql_iter(
+            &conn,
+            "
             SELECT 
                 s.OID,
                 s.NAME
@@ -405,26 +457,27 @@ impl Datasource {
             WHERE inh.INHERITOR_SCHEMA_OID = ?1
                 AND EXISTS(SELECT OID FROM METADATA_TABLE WHERE OID = inh.MASTER_SCHEMA_OID)
             ",
-            )?
-            .query_map(params![table_oid], |row| {
+            params![table_oid],
+            |row| {
                 Ok::<(i64, String), rusqlite::Error>((row.get("OID")?, row.get("NAME")?))
-            })?
-        {
-            let (master_table_oid, master_table_name) = master_table_result?;
-            let datasource_label: String = format!("MASTER: {master_table_name}");
-            sender.send(DatasourceDropdownValue {
-                value: Self::MasterTable {
-                    parent_datasource: Box::new(self.clone()),
-                    table_oid: master_table_oid,
-                },
-                label: datasource_label,
-            })?;
-        }
+            },
+            |(master_table_oid, master_table_name)| {
+                let datasource_label: String = format!("MASTER: {master_table_name}");
+                sender.send(DatasourceDropdownValue {
+                    value: Self::MasterTable {
+                        parent_datasource: Box::new(self.clone()),
+                        table_oid: master_table_oid,
+                    },
+                    label: datasource_label,
+                })?;
+                Ok(None::<()>)
+            }
+        )?;
 
         // Query for inheritor tables
-        for inheritor_table_result in conn
-            .prepare(
-                "
+        sql_iter(
+            &conn,
+            "
             SELECT 
                 s.OID,
                 s.NAME
@@ -433,26 +486,27 @@ impl Datasource {
             WHERE inh.MASTER_SCHEMA_OID = ?1
                 AND EXISTS(SELECT OID FROM METADATA_TABLE WHERE OID = inh.INHERITOR_SCHEMA_OID)
             ",
-            )?
-            .query_map(params![table_oid], |row| {
+            params![table_oid],
+            |row| {
                 Ok::<(i64, String), rusqlite::Error>((row.get("OID")?, row.get("NAME")?))
-            })?
-        {
-            let (inheritor_table_oid, inheritor_table_name) = inheritor_table_result?;
-            let datasource_label: String = format!("INHERITOR: {inheritor_table_name}");
-            sender.send(DatasourceDropdownValue {
-                value: Self::InheritorTable {
-                    parent_datasource: Box::new(self.clone()),
-                    table_oid: inheritor_table_oid,
-                },
-                label: datasource_label,
-            })?;
-        }
+            },
+            |(inheritor_table_oid, inheritor_table_name)| {
+                let datasource_label: String = format!("INHERITOR: {inheritor_table_name}");
+                sender.send(DatasourceDropdownValue {
+                    value: Self::InheritorTable {
+                        parent_datasource: Box::new(self.clone()),
+                        table_oid: inheritor_table_oid,
+                    },
+                    label: datasource_label,
+                })?;
+                Ok(None::<()>)
+            }
+        )?;
 
         // Query for columns on other tables referencing this one
-        for column_oid_result in conn
-            .prepare(
-                "
+        sql_map_then_iter(
+            &conn,
+            "
             SELECT 
                 c.OID AS COLUMN_OID,
                 s.NAME AS SCHEMA_NAME
@@ -487,27 +541,26 @@ impl Datasource {
                 AND NOT c.TRASH
                 AND NOT s.TRASH
             ",
-            )?
-            .query_map(params![table_oid], |row| {
+            params![table_oid],
+            |row| {
                 Ok::<(i64, String), rusqlite::Error>((
                     row.get("COLUMN_OID")?,
                     row.get("SCHEMA_NAME")?,
                 ))
-            })?
-        {
-            let (column_oid, schema_name) = column_oid_result?;
-            let column_metadata: column::FullMetadata =
-                column::FullMetadata::get_transact(&conn, column_oid)?;
-            let datasource_label: String =
-                format!("BACKREFERENCE: {schema_name} / {}", column_metadata.name);
-            sender.send(DatasourceDropdownValue {
-                value: Self::Column {
-                    parent_datasource: Box::new(self.clone()),
-                    column: column_metadata,
-                },
-                label: datasource_label,
-            })?;
-        }
+            },
+            |(column_oid, schema_name)| {
+                let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(&conn, column_oid)?;
+                let datasource_label: String = format!("BACKREFERENCE: {schema_name} / {}", column_metadata.name);
+                sender.send(DatasourceDropdownValue {
+                    value: Self::Column {
+                        parent_datasource: Box::new(self.clone()),
+                        column: column_metadata,
+                    },
+                    label: datasource_label,
+                })?;
+                Ok(None::<()>)
+            }
+        )?;
         Ok(())
     }
 
@@ -517,11 +570,11 @@ impl Datasource {
         mut sender: Sender<ParameterDropdownValue>,
     ) -> Result<(), Error> {
         let conn: Connection = db::open()?;
-        let table_oid: i64 = self.get_schema_oid()?;
+        let table_oid: i64 = self.get_table_oid()?;
 
-        for column_result in conn
-            .prepare(
-                "
+        sql_iter(
+            &conn,
+            "
             SELECT 
                 c.OID,
                 c.NAME
@@ -530,18 +583,19 @@ impl Datasource {
                 AND NOT c.TRASH
             ORDER BY c.ORDERING
             ",
-            )?
-            .query_map(params![table_oid], |row| {
-                Ok::<(i64, String), rusqlite::Error>((row.get("OID")?, row.get("NAME")?))
-            })?
-        {
-            let (column_oid, column_name) = column_result?;
-            let parameter_path: String = format!("{}_COLUMN{column_oid}", self.get_alias());
-            sender.send(ParameterDropdownValue {
-                value: parameter_path,
-                label: column_name,
-            })?;
-        }
+            params![table_oid],
+            |row| {
+                Ok((row.get::<_, i64>("OID")?, row.get::<_, String>("NAME")?))
+            },
+            |(column_oid, column_name)| {
+                let parameter_path: String = format!("{}_COLUMN{column_oid}", self.get_alias());
+                sender.send(ParameterDropdownValue {
+                    value: parameter_path,
+                    label: column_name,
+                })?;
+                Ok(None::<()>)
+            }
+        )?;
 
         Ok(())
     }
@@ -608,11 +662,11 @@ impl Datasource {
                 parent_datasource,
                 column,
             } => {
-                let parent_datasource_schema_oid: i64 = parent_datasource.get_schema_oid()?;
+                let parent_datasource_table_oid: i64 = parent_datasource.get_table_oid()?;
                 match &column.column_type {
                     column_type::ColumnType::Object { .. } => parent_datasource.seek_basis()?,
                     column_type::ColumnType::Select { .. } => {
-                        if parent_datasource_schema_oid == column.schema.oid {
+                        if parent_datasource_table_oid == column.schema.oid {
                             parent_datasource.seek_basis()?
                         } else {
                             self.clone()
@@ -620,7 +674,7 @@ impl Datasource {
                     }
                     column_type::ColumnType::Multiselect { .. } => self.clone(),
                     _ => {
-                        return Err(Error::AdhocError("Only columns of types Object, Select, and Multiselect can be used as links to a datasource."));
+                        return Err(Error::adhoc("Only columns of types Object, Select, and Multiselect can be used as links to a datasource."));
                     }
                 }
             }

@@ -7,6 +7,9 @@ import { Channel } from "@tauri-apps/api/core";
 import { executeAsync } from "./util/action";
 import { message } from "@tauri-apps/plugin-dialog";
 import "./util/shortcut"; // Install shortcuts
+import { Menu, Submenu } from "@tauri-apps/api/menu";
+import { loadAsync, newAsync, saveAsAsync, saveAsync } from "./util/dbfile";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 function loadTables() {
     // Disable the open/edit/delete buttons
@@ -107,7 +110,7 @@ function getSelectedReportOid(): number | null {
 
 
 
-window.addEventListener("DOMContentLoaded", () => {
+window.addEventListener("DOMContentLoaded", async () => {
     // Add button listeners
     document.getElementById('new-table-button')?.addEventListener('click', async (_) => {
         await openDialogAsync({
@@ -197,6 +200,46 @@ window.addEventListener("DOMContentLoaded", () => {
             });
         }
     });
+
+    const fileSubmenu = await Submenu.new({
+        text: 'File',
+        items: [
+            {
+                id: 'new',
+                text: 'New',
+                action: async () => {
+                    await newAsync();
+                }
+            },
+            {
+                id: 'open',
+                text: 'Open',
+                action: async () => {
+                    await loadAsync();
+                }
+            },
+            {
+                id: 'save',
+                text: 'Save',
+                action: async () => {
+                    await saveAsync();
+                }
+            },
+            {
+                id: 'saveAs',
+                text: 'Save As...',
+                action: async () => {
+                    await saveAsAsync();
+                }
+            }
+        ]
+    });
+    const menu = await Menu.new({
+        items: [
+            fileSubmenu
+        ]
+    })
+    await menu.setAsWindowMenu(getCurrentWindow());
 
     // Load in the tables and reports
     loadTables();

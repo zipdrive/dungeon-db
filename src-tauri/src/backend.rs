@@ -668,7 +668,7 @@ impl Action {
                 }
             }
             _ => {
-                return Err(error::Error::AdhocError("Action has not been implemented."));
+                return Err(error::Error::adhoc("Action has not been implemented."));
             }
         }
         return Ok(());

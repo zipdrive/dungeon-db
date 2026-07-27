@@ -1,6 +1,7 @@
 use crate::data::view::regenerate_schema_views;
 use crate::data::{datasource, schema};
 use crate::util::db;
+use crate::util::db::{sql_one, sql_execute, sql_iter};
 use crate::util::error::Error;
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
@@ -38,29 +39,35 @@ impl FullMetadata {
         let schema_metadata = schema::FullMetadata::get(&conn, oid)?;
 
         // Query for filter formula
-        let filter_formula: Option<String> = conn.query_one(
-            "SELECT FILTER_FORMULA FROM METADATA_REPORT WHERE OID = ?1",
+        let filter_formula: Option<String> = sql_one(
+            &conn,
+            "
+            SELECT 
+                FILTER_FORMULA 
+            FROM METADATA_REPORT 
+            WHERE OID = ?1
+            ",
             params![oid],
             |row| row.get::<_, Option<String>>("FILTER_FORMULA"),
         )?;
 
         // Query for GROUP BY columns
         let mut group_by_column_oids: Vec<i64> = Vec::new();
-        {
-            let mut group_by_column_oids_statement = conn.prepare(
-                "
-                SELECT 
-                    COLUMN_OID
-                FROM METADATA_REPORT_GROUPBY_VIEW
-                WHERE REPORT_OID = ?1
-                ",
-            )?;
-            let group_by_column_oids_rows = group_by_column_oids_statement
-                .query_and_then(params![oid], |row| row.get::<_, i64>(0))?;
-            for group_by_column_oids_result in group_by_column_oids_rows {
-                group_by_column_oids.push(group_by_column_oids_result?);
+        sql_iter(
+            &conn,
+            "
+            SELECT 
+                COLUMN_OID
+            FROM METADATA_REPORT_GROUPBY_VIEW
+            WHERE REPORT_OID = ?1
+            ",
+            params![oid],
+            |row| row.get::<_, i64>(0),
+            |group_by_column_oid| {
+                group_by_column_oids.push(group_by_column_oid);
+                Ok(None::<()>)
             }
-        }
+        )?;
 
         // Return the metadata
         Ok(Self {
@@ -78,8 +85,14 @@ impl FullMetadata {
         // Create schema
         self.schema.create(&trans)?;
         // Create the report metadata
-        trans.execute(
-            "INSERT INTO METADATA_REPORT (OID) VALUES (?1)",
+        sql_execute(
+            &trans,
+            "
+            INSERT INTO METADATA_REPORT 
+                (OID) 
+                VALUES 
+                (?1)
+            ",
             params![self.schema.oid],
         )?;
 
@@ -110,19 +123,30 @@ impl FullMetadata {
     /// Overwrites the metadata for GROUP BY columns and filters.
     fn set_transact(&self, trans: &Transaction) -> Result<(), Error> {
         // Update the filter formula applied to each row of the table
-        trans.execute(
-            "UPDATE METADATA_REPORT SET FILTER_FORMULA = ?1 WHERE OID = ?2",
+        sql_execute(
+            trans,
+            "
+            UPDATE METADATA_REPORT SET 
+                FILTER_FORMULA = ?1 
+            WHERE OID = ?2
+            ",
             params![self.filter_formula, self.schema.oid],
         )?;
 
         // Trash all previous rows of GROUP BY
-        trans.execute(
-            "UPDATE METADATA_REPORT_GROUPBY SET TRASH = TRUE WHERE REPORT_OID = ?1",
+        sql_execute(
+            trans,
+            "
+            UPDATE METADATA_REPORT_GROUPBY SET 
+                TRASH = TRUE 
+            WHERE REPORT_OID = ?1
+            ",
             params![self.schema.oid],
         )?;
         // Set new rows of GROUP BY
         for group_by_column_oid in self.group_by_column_oids.iter() {
-            trans.execute(
+            sql_execute(
+                trans,
                 "
                 INSERT INTO METADATA_REPORT_GROUPBY 
                     (REPORT_OID, COLUMN_OID)

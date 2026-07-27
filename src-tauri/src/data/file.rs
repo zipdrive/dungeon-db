@@ -1,4 +1,5 @@
 use crate::util::db;
+use crate::util::db::{sql_one, sql_execute};
 use crate::util::error::Error;
 use base64::{prelude::BASE64_STANDARD as base64standard, Engine};
 use rusqlite::{params, Connection};
@@ -23,7 +24,8 @@ impl File {
 
     /// Retrieve the file with the given OID.
     pub fn get_transact(conn: &Connection, oid: i64) -> Result<Self, Error> {
-        let (oid, path) = conn.query_one(
+        let (oid, path) = sql_one(
+            conn,
             "
             SELECT
                 OID,
@@ -75,7 +77,7 @@ impl File {
                 match buf_reader.read_to_end(&mut buf) {
                     Ok(_) => {}
                     Err(_) => {
-                        return Err(Error::AdhocError("Unable to read stored file."));
+                        return Err(Error::adhoc("Unable to read stored file."));
                     }
                 }
 
@@ -88,7 +90,7 @@ impl File {
                         base64standard.encode(&buf)
                     ));
                 } else {
-                    return Err(Error::AdhocError("File is not an image!"));
+                    return Err(Error::adhoc("File is not an image!"));
                 }
             }
         }
@@ -103,7 +105,7 @@ impl File {
             Self::Path { path, .. } => match std::fs::read(path) {
                 Ok(read_buf) => read_buf,
                 Err(_) => {
-                    return Err(Error::AdhocError("Unable to open file."));
+                    return Err(Error::adhoc("Unable to open file."));
                 }
             },
             Self::Blob { oid } => {
@@ -115,7 +117,7 @@ impl File {
                 match buf_reader.read_to_end(&mut buf) {
                     Ok(_) => {}
                     Err(_) => {
-                        return Err(Error::AdhocError("Unable to read stored file."));
+                        return Err(Error::adhoc("Unable to read stored file."));
                     }
                 }
                 buf
@@ -135,7 +137,7 @@ impl File {
                 match std::fs::read(path) {
                     Ok(read_buf) => read_buf,
                     Err(_) => {
-                        return Err(Error::AdhocError("Unable to open file."));
+                        return Err(Error::adhoc("Unable to open file."));
                     }
                 }
             }
@@ -150,7 +152,7 @@ impl File {
                 match buf_reader.read_to_end(&mut buf) {
                     Ok(_) => {}
                     Err(_) => {
-                        return Err(Error::AdhocError("Unable to read stored file."));
+                        return Err(Error::adhoc("Unable to read stored file."));
                     }
                 }
                 buf
@@ -161,7 +163,7 @@ impl File {
         let mut file = match FilesystemFile::create(download_to_path) {
             Ok(f) => f,
             Err(_) => {
-                return Err(Error::AdhocError("Unable to open file."));
+                return Err(Error::adhoc("Unable to open file."));
             }
         };
 
@@ -169,7 +171,7 @@ impl File {
         match file.write_all(&buf) {
             Ok(_) => {}
             Err(_) => {
-                return Err(Error::AdhocError("Unable to write to file."));
+                return Err(Error::adhoc("Unable to write to file."));
             }
         }
         return Ok(());
@@ -181,7 +183,7 @@ impl File {
         let trans = conn.transaction()?;
 
         // Create a file
-        trans.execute("INSERT INTO METADATA_FILE DEFAULT VALUES", [])?;
+        sql_execute(&trans, "INSERT INTO METADATA_FILE DEFAULT VALUES", [])?;
 
         match self {
             Self::Path { oid, path } => {
@@ -190,8 +192,14 @@ impl File {
                 *path = upload_from_path;
 
                 // Insert a new path
-                trans.execute(
-                    "INSERT INTO METADATA_FILE__PATH (OID, FILEPATH) VALUES (?1, ?2)",
+                sql_execute(
+                    &trans,
+                    "
+                    INSERT INTO METADATA_FILE__PATH 
+                        (OID, FILEPATH) 
+                        VALUES 
+                        (?1, ?2)
+                    ",
                     params![*oid, *path],
                 )?;
             }
@@ -212,21 +220,27 @@ impl File {
                 let buf = match std::fs::read(upload_from_path) {
                     Ok(read_buf) => read_buf,
                     Err(_) => {
-                        return Err(Error::AdhocError("Unable to open file."));
+                        return Err(Error::adhoc("Unable to open file."));
                     }
                 };
                 let cropped_file_len: i64 = match i64::try_from(buf.len()) {
                     Ok(len) => len,
                     Err(_) => {
-                        return Err(Error::AdhocError(
+                        return Err(Error::adhoc(
                             "File size is greater than 9,223,372,036,854,775,807 bytes.",
                         ));
                     }
                 };
 
                 // Update the value with an empty blob
-                trans.execute(
-                    "INSERT INTO METADATA_FILE__BLOB (OID, FILENAME, CONTENT) VALUES (?1, ?2, ZEROBLOB(?3))", 
+                sql_execute(
+                    &trans,
+                    "
+                    INSERT INTO METADATA_FILE__BLOB 
+                        (OID, FILENAME, CONTENT) 
+                        VALUES 
+                        (?1, ?2, ZEROBLOB(?3))
+                    ", 
                     params![*oid, name, cropped_file_len]
                 )?;
 
@@ -237,7 +251,7 @@ impl File {
                     match blob.write_all(&buf) {
                         Ok(_) => {}
                         Err(_) => {
-                            return Err(Error::AdhocError(
+                            return Err(Error::adhoc(
                                 "Unable to upload file contents to database.",
                             ));
                         }

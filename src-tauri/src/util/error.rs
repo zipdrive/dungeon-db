@@ -1,11 +1,14 @@
-use rocket::Responder;
 use rusqlite::Error as RusqliteError;
 use serde::Serialize;
 use tauri::ipc::InvokeError;
-use tauri::{ipc::Invoke, Error as TauriError};
+use tauri::{Error as TauriError};
+use backtrace::Backtrace;
 
 pub enum Error {
-    AdhocError(&'static str),
+    AdhocError {
+        msg: String,
+        backtrace: Backtrace
+    },
 
     // Duplicate column name
     DuplicateColumnName {
@@ -59,9 +62,21 @@ pub enum Error {
     },
      */
     SaveInitializationError(RusqliteError),
+
+    /// An error with an SQL statement.
+    SqlError {
+        sql: String,
+        backtrace: Backtrace,
+        err: RusqliteError
+    },
+
+    /// An arbitrary error within Rusqlite. Might include connection errors, etc.
     RusqliteError(RusqliteError),
+
+    /// An arbitrary error within Tauri.
     TauriError(TauriError),
 }
+
 
 impl Into<InvokeError> for Error {
     fn into(self) -> InvokeError {
@@ -85,8 +100,8 @@ impl From<TauriError> for Error {
 impl Into<String> for Error {
     fn into(self) -> String {
         match self {
-            Self::AdhocError(s) => {
-                return s.into();
+            Self::AdhocError { msg, backtrace } => {
+                return format!("{msg}\n\n{backtrace:#?}");
             }
 
             Self::DuplicateColumnName { column_name } => {
@@ -134,6 +149,11 @@ impl Into<String> for Error {
             Self::SaveInitializationError(e) => {
                 return format!("An SQLite error occurred while attempting to save the state of the database: {}", e);
             }
+
+            Self::SqlError { sql, backtrace, err } => {
+                return format!("An error occurred while executing SQL expression:\n{sql}\n\n{err}\n\n{backtrace:#?}");
+            }
+
             Self::RusqliteError(e) => {
                 return format!("SQLite error occurred: {}", e);
             }
@@ -143,6 +163,18 @@ impl Into<String> for Error {
         }
     }
 }
+
+impl Error {
+    /// Constructs a new ad-hoc error.
+    pub fn adhoc<S>(msg: S) -> Self where S : AsRef<str> {
+        Self::AdhocError { 
+            msg: String::from(msg.as_ref()), 
+            backtrace: Backtrace::new_unresolved() 
+        }
+    }
+}
+
+
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]

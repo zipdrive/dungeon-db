@@ -1,16 +1,17 @@
-use crate::util::error;
-use rusqlite::{Connection, Result};
+use crate::util::error::Error;
+use rusqlite::{Connection, Error as RusqliteError, OptionalExtension, Params, Result, Row};
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
 use tauri::AppHandle;
 use tempfile::NamedTempFile;
+use backtrace::Backtrace;
 
 static DATABASE_PATH: Mutex<Option<String>> = Mutex::new(None);
 static DATABASE_AUTOSAVE_PATH: Mutex<Option<NamedTempFile>> = Mutex::new(None);
 
 /// Applies the metadata schema to the database at the given path.
-fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
+fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), Error> {
     let conn = Connection::open(path)?;
     conn.execute_batch("
     PRAGMA foreign_keys = ON;
@@ -469,7 +470,7 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), error::Error> {
 }
 
 /// Closes any previous database connection, and opens
-pub fn init_new() -> Result<(), error::Error> {
+pub fn init_new() -> Result<(), Error> {
     // Reset static variables
     let mut database_path = DATABASE_PATH.lock().unwrap();
     let mut database_autosave_tempfile = DATABASE_AUTOSAVE_PATH.lock().unwrap();
@@ -478,7 +479,7 @@ pub fn init_new() -> Result<(), error::Error> {
 
     // Create new autosave file
     let Ok(tempfile) = NamedTempFile::new() else {
-        return Err(error::Error::AdhocError("Unable to make an autosave file."));
+        return Err(Error::adhoc("Unable to make an autosave file."));
     };
 
     // Initialize the database at the path
@@ -491,7 +492,7 @@ pub fn init_new() -> Result<(), error::Error> {
 }
 
 /// Closes any previous database connection, and opens a new one.
-pub fn init_existing(path: String) -> Result<(), error::Error> {
+pub fn init_existing(path: String) -> Result<(), Error> {
     // Reset static variables
     let mut database_path = DATABASE_PATH.lock().unwrap();
     let mut database_autosave_tempfile = DATABASE_AUTOSAVE_PATH.lock().unwrap();
@@ -500,12 +501,12 @@ pub fn init_existing(path: String) -> Result<(), error::Error> {
 
     // Make a new autosave file
     let Ok(tempfile) = NamedTempFile::new() else {
-        return Err(error::Error::AdhocError("Unable to make an autosave file."));
+        return Err(Error::adhoc("Unable to make an autosave file."));
     };
 
     // Copy the data over from the main file to the autosave
     let Ok(_) = fs::copy(&path, tempfile.path()) else {
-        return Err(error::Error::AdhocError(
+        return Err(Error::adhoc(
             "Unable to transfer contents of autosave to main file.",
         ));
     };
@@ -520,7 +521,7 @@ pub fn init_existing(path: String) -> Result<(), error::Error> {
 }
 
 /// Opens a connection to the database.
-pub fn open() -> Result<Connection, error::Error> {
+pub fn open() -> Result<Connection, Error> {
     let database_autosave_tempfile = DATABASE_AUTOSAVE_PATH.lock().unwrap();
     match *database_autosave_tempfile {
         Some(ref tempfile) => {
@@ -535,14 +536,14 @@ pub fn open() -> Result<Connection, error::Error> {
             return Ok(conn);
         }
         None => {
-            return Err(error::Error::AdhocError("No file is open!"));
+            return Err(Error::adhoc("Cannot open file: No file is open!"));
         }
     }
 }
 
 /// Copies the data from the autosave file to the main file, then open a connection to the main file for cleaning purposes.
 /// Returns false if the file was not saved due to the user cancelling the save prompt, and returns true otherwise.
-pub fn save_to_current_file(app: &AppHandle) -> Result<bool, error::Error> {
+pub fn save_to_current_file(app: &AppHandle) -> Result<bool, Error> {
     // First, check if there is a main file
     {
         let database_path = DATABASE_PATH.lock().unwrap();
@@ -559,7 +560,7 @@ pub fn save_to_current_file(app: &AppHandle) -> Result<bool, error::Error> {
 
 /// Copies the data from the autosave file to a prompted main file, then open a connection to the main file for cleaning purposes.
 /// Returns false if the file was not saved due to the user cancelling the save prompt, and returns true otherwise.
-pub fn save_to_prompted_file(app: &AppHandle) -> Result<bool, error::Error> {
+pub fn save_to_prompted_file(app: &AppHandle) -> Result<bool, Error> {
     use tauri_plugin_dialog::DialogExt;
 
     let mut database_path = DATABASE_PATH.lock().unwrap();
@@ -578,13 +579,13 @@ pub fn save_to_prompted_file(app: &AppHandle) -> Result<bool, error::Error> {
 }
 
 /// Copies the data from the autosave file to the specified main file, then open a connection to the main file for cleaning purposes.
-fn save(app: &AppHandle, save_path: &String) -> Result<(), error::Error> {
+fn save(app: &AppHandle, save_path: &String) -> Result<(), Error> {
     let database_autosave_tempfile = DATABASE_AUTOSAVE_PATH.lock().unwrap();
     match *database_autosave_tempfile {
         Some(ref tempfile) => {
             // Copy the data from the autosave back to the main file
             let Ok(_) = fs::copy(tempfile.path(), save_path) else {
-                return Err(error::Error::AdhocError(
+                return Err(Error::adhoc(
                     "Unable to transfer contents of autosave to main file.",
                 ));
             };
@@ -609,12 +610,12 @@ fn save(app: &AppHandle, save_path: &String) -> Result<(), error::Error> {
 
                 // Drop the multiselect *-to-* mapping table
                 let drop_multiselect_sql: String = format!("DROP TABLE IF EXISTS MULTISELECT{column_oid}");
-                trans.execute(&drop_multiselect_sql, [])?;
+                sql_execute(&trans, &drop_multiselect_sql, [])?;
 
                 // Drop the column from its host table
                 if trans.table_exists(Some("main"), &table_name)? {
                     let drop_sql: String = format!("ALTER TABLE {table_name} DROP COLUMN COLUMN{column_oid}");
-                    trans.execute(&drop_sql, [])?;
+                    sql_execute(&trans, &drop_sql, [])?;
                 }
             }
 
@@ -626,7 +627,7 @@ fn save(app: &AppHandle, save_path: &String) -> Result<(), error::Error> {
                 // Drop the inheritance definition column from the inheriting table
                 if trans.table_exists(Some("main"), &inheritor_table_name)? {
                     let drop_sql: String = format!("ALTER TABLE {inheritor_table_name} DROP COLUMN MASTER{master_schema_oid}_OID");
-                    trans.execute(&drop_sql, [])?;
+                    sql_execute(&trans, &drop_sql, [])?;
                 }
             }
 
@@ -678,7 +679,166 @@ fn save(app: &AppHandle, save_path: &String) -> Result<(), error::Error> {
             return Ok(());
         }
         None => {
-            return Err(error::Error::AdhocError("No file is open!"));
+            return Err(Error::adhoc("Cannot save to opened file: No file is open!"));
+        }
+    }
+}
+
+
+
+/// Maps all rows of a query, then iterates over the mapped values.
+pub fn sql_map_then_iter<U, S, T, P, F1, F2>(conn: &Connection, sql: S, params: P, row_parser: F1, mut row_fn: F2) -> Result<Option<U>, Error> where S : AsRef<str>, P : Params, F1 : Fn(&Row) -> Result<T, RusqliteError>, F2 : FnMut(T) -> Result<Option<U>, Error> {
+    match conn.prepare(sql.as_ref()) {
+        Ok(mut stmt) => {
+            match stmt.query_map(params, row_parser) {
+                Ok(mapped_rows) => {
+                    for mapped_row_result in mapped_rows {
+                        match mapped_row_result {
+                            Ok(mapped_row) => {
+                                if let Some(u) = row_fn(mapped_row)? {
+                                    return Ok(Some(u));
+                                }
+                            }
+                            Err(err) => {
+                                return Err(Error::SqlError {
+                                    sql: String::from(sql.as_ref()),
+                                    backtrace: Backtrace::new_unresolved(),
+                                    err
+                                });
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    return Err(Error::SqlError {
+                        sql: String::from(sql.as_ref()),
+                        backtrace: Backtrace::new_unresolved(),
+                        err
+                    });
+                }
+            }
+        }
+        Err(err) => {
+            return Err(Error::SqlError {
+                sql: String::from(sql.as_ref()),
+                backtrace: Backtrace::new_unresolved(),
+                err
+            });
+        }
+    }
+    Ok(None)
+}
+
+/// Iterates progressively over all rows of a query.
+pub fn sql_iter<U, S, T, P, F1, F2>(conn: &Connection, sql: S, params: P, row_parser: F1, mut row_fn: F2) -> Result<Option<U>, Error> where S: AsRef<str>, P : Params, F1 : Fn(&Row) -> Result<T, RusqliteError>, F2 : FnMut(T) -> Result<Option<U>, Error> {
+    match conn.prepare(sql.as_ref()) {
+        Ok(mut stmt) => {
+            match stmt.query(params) {
+                Ok(mut rows) => {
+                    loop {
+                        let Some(row) = (match rows.next() {
+                            Ok(row) => row,
+                            Err(err) => {
+                                return Err(Error::SqlError {
+                                    sql: String::from(sql.as_ref()),
+                                    backtrace: Backtrace::new_unresolved(),
+                                    err
+                                });
+                            }
+                        }) else {
+                            break;
+                        };
+
+                        let values: T = match row_parser(&row) {
+                            Ok(values) => values,
+                            Err(err) => {
+                                return Err(Error::SqlError {
+                                    sql: String::from(sql.as_ref()),
+                                    backtrace: Backtrace::new_unresolved(),
+                                    err
+                                });
+                            } 
+                        };
+                        if let Some(u) = row_fn(values)? {
+                            return Ok(Some(u));
+                        }
+                    }
+                }
+                Err(err) => {
+                    return Err(Error::SqlError {
+                        sql: String::from(sql.as_ref()),
+                        backtrace: Backtrace::new_unresolved(),
+                        err
+                    });
+                }
+            }
+        }
+        Err(err) => {
+            return Err(Error::SqlError {
+                sql: String::from(sql.as_ref()),
+                backtrace: Backtrace::new_unresolved(),
+                err
+            });
+        }
+    }
+    Ok(None)
+}
+
+
+
+/// Queries for exactly one row.
+pub fn sql_one<S, T, P, F1>(conn: &Connection, sql: S, params: P, row_parser: F1) -> Result<T, Error> where S : AsRef<str>, P : Params, F1 : FnOnce(&Row) -> Result<T, RusqliteError> {
+    match conn.query_one(sql.as_ref(), params, row_parser) {
+        Ok(value) => Ok(value),
+        Err(err) => {
+            Err(Error::SqlError { 
+                sql: String::from(sql.as_ref()), 
+                backtrace: Backtrace::new_unresolved(),
+                err 
+            })
+        }
+    }
+}
+
+/// Queries for up to one row.
+pub fn sql_zero_or_one<S, T, P, F1>(conn: &Connection, sql: S, params: P, row_parser: F1) -> Result<Option<T>, Error> where S : AsRef<str>, P : Params, F1 : FnOnce(&Row) -> Result<T, RusqliteError> {
+    match conn.query_one(sql.as_ref(), params, row_parser).optional() {
+        Ok(value) => Ok(value),
+        Err(err) => {
+            Err(Error::SqlError { 
+                sql: String::from(sql.as_ref()), 
+                backtrace: Backtrace::new_unresolved(),
+                err 
+            })
+        }
+    }
+}
+
+
+/// Executes a single SQL statement.
+pub fn sql_execute<S, P>(conn: &Connection, sql: S, params: P) -> Result<usize, Error> where S : AsRef<str>, P : Params {
+    match conn.execute(sql.as_ref(), params) {
+        Ok(value) => Ok(value),
+        Err(err) => {
+            Err(Error::SqlError { 
+                sql: String::from(sql.as_ref()), 
+                backtrace: Backtrace::new_unresolved(), 
+                err 
+            })
+        }
+    }
+}
+
+/// Executes a batch of SQL statements.
+pub fn sql_execute_batch<S>(conn: &Connection, sql: S) -> Result<(), Error> where S : AsRef<str> {
+    match conn.execute_batch(sql.as_ref()) {
+        Ok(value) => Ok(value),
+        Err(err) => {
+            Err(Error::SqlError { 
+                sql: String::from(sql.as_ref()), 
+                backtrace: Backtrace::new_unresolved(), 
+                err 
+            })
         }
     }
 }
