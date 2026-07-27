@@ -5,12 +5,15 @@ use tauri::{Error as TauriError};
 use backtrace::Backtrace;
 
 pub enum Error {
+    /// An arbitrary error.
     AdhocError {
         msg: String,
         backtrace: Backtrace
     },
 
-    // Duplicate column name
+
+
+    /// Error for when there are two columns with the same name.
     DuplicateColumnName {
         column_name: String,
     },
@@ -40,17 +43,28 @@ pub enum Error {
         column_type: &'static str,
     },
 
+
+
+    /// Error for when a formula has invalid syntax.
     FormulaParseError {
         msg: String,
         full_formula: String,
         substring_with_error: String,
     },
+
+    /// Error for when a function in a formula is passed an incorrect type.
     FormulaTypeValidationError {
         outer_name: &'static str,
         inner_name: String,
         expected_type: String,
         received_type: String,
     },
+
+    /// Error for when a parameter in a formula has been deleted.
+    FormulaOrphanedParameterError {
+
+    },
+
     /*
     FormulaTypeConflictError {
         name: String,

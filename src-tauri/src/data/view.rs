@@ -7,6 +7,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use std::{cell, collections::{HashMap, HashSet}, mem::transmute};
 use regex::Regex;
 
+mod formula;
 mod datasource_cte;
 mod wrapper_cte;
 mod parameter;

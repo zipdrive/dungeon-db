@@ -47,10 +47,10 @@ impl Primitive {
             Self::File => "File",
             Self::Image => "Image",
             Self::Integer => "Integer",
-            Self::JsonText => "TextJson",
             Self::Number => "Number",
-            Self::PlainText => "TextPlain",
+            Self::PlainText => "Text",
             Self::MarkdownText => "TextMarkdown",
+            Self::JsonText => "TextJson",
             Self::XmlText => "TextXml"
         }
     }

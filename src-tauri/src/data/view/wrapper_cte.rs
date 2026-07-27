@@ -2,10 +2,12 @@ use std::collections::{
     HashMap,
     HashSet
 };
+use rocket::response::content;
 use rusqlite::{
     Transaction,
     params
 };
+use crate::data::view::parameter::SelectExpressions;
 use crate::util::error::Error;
 use crate::util::formula::Formula;
 use crate::data::datasource::Datasource;
@@ -33,10 +35,10 @@ struct WrapperCteConstructor {
 
 impl WrapperCteConstructor {
     /// Adds a CTE for a datasource to the SELECT statement.
-    fn add_datasource(&mut self, datasource: Datasource, is_collection: bool) {
+    fn add_datasource(&mut self, datasource: &Datasource, is_collection: bool) {
         if let Some(parent_datasource) = datasource.get_parent() {
             let parent_datasource_alias: String = parent_datasource.get_alias();
-            self.add_datasource(parent_datasource, is_collection);
+            self.add_datasource(&parent_datasource, is_collection);
             if let Some(parent_datasource_cte) = self.cte_datasource.get_mut(&parent_datasource_alias) {
                 parent_datasource_cte.child_datasources.insert(datasource.clone());
             }
@@ -44,7 +46,7 @@ impl WrapperCteConstructor {
 
         let datasource_alias: String = datasource.get_alias();
         if !self.cte_datasource.contains_key(&datasource_alias) {
-            self.cte_datasource.insert(datasource_alias, DatasourceCteConstructor::new(datasource, is_collection));
+            self.cte_datasource.insert(datasource_alias, DatasourceCteConstructor::new(datasource.clone(), is_collection));
         } else {
             if let Some(datasource_cte) = self.cte_datasource.get_mut(&datasource_alias) {
                 datasource_cte.is_always_collection = datasource_cte.is_always_collection && is_collection;
@@ -52,21 +54,62 @@ impl WrapperCteConstructor {
         }
     }
 
-    /// Adds a column on a datasource as a parameter to this SELECT statement.
-    /// Make sure to add Subreport columns after all other columns.
-    fn add_concrete_parameter(&mut self, trans: &Transaction, datasource: SelectParameterDatasource, column: column::FullMetadata, mut context: SelectParameterContext) -> Result<SelectParameter, Error> {
+    /// Adds a parameter to the wrapper.
+    pub fn add_parameter(&mut self, trans: &Transaction, mut context: SelectParameterContext, column: column::FullMetadata) -> Result<(), Error> {
         // Add in any datasources that the parameter is dependent on
         // Also, modify Collection contexts to record how the expression should be partitioned
         match &mut context {
-            SelectParameterContext::Scalar => {
-                self.add_datasource(datasource.datasource.clone(), false);
+            SelectParameterContext::Scalar { datasource, .. } => {
+                match datasource {
+                    Some(datasource) => { // Concrete parameter
+                        // Add the datasource
+                        self.add_datasource(datasource.get_datasource(), false);
+                    }
+                    None => { // Virtual parameter
+
+                    }
+                }
+            }
+            SelectParameterContext::Collection { datasource, min_depth, .. } => {
+                match datasource {
+                    Some(datasource) => { // Concrete parameter
+                        let datasource: &Datasource = datasource.get_datasource();
+                        self.add_datasource(datasource, true);
+                        
+                        // Check if the minimum depth has changed
+                        let root_oid: i64 = datasource.get_root_datasource_oid();
+                        if let Some(former_min_depth) = min_depth.get_mut(&root_oid) {
+                            if let Some(former_min_depth_inner) = former_min_depth {
+                                *former_min_depth = datasource.find_commonality(former_min_depth_inner);
+                            }
+                        } else {
+                            min_depth.insert(root_oid, datasource.get_parent());
+                        }
+                    }
+                    None => { // Virtual parameter
+
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Adds a column on a datasource as a parameter to this SELECT statement.
+    /// Make sure to add Subreport columns after all other columns.
+    fn add_concrete_parameter<P>(&mut self, trans: &Transaction, mut context: SelectParameterContext, column: column::FullMetadata) -> Result<P, Error> where P : SelectParameter {
+        // Add in any datasources that the parameter is dependent on
+        // Also, modify Collection contexts to record how the expression should be partitioned
+        match &mut context {
+            SelectParameterContext::Scalar { datasource, .. } => {
+                self.add_datasource(datasource.get_datasource(), false);
             }
             SelectParameterContext::Collection { min_depth, .. } => {
-                let datasource: Datasource = datasource.datasource.clone();
-                self.add_datasource(datasource.clone(), true);
+                let datasource: &Datasource = datasource.get_datasource();
+                self.add_datasource(datasource, true);
                 
                 // Check if the minimum depth has changed
-                let root_oid: i64 = if let Datasource::Table { oid, .. } = datasource.seek_root() { oid } else { return Err(Error::adhoc("Root datasource was not a table.")); };
+                let root_oid: i64 = datasource.get_root_datasource_oid();
                 if let Some(former_min_depth) = min_depth.get_mut(&root_oid) {
                     if let Some(former_min_depth_inner) = former_min_depth {
                         *former_min_depth = datasource.find_commonality(former_min_depth_inner);
@@ -81,74 +124,12 @@ impl WrapperCteConstructor {
         // Second item in tuple: The table OID of the associated cell
         // Third item in tuple: The column OID of the associated cell
         // Fourth item in tuple: The row OID of the associated cell
-        let cell_expr: String = format!(
-            "('{}:{}:{}:' || CAST(w.{}_OID AS TEXT))",
-            column.column_type.to_str(),
-            column.schema.oid,
-            column.oid,
-            datasource.datasource.get_alias()
-        );
 
-        // Determine the hot-reload and full-reload dependencies of the parameter
-        let (isolated_dependency_exprs, full_reload_dependency_exprs): (HashSet<String>, HashSet<String>) = {
-            match context {
-                SelectParameterContext::Scalar => {
-                    let mut isolated_dependency_exprs: HashSet<String> = HashSet::new();
-                    let mut full_reload_dependency_exprs: HashSet<String> = HashSet::new();
-                    let dependent_basis_datasource_alias = datasource.datasource.seek_basis()?.get_alias();
-                    for dependent_datasource in datasource.datasource.linearize() {
-                        let dependent_datasource_alias: String = dependent_datasource.get_alias();
-                        let dependent_datasource_table_oid: i64 = dependent_datasource.get_table_oid()?;
-                        if let Datasource::Column { parent_datasource, column: dependent_column, .. } = dependent_datasource {
-                            let dependent_cell_expr: String = format!(
-                                "('{}:{}:' || w.{}_OID)",
-                                dependent_column.schema.oid,
-                                dependent_column.oid,
-                                if dependent_column.schema.oid == dependent_datasource_table_oid {
-                                    // Row OID is on this datasource
-                                    dependent_datasource_alias.clone()
-                                } else {
-                                    // Row OID is on parent datasource
-                                    parent_datasource.get_alias()
-                                }
-                            );
-                            if dependent_basis_datasource_alias.starts_with(&dependent_datasource_alias) && dependent_datasource_alias != dependent_basis_datasource_alias {
-                                // A change to the cell won't affect the cardinality of the schema
-                                isolated_dependency_exprs.insert(dependent_cell_expr);
-                            } else {
-                                // A change to the cell will affect the cardinality of the schema
-                                full_reload_dependency_exprs.insert(dependent_cell_expr);
-                            }
-                        }
-                    }
-                    (
-                        isolated_dependency_exprs,
-                        full_reload_dependency_exprs
-                    )
-                }
-                SelectParameterContext::Collection { .. } => {
-                    let mut isolated_dependency_exprs: HashSet<String> = HashSet::new();
-                    for dependent_datasource in datasource.datasource.linearize() {
-                        if let Datasource::Column { column: dependent_column, .. } = dependent_datasource {
-                            let dependent_cell_expr: String = format!(
-                                "('{}:{}:*')",
-                                dependent_column.schema.oid,
-                                dependent_column.oid
-                            );
-                            isolated_dependency_exprs.insert(dependent_cell_expr);
-                        }
-                    }
-                    (
-                        isolated_dependency_exprs,
-                        HashSet::new()
-                    )
-                }
-            }
-        };
+        
         
         match column.column_type {
             column_type::ColumnType::Primitive(prim) => {
-                if let Some(cte) = self.cte_datasource.get_mut(&datasource.datasource.get_alias()) {
+                if let Some(cte) = self.cte_datasource.get_mut(&datasource.get_datasource().get_alias()) {
                     let cte_column = cte.add_primitive_column(column.oid);
                     let scalar_type = SelectParameterType::from(prim);
                     
@@ -156,13 +137,72 @@ impl WrapperCteConstructor {
                     let plain_label_expr: String = scalar_type.construct_plain_label_expr(&value_expr);
                     let json_label_expr: String = scalar_type.construct_json_label_expr(&value_expr);
 
-                    return Ok(SelectParameter::new_norecursion(
-                        plain_label_expr, 
-                        json_label_expr, 
-                        value_expr, 
-                        cell_expr,
-                        isolated_dependency_exprs,
-                        full_reload_dependency_exprs,
+                    // Determine the hot-reload and full-reload dependencies of the parameter
+                    let (isolated_dependency_exprs, full_reload_dependency_exprs): (HashSet<String>, HashSet<String>) = {
+                        match context {
+                            SelectParameterContext::Scalar => {
+                                let mut isolated_dependency_exprs: HashSet<String> = HashSet::new();
+                                let mut full_reload_dependency_exprs: HashSet<String> = HashSet::new();
+                                let dependent_basis_datasource_alias = datasource.get_datasource().seek_basis()?.get_alias();
+                                for dependent_datasource in datasource.get_datasource().linearize() {
+                                    let dependent_datasource_alias: String = dependent_datasource.get_alias();
+                                    let dependent_datasource_table_oid: i64 = dependent_datasource.get_table_oid()?;
+                                    if let Datasource::Column { parent_datasource, column: dependent_column, .. } = dependent_datasource {
+                                        let dependent_cell_expr: String = format!(
+                                            "('{}:{}:' || w.{}_OID)",
+                                            dependent_column.schema.oid,
+                                            dependent_column.oid,
+                                            if dependent_column.schema.oid == dependent_datasource_table_oid {
+                                                // Row OID is on this datasource
+                                                dependent_datasource_alias.clone()
+                                            } else {
+                                                // Row OID is on parent datasource
+                                                parent_datasource.get_alias()
+                                            }
+                                        );
+                                        if dependent_basis_datasource_alias.starts_with(&dependent_datasource_alias) && dependent_datasource_alias != dependent_basis_datasource_alias {
+                                            // A change to the cell won't affect the cardinality of the schema
+                                            isolated_dependency_exprs.insert(dependent_cell_expr);
+                                        } else {
+                                            // A change to the cell will affect the cardinality of the schema
+                                            full_reload_dependency_exprs.insert(dependent_cell_expr);
+                                        }
+                                    }
+                                }
+                                (
+                                    isolated_dependency_exprs,
+                                    full_reload_dependency_exprs
+                                )
+                            }
+                            SelectParameterContext::Collection { .. } => {
+                                let mut isolated_dependency_exprs: HashSet<String> = HashSet::new();
+                                for dependent_datasource in datasource.get_datasource().linearize() {
+                                    if let Datasource::Column { column: dependent_column, .. } = dependent_datasource {
+                                        let dependent_cell_expr: String = format!(
+                                            "('{}:{}:*')",
+                                            dependent_column.schema.oid,
+                                            dependent_column.oid
+                                        );
+                                        isolated_dependency_exprs.insert(dependent_cell_expr);
+                                    }
+                                }
+                                (
+                                    isolated_dependency_exprs,
+                                    HashSet::new()
+                                )
+                            }
+                        }
+                    };
+
+                    return Ok(P::new(
+                        SelectExpressions {
+                            value_expr,
+                            plain_label_expr,
+                            json_label_expr,
+                            cell_expr,
+                            isolated_dependency_exprs,
+                            full_reload_dependency_exprs
+                        },
                         scalar_type, 
                         context
                     ));
@@ -2666,6 +2706,7 @@ impl WrapperCteConstructor {
                 context.disable_window_changes();
                 let column_datasource: SelectParameterDatasource = match datasource {
                     Some(datasource) => { // Formula belongs to a table
+                        datasource.branch_norecursion()
                         let column_datasource: Datasource = Datasource::from_alias_transact(trans, datasource_alias)?
                             .substitute_root(datasource.replace_root, datasource.datasource);
                         SelectParameterDatasource {
