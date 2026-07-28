@@ -1394,7 +1394,7 @@ impl Formula {
 
 
     /// Iterates over all parameters used by the formula.
-    pub fn get_all_params(&self) -> Vec<(String, i64)> {
+    pub fn get_all_params(&self, is_collection: bool) -> Vec<(String, i64, bool)> {
         match self {
             Formula::Null 
             | Formula::LiteralBool(_) 
@@ -1419,7 +1419,7 @@ impl Formula {
             | Formula::Uppercase(inner)
             | Formula::Length(inner)
             | Formula::Not(inner) => {
-                inner.get_all_params()
+                inner.get_all_params(is_collection)
             }
             
             /*
@@ -1439,10 +1439,9 @@ impl Formula {
             | Formula::LessThan(lhs, rhs) 
             | Formula::LessThanOrEq(lhs, rhs) 
             | Formula::Glob { str: lhs, pattern: rhs } 
-            | Formula::Index { collection: lhs, index: rhs } 
             | Formula::NullIf { value: lhs, null_if_match: rhs } => {
-                lhs.get_all_params().into_iter()
-                    .chain(rhs.get_all_params().into_iter())
+                lhs.get_all_params(is_collection).into_iter()
+                    .chain(rhs.get_all_params(is_collection).into_iter())
                     .collect()
             }
 
@@ -1452,23 +1451,23 @@ impl Formula {
 
             Formula::Conditional { condition: x1, formula_if_true: x2, formula_if_false: x3 }  
             | Formula::Replace { original: x1, pattern: x2, replacement: x3 } => {
-                x1.get_all_params().into_iter()
-                    .chain(x2.get_all_params().into_iter())
-                    .chain(x3.get_all_params().into_iter())
+                x1.get_all_params(is_collection).into_iter()
+                    .chain(x2.get_all_params(is_collection).into_iter())
+                    .chain(x3.get_all_params(is_collection).into_iter())
                     .collect()
             }
 
             Formula::Substring { str: x1, start: x2, length: x3 } => {
                 match x3 {
                     Some(x3) => {
-                        x1.get_all_params().into_iter()
-                            .chain(x2.get_all_params().into_iter())
-                            .chain(x3.get_all_params().into_iter())
+                        x1.get_all_params(is_collection).into_iter()
+                            .chain(x2.get_all_params(is_collection).into_iter())
+                            .chain(x3.get_all_params(is_collection).into_iter())
                             .collect()
                     }
                     None => {
-                        x1.get_all_params().into_iter()
-                            .chain(x2.get_all_params().into_iter())
+                        x1.get_all_params(is_collection).into_iter()
+                            .chain(x2.get_all_params(is_collection).into_iter())
                             .collect()
                     }
                 }
@@ -1483,30 +1482,29 @@ impl Formula {
             | Formula::Argmax(inners) 
             | Formula::Argmin(inners) => {
                 inners.iter()
-                    .flat_map(|inner| inner.get_all_params().into_iter())
+                    .flat_map(|inner| inner.get_all_params(is_collection).into_iter())
                     .collect()
             }
 
             Formula::Switch { value, matches, formula_if_no_match } => {
-                vec![value, formula_if_no_match].iter()
-                    .flat_map(|inner| inner.get_all_params().into_iter())
+                value.get_all_params(is_collection).into_iter()
                     .chain(
                         matches.iter()
                             .flat_map(|(x1, x2)| {
-                                x1.get_all_params().into_iter()
-                                    .chain(x2.get_all_params().into_iter())
+                                x1.get_all_params(is_collection).into_iter()
+                                    .chain(x2.get_all_params(is_collection).into_iter())
                             })
                     )
+                    .chain(formula_if_no_match.get_all_params(is_collection).into_iter())
                     .collect()
             }
 
             Formula::Format { format, format_params } => {
-                vec![format].iter()
-                    .flat_map(|inner| inner.get_all_params().into_iter())
+                format.get_all_params(is_collection).into_iter()
                     .chain(
                         format_params.iter()
                             .flat_map(|inner| {
-                                inner.get_all_params().into_iter()
+                                inner.get_all_params(is_collection).into_iter()
                             })
                     )
                     .collect()
@@ -1521,19 +1519,19 @@ impl Formula {
             | Formula::Sum(collection) 
             | Formula::Max(collection) 
             | Formula::Min(collection) => {
-                collection.get_all_params().collect()
+                collection.get_all_params(true).collect()
             }
 
             Formula::Join { collection, delimiter } => {
-                collection.get_all_params().into_iter()
-                    .chain(delimiter.get_all_params().into_iter())
+                collection.get_all_params(true).into_iter()
+                    .chain(delimiter.get_all_params(is_collection).into_iter())
                     .collect()
             }
 
-            Formula::In { collection, value } => {
-                vec![value].into_iter()
-                    .flat_map(|inner| inner.get_all_params().into_iter())
-                    .chain(collection.get_all_params().into_iter())
+            Formula::In { collection, value }
+            | Formula::Index { collection, index: value } => {
+                collection.get_all_params(true).into_iter()
+                    .chain(value.get_all_params(is_collection).into_iter())
                     .collect()
             }
 
@@ -1542,7 +1540,7 @@ impl Formula {
              */
             
             Formula::Param { datasource_alias, column_oid } => {
-                vec![(datasource_alias.clone(), column_oid.clone())]
+                vec![(datasource_alias.clone(), column_oid.clone(), is_collection)]
             }
         }
     }

@@ -687,7 +687,7 @@ fn save(app: &AppHandle, save_path: &String) -> Result<(), Error> {
 
 
 /// Maps all rows of a query, then iterates over the mapped values.
-pub fn sql_map_then_iter<U, S, T, P, F1, F2>(conn: &Connection, sql: S, params: P, row_parser: F1, mut row_fn: F2) -> Result<Option<U>, Error> where S : AsRef<str>, P : Params, F1 : Fn(&Row) -> Result<T, RusqliteError>, F2 : FnMut(T) -> Result<Option<U>, Error> {
+pub fn sql_map_then_iter<T, U, S, P, F1, F2>(conn: &Connection, sql: S, params: P, row_parser: F1, mut row_fn: F2) -> Result<Option<U>, Error> where S : AsRef<str>, P : Params, F1 : Fn(&Row) -> Result<T, RusqliteError>, F2 : FnMut(T) -> Result<Option<U>, Error> {
     match conn.prepare(sql.as_ref()) {
         Ok(mut stmt) => {
             match stmt.query_map(params, row_parser) {
@@ -730,7 +730,7 @@ pub fn sql_map_then_iter<U, S, T, P, F1, F2>(conn: &Connection, sql: S, params: 
 }
 
 /// Iterates progressively over all rows of a query.
-pub fn sql_iter<U, S, T, P, F1, F2>(conn: &Connection, sql: S, params: P, row_parser: F1, mut row_fn: F2) -> Result<Option<U>, Error> where S: AsRef<str>, P : Params, F1 : Fn(&Row) -> Result<T, RusqliteError>, F2 : FnMut(T) -> Result<Option<U>, Error> {
+pub fn sql_iter<T, U, S, P, F1, F2>(conn: &Connection, sql: S, params: P, row_parser: F1, mut row_fn: F2) -> Result<Option<U>, Error> where S: AsRef<str>, P : Params, F1 : Fn(&Row) -> Result<T, RusqliteError>, F2 : FnMut(T) -> Result<Option<U>, Error> {
     match conn.prepare(sql.as_ref()) {
         Ok(mut stmt) => {
             match stmt.query(params) {
@@ -782,6 +782,59 @@ pub fn sql_iter<U, S, T, P, F1, F2>(conn: &Connection, sql: S, params: P, row_pa
         }
     }
     Ok(None)
+}
+
+/// Maps and collects all rows of a query into a Vec object.
+pub fn sql_map<T, S, P, F1, F2>(conn: &Connection, sql: S, params: P, row_parser: F1) -> Result<Vec<T>, Error> where S: AsRef<str>, P : Params, F1 : Fn(&Row) -> Result<T, RusqliteError> {
+    let mut result: Vec<T> = Vec::new();
+    match conn.prepare(sql.as_ref()) {
+        Ok(mut stmt) => {
+            match stmt.query(params) {
+                Ok(mut rows) => {
+                    loop {
+                        let Some(row) = (match rows.next() {
+                            Ok(row) => row,
+                            Err(err) => {
+                                return Err(Error::SqlError {
+                                    sql: String::from(sql.as_ref()),
+                                    backtrace: Backtrace::new_unresolved(),
+                                    err
+                                });
+                            }
+                        }) else {
+                            break;
+                        };
+
+                        result.push(match row_parser(&row) {
+                            Ok(values) => values,
+                            Err(err) => {
+                                return Err(Error::SqlError {
+                                    sql: String::from(sql.as_ref()),
+                                    backtrace: Backtrace::new_unresolved(),
+                                    err
+                                });
+                            } 
+                        });
+                    }
+                }
+                Err(err) => {
+                    return Err(Error::SqlError {
+                        sql: String::from(sql.as_ref()),
+                        backtrace: Backtrace::new_unresolved(),
+                        err
+                    });
+                }
+            }
+        }
+        Err(err) => {
+            return Err(Error::SqlError {
+                sql: String::from(sql.as_ref()),
+                backtrace: Backtrace::new_unresolved(),
+                err
+            });
+        }
+    }
+    Ok(result)
 }
 
 

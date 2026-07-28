@@ -26,7 +26,7 @@ pub struct DatasourceCteConstructor {
 
     /// Datasources that are dependent on this one.
     /// The value for a datasource is true if the child datasource is always grouped, and false if it is ever not grouped.
-    pub child_datasources: HashSet<Datasource>,
+    child_datasources: HashSet<Datasource>,
 
     /// True if the values from this CTE are always in a collection.
     /// False if the values from this CTE are ever not in a collection.
@@ -42,6 +42,20 @@ impl DatasourceCteConstructor {
             child_datasources: HashSet::new(),
             is_always_collection: is_collection
         }
+    }
+
+    /// Returns true if the datasource is a root datasource.
+    pub fn is_root_datasource(&self) -> bool {
+        if let Datasource::Table { .. } = self.datasource {
+            true 
+        } else {
+            false
+        }
+    }
+
+    /// Registers a child datasource of this datasource.
+    pub fn add_child_datasource(&mut self, datasource: &Datasource) {
+        self.child_datasources.insert(datasource.clone());
     }
 
     /// Builds the SQL statement for this CTE.
