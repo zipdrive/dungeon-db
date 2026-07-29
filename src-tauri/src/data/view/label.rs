@@ -1,22 +1,94 @@
+use std::collections::HashMap;
 use rusqlite::{
     Transaction,
     params
 };
+use crate::util::error::Error;
 use crate::util::db::{sql_map_then_iter};
 use crate::data::column;
+use crate::data::column_type;
 use crate::data::datasource::Datasource;
-use crate::data::view::wrapper_cte::WrapperCteConstructor;
+use crate::data::view::formula::FormulaReturnType;
+use crate::data::view::wrapper_cte::{WrapperCteColumns, WrapperCteConstructor, WrapperCteTableColumn};
+
+
+struct NonRecursiveLabelExpression {
+    /// The (raw) name of the column. Not JSON-safe.
+    name: String,
+
+    /// The expression for a plain label.
+    plain_label_expr: String,
+
+    /// The expression for a JSON label.
+    json_label_expr: String,
+}
+
+impl NonRecursiveLabelExpression {
+    fn construct(table_column: WrapperCteTableColumn) -> Result<Self, Error> {
+        Ok(match &table_column.column_metadata.column_type {
+            column_type::ColumnType::Primitive(prim) => {
+                let scalar_type: FormulaReturnType = FormulaReturnType::from(prim.clone());
+                let value_expr: String = format!("w.{}_COLUMN{}", table_column.datasource_alias, table_column.column_metadata.oid);
+                Self {
+                    name: table_column.column_metadata.name,
+                    plain_label_expr: scalar_type.construct_plain_label_expr(&value_expr),
+                    json_label_expr: scalar_type.construct_json_label_expr(&value_expr)
+                }
+            }
+            _ => {
+                todo!("")
+            }
+        })
+    }
+}
+
 
 pub fn construct_label_view(trans: &Transaction, schema_oid: i64) -> Result<(), Error> {
     // Add all parameters to a wrapper CTE
     let mut wrapper: WrapperCteConstructor = WrapperCteConstructor::new();
-    let keys: Vec<(Option<String>, column::FullMetadata)> = wrapper.set_schema(trans, schema_oid, true)?;
+    let mut keys: WrapperCteColumns = wrapper.set_schema(trans, schema_oid, true)?;
+    match &mut keys {
+        WrapperCteColumns::TableColumns { columns } => {
+            columns.sort_by_key(|table_column| table_column.column_metadata.ordering);
+        }
+        WrapperCteColumns::ReportColumns { columns } => {
+            columns.sort_by_key(|report_column| report_column.column_metadata.ordering);
+        }
+    }
+
+    // Add all OIDs as selected columns
+    let mut oids: HashMap<String, String> = HashMap::new();
+    for (oid_alias, oid_expr) in wrapper.get_oids().into_iter() {
+        oids.insert(oid_alias, oid_expr);
+    }
+
+    if keys.is_recursive() {
+        // Recursive CTE
+        return Err(Error::adhoc("Recursive labels are not implemented at this time!"));
+    } else {
+        // No recursive CTE
+
+    }
 
     // Map from column alias to column expression
-    let mut c: HashMap<String, (String, String)> = HashMap::new();
+    let mut c: HashMap<String, String> = HashMap::new();
+
 
     // Iterate over all columns of the schema
-    for (datasource_alias, column_metadata) in columns {
+    let mut json_keys: Vec<(String, (String, String, bool))> = Vec::new();
+    match keys {
+        WrapperCteColumns::TableColumns { columns } => {
+            for table_column in columns {
+
+            }
+        }
+        WrapperCteColumns::ReportColumns { columns } => {
+            for report_column in columns {
+
+            }
+        }
+    }
+    for (datasource_alias, column_metadata) in keys {
         match &column_metadata.column_type {
             column_type::ColumnType::Primitive(prim) => {
                 let value_expr: String = match datasource_alias {

@@ -16,6 +16,69 @@ use crate::data::view::datasource_cte::{
 use crate::data::view::formula::Formula;
 
 
+pub struct WrapperCteTableColumn {
+    /// The alias for the datasource where the column lies.
+    pub datasource_alias: String,
+
+    /// The metadata for the column.
+    pub column_metadata: column::FullMetadata,
+
+    /// For labels, these are the keys of the JSON object for this column
+    pub child_columns: Option<WrapperCteColumns>,
+
+    /// True if the column is required for the schema. False if it belongs to an inheritor table.
+    pub is_required: bool,
+
+    /// If recursive, this is the alias of the datasource that it recurses back to.
+    pub recurses_back_to: Option<String>
+}
+
+pub struct WrapperCteReportColumn {
+    /// The metadata for the column.
+    pub column_metadata: column::FullMetadata,
+
+    /// For labels, these are the keys of the JSON object for this column
+    pub child_columns: Option<WrapperCteColumns>
+}
+
+pub enum WrapperCteColumns {
+    TableColumns {
+        columns: Vec<WrapperCteTableColumn>
+    },
+    ReportColumns {
+        columns: Vec<WrapperCteReportColumn>
+    }
+}
+
+impl WrapperCteColumns {
+    /// True if there is recursion at some point. False if there is no recursion.
+    pub fn is_recursive(&self) -> bool {
+        match self {
+            Self::TableColumns { columns } => {
+                columns.iter().any(|table_column| {
+                    if let Some(_) = table_column.recurses_back_to {
+                        true 
+                    } else if let Some(child_columns) = table_column.child_columns {
+                        child_columns.is_recursive()
+                    } else {
+                        false
+                    }
+                })
+            }
+            Self::ReportColumns { columns } => {
+                columns.iter().any(|report_column| {
+                    if let Some(child_columns) = report_column.child_columns {
+                        child_columns.is_recursive()
+                    } else {
+                        false 
+                    }
+                })
+            }
+        }
+    }
+}
+
+
 pub struct WrapperCteConstructor {
     /// The number of random values.
     random_values: usize,
@@ -36,7 +99,7 @@ impl WrapperCteConstructor {
     /// Adds all columns in a schema to the wrapper CTE.
     /// If is_label is false, then inheritor columns are not added, and the return value is all columns in the schema (preceded by datasource alias).
     /// If is_label is true, then inheritor columns are added, and the return value is all primary key columns in the schema (preceded by datasource alias).
-    pub fn set_schema(&mut self, trans: &Transaction, schema_oid: i64, is_label: bool) -> Result<Vec<(Option<String>, column::FullMetadata)>, Error> {
+    pub fn set_schema(&mut self, trans: &Transaction, schema_oid: i64, is_label: bool) -> Result<WrapperCteColumns, Error> {
         match Datasource::check_default_datasource_transact(trans, schema_oid)? {
             Some(root_datasource) => {
                 self.add_all_table_parameters(
@@ -59,8 +122,8 @@ impl WrapperCteConstructor {
     }
 
     /// Adds all parameters for a table to the wrapper CTE.
-    fn add_all_table_parameters(&mut self, trans: &Transaction, root_datasource: &Datasource, is_collection: bool, include_object_columns: bool, is_label: bool) -> Result<Vec<(Option<String>, column::FullMetadata)>, Error> {
-        let mut columns: Vec<(Option<String>, column::FullMetadata)> = Vec::new();
+    fn add_all_table_parameters(&mut self, trans: &Transaction, root_datasource: &Datasource, is_collection: bool, include_object_columns: bool, is_label: bool) -> Result<WrapperCteColumns, Error> {
+        let mut columns: Vec<WrapperCteTableColumn> = Vec::new();
 
         // Add all columns to the wrapper
         sql_map_then_iter(
@@ -69,7 +132,8 @@ impl WrapperCteConstructor {
                 "
                 SELECT
                     DATASOURCE_PATH,
-                    COLUMN_OID 
+                    COLUMN_OID,
+                    IS_REQUIRED
                 FROM METADATA_SCHEMA_COLUMN_VIEW
                 WHERE SCHEMA_OID = ?1
                     {}
@@ -84,10 +148,11 @@ impl WrapperCteConstructor {
             |row| {
                 Ok((
                     row.get::<_, String>("DATASOURCE_PATH")?,
-                    row.get::<_, i64>("COLUMN_OID")?
+                    row.get::<_, i64>("COLUMN_OID")?,
+                    row.get::<_, bool>("IS_REQUIRED")?
                 ))
             },
-            |(datasource_path, column_oid)| {
+            |(datasource_path, column_oid, is_required)| {
                 // Get the metadata for the column
                 let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
 
@@ -95,31 +160,41 @@ impl WrapperCteConstructor {
                 let datasource: Datasource = root_datasource.append_path(datasource_path)?;
 
                 // Cut off infinite recursion in labels
-                if is_label && datasource.get_alias().contains(&format!("_COLUMN{}", column_metadata.oid)) {
-                    return Ok(None::<()>);
+                if is_label {
+                    for parent_datasource in datasource.linearize() {
+                        if let Datasource::Column { column: parent_column_metadata, .. } = parent_datasource {
+                            if parent_column_metadata.oid == column_metadata.oid {
+                                columns.push(WrapperCteTableColumn {
+                                    datasource_alias: datasource.get_alias(),
+                                    column_metadata,
+                                    child_columns: None,
+                                    is_required,
+                                    recurses_back_to: Some(parent_datasource.get_alias())
+                                });
+                                return Ok(None::<()>);
+                            }
+                        }
+                    }
                 }
+                    
+                // Add the parameters of the concrete column
+                let column: WrapperCteTableColumn = self.add_concrete_parameter(trans, &datasource, column_metadata, is_collection, is_label, is_required)?;
                 
                 // Check if the column is one of the parameters that need to be added
                 if !is_label || column_metadata.is_primary_key {
                     // Add the column to the list of columns to select in the top-level view
-                    columns.push((
-                        Some(datasource.get_alias()), 
-                        column_metadata.clone()
-                    ));
+                    columns.push(column);
                 }
-                    
-                // Add the parameters of the concrete column
-                self.add_concrete_parameter(trans, &datasource, column_metadata, is_collection, is_label)?;
                 Ok(None::<()>)
             }
         )?;
 
-        Ok(columns)
+        Ok(WrapperCteColumns::TableColumns { columns })
     }
 
     /// Adds all parameters for a report to the wrapper CTE.
-    fn add_all_report_parameters(&mut self, trans: &Transaction, report_oid: i64, is_collection: bool, is_label: bool) -> Result<Vec<(Option<String>, column::FullMetadata)>, Error> {
-        let mut columns: Vec<(Option<String>, column::FullMetadata)> = Vec::new();
+    fn add_all_report_parameters(&mut self, trans: &Transaction, report_oid: i64, is_collection: bool, is_label: bool) -> Result<WrapperCteColumns, Error> {
+        let mut columns: Vec<WrapperCteReportColumn> = Vec::new();
 
         // Add all columns to the wrapper
         sql_map_then_iter(
@@ -139,66 +214,94 @@ impl WrapperCteConstructor {
                 // Get the metadata for the column
                 let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
 
+                // Add the parameters of the virtual column
+                let column: WrapperCteReportColumn = self.add_virtual_parameter(trans, column_metadata, is_collection, is_label)?;
+
                 // Check if the column is one of the parameters that need to be added
                 if !is_label || column_metadata.is_primary_key {
                     // Add the column to the list of columns to select in the top-level view
-                    columns.push((
-                        None, 
-                        column_metadata.clone()
-                    ));
+                    columns.push(column);
                 }
-
-                // Add the parameters of the virtual column
-                self.add_virtual_parameter(trans, column_metadata, is_collection, is_label)?;
                 Ok(None::<()>)
             }
         )?;
 
-        Ok(columns)
+        Ok(WrapperCteColumns::ReportColumns { columns })
     }
 
     /// Adds a column on a datasource as a parameter selected by the wrapper CTE.
-    fn add_concrete_parameter(&mut self, trans: &Transaction, datasource: &Datasource, column: column::FullMetadata, is_collection: bool, is_label: bool) -> Result<(), Error> {
+    fn add_concrete_parameter(&mut self, trans: &Transaction, datasource: &Datasource, column: column::FullMetadata, is_collection: bool, is_label: bool, is_required: bool) -> Result<WrapperCteTableColumn, Error> {
         // Add in any datasources that the parameter is dependent on
-        self.add_datasource(datasource.get_datasource(), is_collection);
+        self.add_datasource(datasource, is_collection);
         
         // 
-        match column.column_type {
+        match &column.column_type {
             column_type::ColumnType::Primitive(prim) => {
                 if let Some(cte) = self.cte_datasource.get_mut(&datasource.get_alias()) {
                     cte.add_primitive_column(column.oid);
+                    return Ok(WrapperCteTableColumn {
+                        datasource_alias: datasource.get_alias(),
+                        column_metadata: column,
+                        child_columns: None,
+                        is_required,
+                        recurses_back_to: None
+                    });
+                } else {
+                    return Err(Error::adhoc(format!("Datasource {} has not been added as a CTE!", datasource.get_alias())));
                 }
             }
             column_type::ColumnType::Object { table_oid, .. } => {
                 if let Some(cte) = self.cte_datasource.get_mut(&datasource.get_alias()) {
                     cte.add_object_column(column.oid);
 
-                    // If part of a label, add all parameters for key columns to the wrapper
-                    if is_label {
-                        self.add_all_table_parameters(
-                            trans, 
-                            &datasource.append_path(format!("_COLUMN{}", column.oid))?, 
-                            is_collection, 
-                            true, 
-                            is_label
-                        )?;
-                    }
+                    return Ok(WrapperCteTableColumn {
+                        datasource_alias: datasource.get_alias(),
+                        column_metadata: column,
+                        child_columns: 
+                            // If part of a label, add all parameters for key columns to the wrapper
+                            if is_label {
+                                Some(self.add_all_table_parameters(
+                                    trans, 
+                                    &datasource.append_path(format!("_COLUMN{}", column.oid))?, 
+                                    is_collection, 
+                                    true, 
+                                    is_label
+                                )?)
+                            } else {
+                                None
+                            },
+                        is_required,
+                        recurses_back_to: None
+                    });
+                } else {
+                    return Err(Error::adhoc(format!("Datasource {} has not been added as a CTE!", datasource.get_alias())));
                 }
             }
             column_type::ColumnType::Select { table_oid, .. } => {
                 if let Some(cte) = self.cte_datasource.get_mut(&datasource.get_alias()) {
                     cte.add_select_column(column.oid);
 
-                    // If part of a label, add all parameters for key columns to the wrapper
-                    if is_label {
-                        self.add_all_table_parameters(
-                            trans, 
-                            &datasource.append_path(format!("_COLUMN{}", column.oid))?, 
-                            is_collection, 
-                            false, 
-                            is_label
-                        )?;
-                    }
+                    return Ok(WrapperCteTableColumn {
+                        datasource_alias: datasource.get_alias(),
+                        column_metadata: column,
+                        child_columns:
+                            // If part of a label, add all parameters for key columns to the wrapper
+                            if is_label {
+                                Some(self.add_all_table_parameters(
+                                    trans, 
+                                    &datasource.append_path(format!("_COLUMN{}", column.oid))?, 
+                                    is_collection, 
+                                    false, 
+                                    is_label
+                                )?)
+                            } else {
+                                None 
+                            },
+                        is_required,
+                        recurses_back_to: None
+                    });
+                } else {
+                    return Err(Error::adhoc(format!("Datasource {} has not been added as a CTE!", datasource.get_alias())));
                 }
             }
             column_type::ColumnType::Multiselect { table_oid, .. } => {
@@ -210,16 +313,27 @@ impl WrapperCteConstructor {
                 if let Some(cte) = self.cte_datasource.get_mut(&datasource.get_alias()) {
                     cte.add_multiselect_column(column.oid);
 
-                    // If part of a label, add all parameters for key columns to the wrapper
-                    if is_label {
-                        self.add_all_table_parameters(
-                            trans, 
-                            &multiselect_datasource, 
-                            true, 
-                            false, 
-                            is_label
-                        )?;
-                    }
+                    return Ok(WrapperCteTableColumn {
+                        datasource_alias: datasource.get_alias(),
+                        column_metadata: column,
+                        child_columns:
+                            // If part of a label, add all parameters for key columns to the wrapper
+                            if is_label {
+                                Some(self.add_all_table_parameters(
+                                    trans, 
+                                    &multiselect_datasource, 
+                                    true, 
+                                    false, 
+                                    is_label
+                                )?)
+                            } else {
+                                None 
+                            },
+                        is_required,
+                        recurses_back_to: None
+                    });
+                } else {
+                    return Err(Error::adhoc(format!("Datasource {} has not been added as a CTE!", datasource.get_alias())));
                 }
             }
             column_type::ColumnType::Formula { formula, .. } => {
@@ -227,6 +341,7 @@ impl WrapperCteConstructor {
                 let formula = Formula::parse(formula.clone())?;
                 
                 // Add each parameter to the formula
+                let mut params: Vec<WrapperCteTableColumn> = Vec::new();
                 for (param_datasource_alias, param_column_oid, param_is_collection) in formula.get_all_params(is_collection).into_iter() {
                     let param_datasource: Datasource = Datasource::from_alias_transact(trans, param_datasource_alias)?
                         .substitute_root(
@@ -234,54 +349,99 @@ impl WrapperCteConstructor {
                             datasource.clone()
                         );
                     let param_column: column::FullMetadata = column::FullMetadata::get_transact(trans, param_column_oid)?;
-                    self.add_concrete_parameter(trans, &param_datasource, param_column, param_is_collection, is_label)?;
+                    params.push(
+                        self.add_concrete_parameter(
+                            trans, 
+                            &param_datasource, 
+                            param_column, 
+                            param_is_collection, 
+                            is_label, 
+                            true
+                        )?
+                    );
                 }
+
+                return Ok(WrapperCteTableColumn { 
+                    datasource_alias: datasource.get_alias(),
+                    column_metadata: column, 
+                    child_columns: Some(WrapperCteColumns::TableColumns { columns: params }),
+                    is_required,
+                    recurses_back_to: None
+                });
             }
             column_type::ColumnType::Subreport { report_oid, .. } => {
-                // If part of a label, add all parameters for key columns to the wrapper
-                if is_label {
-                    self.add_all_report_parameters(
-                        trans, 
-                        report_oid, 
-                        is_collection, 
-                        is_label
-                    )?;
-                }
+                return Ok(WrapperCteTableColumn {
+                    datasource_alias: datasource.get_alias(),
+                    column_metadata: column,
+                    child_columns:
+                        // If part of a label, add all parameters for key columns to the wrapper
+                        if is_label {
+                            Some(self.add_all_report_parameters(
+                                trans, 
+                                report_oid.clone(), 
+                                is_collection, 
+                                is_label
+                            )?)
+                        } else {
+                            None 
+                        },
+                    is_required,
+                    recurses_back_to: None
+                });
             }
         }
-        Ok(())
     }
 
     /// Adds a column on a report as a parameter selected by the wrapper CTE.
-    fn add_virtual_parameter(&mut self, trans: &Transaction, column: column::FullMetadata, is_collection: bool, is_label: bool) -> Result<(), Error> {
-        match column.column_type {
+    fn add_virtual_parameter(&mut self, trans: &Transaction, column: column::FullMetadata, is_collection: bool, is_label: bool) -> Result<WrapperCteReportColumn, Error> {
+        match &column.column_type {
             column_type::ColumnType::Formula { formula, .. } => {
                 // Parse the formula
                 let formula = Formula::parse(formula.clone())?;
                 
                 // Add each parameter to the formula
+                let mut params: Vec<WrapperCteTableColumn> = Vec::new();
                 for (param_datasource_alias, param_column_oid, param_is_collection) in formula.get_all_params(is_collection).into_iter() {
                     let param_datasource: Datasource = Datasource::from_alias_transact(trans, param_datasource_alias)?;
                     let param_column: column::FullMetadata = column::FullMetadata::get_transact(trans, param_column_oid)?;
-                    self.add_concrete_parameter(trans, &param_datasource, param_column, param_is_collection, is_label)?;
+                    params.push(
+                        self.add_concrete_parameter(
+                            trans, 
+                            &param_datasource, 
+                            param_column, 
+                            param_is_collection, 
+                            is_label,
+                            true
+                        )?
+                    );
                 }
+
+                return Ok(WrapperCteReportColumn { 
+                    column_metadata: column, 
+                    child_columns: Some(WrapperCteColumns::TableColumns { columns: params }) 
+                });
             }
             column_type::ColumnType::Subreport { report_oid, .. } => {
-                // If part of a label, add all parameters for key columns to the wrapper
-                if is_label {
-                    self.add_all_report_parameters(
-                        trans, 
-                        report_oid, 
-                        is_collection, 
-                        is_label
-                    )?;
-                }
+                return Ok(WrapperCteReportColumn { 
+                    column_metadata: column, 
+                    child_columns: 
+                        // If part of a label, add all parameters for key columns to the wrapper
+                        if is_label {
+                            Some(self.add_all_report_parameters(
+                                trans, 
+                                report_oid.clone(), 
+                                is_collection, 
+                                is_label
+                            )?)
+                        } else {
+                            None 
+                        }
+                });
             }
             _ => {
                 return Err(Error::adhoc(format!("Columns of type {} need to belong to a table, not a report!", column.column_type.to_str())));
             }
         }
-        Ok(())
     }
 
     /// Adds a CTE for a datasource.
