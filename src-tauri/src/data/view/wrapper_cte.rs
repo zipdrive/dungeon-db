@@ -58,7 +58,7 @@ impl WrapperCteColumns {
                 columns.iter().any(|table_column| {
                     if let Some(_) = table_column.recurses_back_to {
                         true 
-                    } else if let Some(child_columns) = table_column.child_columns {
+                    } else if let Some(child_columns) = &table_column.child_columns {
                         child_columns.is_recursive()
                     } else {
                         false
@@ -67,7 +67,7 @@ impl WrapperCteColumns {
             }
             Self::ReportColumns { columns } => {
                 columns.iter().any(|report_column| {
-                    if let Some(child_columns) = report_column.child_columns {
+                    if let Some(child_columns) = &report_column.child_columns {
                         child_columns.is_recursive()
                     } else {
                         false 
@@ -162,7 +162,7 @@ impl WrapperCteConstructor {
                 // Cut off infinite recursion in labels
                 if is_label {
                     for parent_datasource in datasource.linearize() {
-                        if let Datasource::Column { column: parent_column_metadata, .. } = parent_datasource {
+                        if let Datasource::Column { column: parent_column_metadata, .. } = &parent_datasource {
                             if parent_column_metadata.oid == column_metadata.oid {
                                 columns.push(WrapperCteTableColumn {
                                     datasource_alias: datasource.get_alias(),
@@ -176,14 +176,17 @@ impl WrapperCteConstructor {
                         }
                     }
                 }
-                    
-                // Add the parameters of the concrete column
-                let column: WrapperCteTableColumn = self.add_concrete_parameter(trans, &datasource, column_metadata, is_collection, is_label, is_required)?;
                 
                 // Check if the column is one of the parameters that need to be added
                 if !is_label || column_metadata.is_primary_key {
+                    // Add the parameters of the concrete column
+                    let column: WrapperCteTableColumn = self.add_concrete_parameter(trans, &datasource, column_metadata, is_collection, is_label, is_required)?;
+
                     // Add the column to the list of columns to select in the top-level view
                     columns.push(column);
+                } else {
+                    // Add the parameters of the concrete column
+                    self.add_concrete_parameter(trans, &datasource, column_metadata, is_collection, is_label, is_required)?;
                 }
                 Ok(None::<()>)
             }
@@ -213,14 +216,17 @@ impl WrapperCteConstructor {
             |column_oid| {
                 // Get the metadata for the column
                 let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
-
-                // Add the parameters of the virtual column
-                let column: WrapperCteReportColumn = self.add_virtual_parameter(trans, column_metadata, is_collection, is_label)?;
-
+                
                 // Check if the column is one of the parameters that need to be added
                 if !is_label || column_metadata.is_primary_key {
+                    // Add the parameters of the virtual column
+                    let column: WrapperCteReportColumn = self.add_virtual_parameter(trans, column_metadata, is_collection, is_label)?;
+
                     // Add the column to the list of columns to select in the top-level view
                     columns.push(column);
+                } else {
+                    // Add the parameters of the virtual column
+                    self.add_virtual_parameter(trans, column_metadata, is_collection, is_label)?;
                 }
                 Ok(None::<()>)
             }
@@ -256,7 +262,6 @@ impl WrapperCteConstructor {
 
                     return Ok(WrapperCteTableColumn {
                         datasource_alias: datasource.get_alias(),
-                        column_metadata: column,
                         child_columns: 
                             // If part of a label, add all parameters for key columns to the wrapper
                             if is_label {
@@ -270,6 +275,7 @@ impl WrapperCteConstructor {
                             } else {
                                 None
                             },
+                        column_metadata: column,
                         is_required,
                         recurses_back_to: None
                     });
@@ -283,7 +289,6 @@ impl WrapperCteConstructor {
 
                     return Ok(WrapperCteTableColumn {
                         datasource_alias: datasource.get_alias(),
-                        column_metadata: column,
                         child_columns:
                             // If part of a label, add all parameters for key columns to the wrapper
                             if is_label {
@@ -297,6 +302,7 @@ impl WrapperCteConstructor {
                             } else {
                                 None 
                             },
+                        column_metadata: column,
                         is_required,
                         recurses_back_to: None
                     });
@@ -372,7 +378,6 @@ impl WrapperCteConstructor {
             column_type::ColumnType::Subreport { report_oid, .. } => {
                 return Ok(WrapperCteTableColumn {
                     datasource_alias: datasource.get_alias(),
-                    column_metadata: column,
                     child_columns:
                         // If part of a label, add all parameters for key columns to the wrapper
                         if is_label {
@@ -385,6 +390,7 @@ impl WrapperCteConstructor {
                         } else {
                             None 
                         },
+                    column_metadata: column,
                     is_required,
                     recurses_back_to: None
                 });
@@ -423,7 +429,6 @@ impl WrapperCteConstructor {
             }
             column_type::ColumnType::Subreport { report_oid, .. } => {
                 return Ok(WrapperCteReportColumn { 
-                    column_metadata: column, 
                     child_columns: 
                         // If part of a label, add all parameters for key columns to the wrapper
                         if is_label {
@@ -435,7 +440,8 @@ impl WrapperCteConstructor {
                             )?)
                         } else {
                             None 
-                        }
+                        },
+                    column_metadata: column
                 });
             }
             _ => {
@@ -467,7 +473,7 @@ impl WrapperCteConstructor {
 
     /// Gets the CTE for a datasource, if one has been generated for that datasource.
     pub fn get_datasource_cte(&self, datasource: &Datasource) -> Option<&DatasourceCteConstructor> {
-        self.cte_datasource.get(datasource)
+        self.cte_datasource.get(&datasource.get_alias())
     }
 
     /// Gets the OIDs selected from the wrapper.

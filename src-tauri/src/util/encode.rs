@@ -1,11 +1,16 @@
-/// Encodes a string to make it safe for inserting inside an SQL string.
+/// Encodes a literal string to make it safe for inserting inside a literal SQL string.
 pub fn sql_encode_string(str: &String) -> String {
     str.replace("'", "''")
 }
 
-/// Encodes a string to make it safe for inserting into a JSON double-quoted string inside an SQL string.
+/// Encodes a literal string to make it safe for inserting into a JSON double-quoted string inside a literal SQL string.
 pub fn json_encode_string(str: &String) -> String {
     str.replace("'", "''")
         .replace("\\", "\\\\")
         .replace("\"", "\\\"")
+}
+
+/// Encodes an SQL expression returning TEXT to make it safe for inserting into a JSON double-quoted string.
+pub fn json_encode_expr(expr: &String) -> String {
+    format!("REPLACE(REPLACE({expr}, '\\', '\\\\'), '\"', '\\\"')")
 }

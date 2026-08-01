@@ -1519,7 +1519,7 @@ impl Formula {
             | Formula::Sum(collection) 
             | Formula::Max(collection) 
             | Formula::Min(collection) => {
-                collection.get_all_params(true).collect()
+                collection.get_all_params(true)
             }
 
             Formula::Join { collection, delimiter } => {
