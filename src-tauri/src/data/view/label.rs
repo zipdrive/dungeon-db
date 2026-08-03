@@ -224,7 +224,7 @@ impl NonRecursiveLabelExpression {
         })
     }
 
-    fn construct_labels_for_report(report_column: WrapperCteReportColumn) -> Result<Self, Error> {
+    fn construct_labels_for_report(report_column: WrapperCteReportColumn, partition_expr: String) -> Result<Self, Error> {
         Ok(match &report_column.column_metadata.column_type {
             column_type::ColumnType::Subreport { .. } => {
                 let key_labels: Vec<Self> = match report_column.child_columns {
@@ -232,9 +232,8 @@ impl NonRecursiveLabelExpression {
                     _ => Vec::new()
                 };
 
-                let item_partition_alias: String = format!("{}_COLUMN{}", report_column.datasource_alias, report_column.column_metadata.oid);
                 let item_json_label_expr: String = Self::construct_nonpolymorphic_json_label_expr(
-                    item_partition_alias, 
+                    partition_expr.clone(), 
                     &key_labels
                 );
                 let json_label_expr: String = format!(
@@ -242,17 +241,16 @@ impl NonRecursiveLabelExpression {
 (
     '[ ' 
         || (
-            GROUP_CONCAT({item_json_label_expr}, ', ') OVER (PARTITION BY w.{}_OID)
+            GROUP_CONCAT({item_json_label_expr}, ', ') OVER (PARTITION BY {partition_expr})
         )
         || ' ]'
 )
-                    ",
-                    report_column.datasource_alias
+                    "
                 );
 
                 Self {
                     column_metadata: report_column.column_metadata,
-                    is_required: report_column.is_required,
+                    is_required: true,
                     plain_label_expr: String::from("NULL"),
                     json_nonpolymorphic_label_expr: json_label_expr.clone(),
                     json_polymorphic_label_expr: json_label_expr
@@ -284,11 +282,11 @@ impl NonRecursiveLabelExpression {
                 column_labels
             }
 
-            WrapperCteColumns::ReportColumns { columns } => {
+            WrapperCteColumns::ReportColumns { columns, partition_expr } => {
                 let mut column_labels: Vec<Self> = Vec::new();
                 for report_column in columns {
                     column_labels.push(
-                        Self::construct_labels_for_report(report_column)?
+                        Self::construct_labels_for_report(report_column, partition_expr.clone())?
                     );
                 }
                 column_labels
@@ -307,7 +305,7 @@ pub fn construct_label_view(trans: &Transaction, schema_oid: i64) -> Result<(), 
         WrapperCteColumns::TableColumns { columns } => {
             columns.sort_by_key(|table_column| table_column.column_metadata.ordering);
         }
-        WrapperCteColumns::ReportColumns { columns } => {
+        WrapperCteColumns::ReportColumns { columns, .. } => {
             columns.sort_by_key(|report_column| report_column.column_metadata.ordering);
         }
     }
@@ -361,14 +359,14 @@ pub fn construct_label_view(trans: &Transaction, schema_oid: i64) -> Result<(), 
 
                 // Add TABLE
                 c.insert(
-                    String::from("TABLE"), 
-                    format!("{}_TABLE", root_datasource.get_alias())
+                    String::from("TABLE_OID"), 
+                    format!("{}_TABLE_OID", root_datasource.get_alias())
                 );
 
                 // Add TABLE_ROW
                 c.insert(
-                    String::from("TABLE_ROW"), 
-                    format!("{}_TABLE_ROW", root_datasource.get_alias())
+                    String::from("TABLE_ROW_OID"), 
+                    format!("{}_TABLE_ROW_OID", root_datasource.get_alias())
                 );
             }
             _ => {}

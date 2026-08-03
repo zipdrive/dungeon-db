@@ -2,7 +2,7 @@ use crate::data::{column, column_type, datasource, query, schema, table};
 use crate::data::{datasource::Datasource, file, row};
 use crate::util::db::{sql_iter, sql_map_then_iter, sql_one, sql_zero_or_one, sql_execute};
 use crate::util::channel::Sender;
-use crate::util::{db, formula};
+use crate::util::db;
 use crate::util::error::Error;
 use base64::{prelude::BASE64_STANDARD as base64standard, Engine};
 use regex::Regex;

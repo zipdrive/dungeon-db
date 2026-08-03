@@ -8,7 +8,7 @@ use crate::util::error::Error;
 
 
 #[derive(Clone)]
-struct DatasourceCteColumn {
+pub struct DatasourceCteColumn {
     /// The expression for the column value.
     value_expr: String,
 
@@ -65,7 +65,7 @@ impl DatasourceCteConstructor {
             SELECT
                 -- The row OID of this row in the datasource
                 t.OID AS {}_OID
-                -- The schema OID of this row in the datasource 
+                -- The table OID and table row OID of this row in the datasource 
                 {}
                 -- Columns from this datasource 
                 {}
@@ -83,30 +83,39 @@ impl DatasourceCteConstructor {
             self.datasource.get_alias(),
 
             // Table for this datasource
-            format!(
-                ", {} AS {}_TABLE",
-                {
-                    let child_inheritor_datasources: Vec<String> = self.child_datasources.iter()
-                        .filter_map(|child_datasource| {
-                            if let Datasource::InheritorTable { .. } = child_datasource {
-                                Some(format!("{}_TABLE", child_datasource.get_alias()))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
+            {
+                let child_inheritor_datasources: Vec<String> = self.child_datasources.iter()
+                    .filter_map(|child_datasource| {
+                        if let Datasource::InheritorTable { .. } = child_datasource {
+                            Some(child_datasource.get_alias())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                let datasource_alias: String = self.datasource.get_alias();
+                format!(
+                    ", {} AS {datasource_alias}_TABLE_OID, {} AS {datasource_alias}_TABLE_ROW_OID",
                     if child_inheritor_datasources.len() > 0 {
                         format!(
                             "COALESCE({})",
-                            child_inheritor_datasources.into_iter()
-                                .fold(format!("{}", self.datasource.get_table_oid()?), |acc, e| format!("{e}, {acc}"))
+                            child_inheritor_datasources.iter()
+                                .fold(format!("{}", self.datasource.get_table_oid()?), |acc, e| format!("{e}_TABLE_OID, {acc}"))
                         )
                     } else {
                         format!("{}", self.datasource.get_table_oid()?)
+                    },
+                    if child_inheritor_datasources.len() > 0 {
+                        format!(
+                            "COALESCE({})",
+                            child_inheritor_datasources.iter()
+                                .fold(String::from("t.OID"), |acc, e| format!("{e}_TABLE_ROW_OID, {acc}"))
+                        )
+                    } else {
+                        String::from("t.OID")
                     }
-                },
-                self.datasource.get_alias()
-            ),
+                )
+            },
 
             // Columns from this datasource
             self.columns.iter()

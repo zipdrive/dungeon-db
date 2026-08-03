@@ -208,7 +208,7 @@ pub fn construct_main_view(trans: &Transaction, schema_oid: i64) -> Result<(), E
                 }
             }
         }
-        WrapperCteColumns::ReportColumns { columns: report_columns } => {
+        WrapperCteColumns::ReportColumns { columns: report_columns, .. } => {
             for report_column in report_columns {
                 match &report_column.column_metadata.column_type {
                     column_type::ColumnType::Formula { formula, .. } => {
@@ -298,6 +298,15 @@ pub fn construct_main_view(trans: &Transaction, schema_oid: i64) -> Result<(), E
             }
         }
     }
+
+    // Add row index
+    c.insert(
+        String::from("ROW_INDEX"),
+        format!(
+            "ROW_NUMBER() OVER ({})",
+            String::from("")
+        )
+    );
 
     // Build and execute the CREATE VIEW expression
     sql_execute(

@@ -154,7 +154,7 @@ impl Datasource {
     }
 
     /// Returns the datasource with a path appended.
-    pub fn append_path(&self, path: String) -> Result<Self, Error> {
+    pub fn append_path_transact(&self, conn: &Connection, path: String) -> Result<Self, Error> {
         let path: Vec<String> = path
             .split('_')
             .filter_map(|s| if s == "" { None } else { Some(String::from(s)) })

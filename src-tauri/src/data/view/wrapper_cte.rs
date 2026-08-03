@@ -46,7 +46,8 @@ pub enum WrapperCteColumns {
         columns: Vec<WrapperCteTableColumn>
     },
     ReportColumns {
-        columns: Vec<WrapperCteReportColumn>
+        columns: Vec<WrapperCteReportColumn>,
+        partition_expr: String
     }
 }
 
@@ -65,7 +66,7 @@ impl WrapperCteColumns {
                     }
                 })
             }
-            Self::ReportColumns { columns } => {
+            Self::ReportColumns { columns, .. } => {
                 columns.iter().any(|report_column| {
                     if let Some(child_columns) = &report_column.child_columns {
                         child_columns.is_recursive()
@@ -125,6 +126,28 @@ impl WrapperCteConstructor {
     fn add_all_table_parameters(&mut self, trans: &Transaction, root_datasource: &Datasource, is_collection: bool, include_object_columns: bool, is_label: bool) -> Result<WrapperCteColumns, Error> {
         let mut columns: Vec<WrapperCteTableColumn> = Vec::new();
 
+        self.add_datasource(&root_datasource, is_collection.clone());
+        if include_object_columns {
+            // Add all inheritor datasources
+            sql_map_then_iter(
+                trans,
+                format!(
+                    "
+                    SELECT 
+                        INHERITOR_DATASOURCE_PATH
+                    FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW
+                    WHERE MASTER_SCHEMA_OID = ?1
+                    "
+                ),
+                params![root_datasource.get_table_oid()?],
+                |row| row.get::<_, String>("INHERITOR_DATASOURCE_PATH"),
+                |inheritor_datasource_path| {
+                    self.add_datasource(&root_datasource.append_path_transact(trans, inheritor_datasource_path)?, is_collection.clone());
+                    Ok(None::<()>)
+                }
+            )?;
+        }
+
         // Add all columns to the wrapper
         sql_map_then_iter(
             trans, 
@@ -157,7 +180,7 @@ impl WrapperCteConstructor {
                 let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(trans, column_oid)?;
 
                 // Schema is a table, so utilize the datasource_path to determine the path to the datasource
-                let datasource: Datasource = root_datasource.append_path(datasource_path)?;
+                let datasource: Datasource = root_datasource.append_path_transact(trans, datasource_path)?;
 
                 // Cut off infinite recursion in labels
                 if is_label {
@@ -232,7 +255,13 @@ impl WrapperCteConstructor {
             }
         )?;
 
-        Ok(WrapperCteColumns::ReportColumns { columns })
+        Ok(WrapperCteColumns::ReportColumns { 
+            columns, 
+            partition_expr: match self.get_oids().iter().map(|(_, oid_expr)| oid_expr.clone()).reduce(|acc, e| format!("{acc}, {e}")) {
+                Some(oid_exprs) => oid_exprs,
+                None => String::from("NULL")
+            } 
+        })
     }
 
     /// Adds a column on a datasource as a parameter selected by the wrapper CTE.
@@ -267,7 +296,7 @@ impl WrapperCteConstructor {
                             if is_label {
                                 Some(self.add_all_table_parameters(
                                     trans, 
-                                    &datasource.append_path(format!("_COLUMN{}", column.oid))?, 
+                                    &datasource.append_path_transact(trans, format!("_COLUMN{}", column.oid))?, 
                                     is_collection, 
                                     true, 
                                     is_label
@@ -294,7 +323,7 @@ impl WrapperCteConstructor {
                             if is_label {
                                 Some(self.add_all_table_parameters(
                                     trans, 
-                                    &datasource.append_path(format!("_COLUMN{}", column.oid))?, 
+                                    &datasource.append_path_transact(trans, format!("_COLUMN{}", column.oid))?, 
                                     is_collection, 
                                     false, 
                                     is_label
@@ -312,7 +341,7 @@ impl WrapperCteConstructor {
             }
             column_type::ColumnType::Multiselect { table_oid, .. } => {
                 // Add the datasource for the OIDs of the Multiselect column
-                let multiselect_datasource = datasource.append_path(format!("_COLUMN{}", column.oid))?;
+                let multiselect_datasource = datasource.append_path_transact(trans, format!("_COLUMN{}", column.oid))?;
                 let multiselect_datasource_oid: String = format!("{}_OID", multiselect_datasource.get_alias());
                 self.add_datasource(&multiselect_datasource, true);
 

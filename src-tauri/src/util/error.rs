@@ -114,7 +114,8 @@ impl From<TauriError> for Error {
 impl Into<String> for Error {
     fn into(self) -> String {
         match self {
-            Self::AdhocError { msg, backtrace } => {
+            Self::AdhocError { msg, mut backtrace } => {
+                backtrace.resolve();
                 return format!("{msg}\n\n{backtrace:#?}");
             }
 
@@ -170,7 +171,8 @@ impl Into<String> for Error {
                 return format!("An SQLite error occurred while attempting to save the state of the database: {}", e);
             }
 
-            Self::SqlError { sql, backtrace, err } => {
+            Self::SqlError { sql, mut backtrace, err } => {
+                backtrace.resolve();
                 return format!("An error occurred while executing SQL expression:\n{sql}\n\n{err}\n\n{backtrace:#?}");
             }
 
