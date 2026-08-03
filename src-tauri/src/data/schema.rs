@@ -37,13 +37,10 @@ impl FlatListItemMetadata {
             ",
             [],
             |row| {
-                Ok::<Self, rusqlite::Error>(Self {
+                sender.send(Self {
                     oid: row.get("OID")?,
                     name: row.get("NAME")?
-                })
-            },
-            |list_item| {
-                sender.send(list_item)?;
+                })?;
                 Ok(None::<()>)
             }
         )?;
@@ -68,13 +65,10 @@ impl FlatListItemMetadata {
             ",
             [], 
             |row| {
-                Ok::<Self, rusqlite::Error>(Self {
+                sender.send(Self {
                     oid: row.get("OID")?,
                     name: row.get("NAME")?
-                })
-            },
-            |list_item| {
-                sender.send(list_item)?;
+                })?;
                 Ok(None::<()>)
             }
         )?;
@@ -128,15 +122,12 @@ impl HierarchicalListItemMetadata {
             ",
             [],
             |row| {
-                Ok(Self {
+                sender.send(Self {
                     oid: row.get("OID")?,
                     name: row.get("NAME")?,
                     master_oid: row.get("MASTER_OID")?,
                     level: row.get("LEVEL")?
-                })
-            },
-            |list_item| {
-                sender.send(list_item)?;
+                })?;
                 Ok(None::<()>)
             }
         )?;
@@ -179,15 +170,12 @@ impl HierarchicalListItemMetadata {
             ",
             [],
             |row| {
-                Ok(Self {
+                sender.send(Self {
                     oid: row.get("OID")?,
                     name: row.get("NAME")?,
                     master_oid: row.get("MASTER_OID")?,
                     level: row.get("LEVEL")?
-                })
-            },
-            |list_item| {
-                sender.send(list_item)?;
+                })?;
                 Ok(None::<()>)
             }
         )?;
@@ -247,15 +235,13 @@ impl SelectedHierarchicalListItemMetadata {
             ",
             params![table_oid],
             |row| {
-                Ok(Self {
+                let mut list_item: Self = Self {
                     oid: row.get("OID")?,
                     name: row.get("NAME")?,
                     master_oid: row.get("MASTER_OID")?,
                     level: row.get("LEVEL")?,
                     selected: false,
-                })
-            },
-            |mut list_item| {
+                };
                 if let Some(master_table_oid) = list_item.master_oid {
                     if let Some(master_row_oid) = sub_row_oids.get(&master_table_oid) {
                         if let Some(inheritor_row_oid) = sql_zero_or_one(
@@ -376,16 +362,13 @@ impl ToggledHierarchicalListItemMetadata {
             },
             params![schema_oid],
             |row| {
-                Ok(Self {
+                sender.send(Self {
                     oid: row.get("OID")?,
                     name: row.get("NAME")?,
                     master_oid: row.get("MASTER_OID")?,
                     level: row.get("LEVEL")?,
                     disabled: row.get("DISABLED")?
-                })
-            },
-            |list_item| {
-                sender.send(list_item)?;
+                })?;
                 Ok(None::<()>)
             }
         )?;
@@ -476,8 +459,8 @@ impl FullMetadata {
             WHERE INHERITOR_SCHEMA_OID = ?1 
             ",
             params![oid],
-            |row| row.get::<_, i64>(0),
-            |master_schema_oid| {
+            |row| {
+                let master_schema_oid: i64 = row.get::<_, i64>(0)?;
                 master_schema_oids.insert(master_schema_oid);
                 Ok(None::<()>)
             }
@@ -496,12 +479,8 @@ impl FullMetadata {
             ",
             params![oid], 
             |row| {
-                Ok::<(i64, bool), rusqlite::Error>((
-                    row.get("COLUMN_OID")?,
-                    row.get("SORT_ASCENDING")?,
-                ))
-            },
-            |(order_by_column_oid, order_by_column_ascending)| {
+                let order_by_column_oid: i64 = row.get("COLUMN_OID")?;
+                let order_by_column_ascending: bool = row.get("SORT_ASCENDING")?;
                 order_by_column_oids.push((order_by_column_oid, order_by_column_ascending));
                 Ok(None::<()>)
             }
@@ -761,8 +740,8 @@ impl FullMetadata {
             INNER JOIN METADATA_SCHEMA_INHERITANCE_PATH_VIEW inh ON inh.MASTER_SCHEMA_OID = f.SCHEMA_OID 
             ",
             params![Array::new(schema_oids.into_iter().map(|i| Value::Integer(i)).collect())],
-            |row| row.get::<_, i64>(0),
-            |affected_schema_oid| {
+            |row| {
+                let affected_schema_oid: i64 = row.get::<_, i64>(0)?;
                 affected_schema.push(affected_schema_oid);
                 Ok(None::<()>)
             }
@@ -782,8 +761,8 @@ impl FullMetadata {
             SELECT OID FROM METADATA_SCHEMA WHERE NOT TRASH
             ",
             [],
-            |row| row.get::<_, i64>(0),
-            |affected_schema_oid| {
+            |row| {
+                let affected_schema_oid: i64 = row.get::<_, i64>(0)?;
                 affected_schema.push(affected_schema_oid);
                 Ok(None::<()>)
             }

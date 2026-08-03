@@ -359,8 +359,8 @@ pub fn construct_label_view(trans: &Transaction, schema_oid: i64) -> Result<(), 
 
                 // Add TABLE
                 c.insert(
-                    String::from("TABLE_OID"), 
-                    format!("{}_TABLE_OID", root_datasource.get_alias())
+                    String::from("TABLE_SCHEMA_OID"), 
+                    format!("{}_TABLE_SCHEMA_OID", root_datasource.get_alias())
                 );
 
                 // Add TABLE_ROW

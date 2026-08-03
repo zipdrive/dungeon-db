@@ -62,8 +62,8 @@ impl FullMetadata {
             WHERE REPORT_OID = ?1
             ",
             params![oid],
-            |row| row.get::<_, i64>(0),
-            |group_by_column_oid| {
+            |row| {
+                let group_by_column_oid: i64 = row.get::<_, i64>(0)?;
                 group_by_column_oids.push(group_by_column_oid);
                 Ok(None::<()>)
             }

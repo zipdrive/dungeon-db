@@ -140,8 +140,8 @@ pub fn insert_transact(
         WHERE INHERITOR_SCHEMA_OID = ?1
         ",
         params![table_oid],
-        |row| row.get(0),
-        |master_schema_oid| {
+        |row| {
+            let master_schema_oid: i64 = row.get::<_, i64>(0)?;
             let master_table_name: String = format!("TABLE{master_schema_oid}");
             if trans.table_exists(Some("main"), &master_table_name)? {
                 let master_schema_row_oid: i64 = insert_transact(
@@ -197,11 +197,9 @@ pub fn insert_transact(
             AND typ.MODE NOT IN ('file', 'image')
         ",
         params![table_oid],
-        |row| Ok((
-            row.get::<_, i64>("OID")?,
-            row.get::<_, String>("DEFAULT_VALUE")?
-        )),
-        |(column_oid, default_value)| {
+        |row| {
+            let column_oid: i64 = row.get::<_, i64>("OID")?;
+            let default_value: String = row.get::<_, String>("DEFAULT_VALUE")?;
             cols.push((format!("COLUMN{column_oid}"), default_value));
             Ok(None::<()>)
         }
@@ -552,8 +550,8 @@ pub fn untrash_transact(
         WHERE INHERITOR_SCHEMA_OID = ?1
         ",
         params![table_oid],
-        |row| row.get(0),
-        |master_schema_oid| {
+        |row| {
+            let master_schema_oid: i64 = row.get::<_, i64>(0)?;
             let master_table_name: String = format!("TABLE{master_schema_oid}");
             if !completed_table_oid.contains(&master_schema_oid)
                 && trans.table_exists(Some("main"), &master_table_name)?

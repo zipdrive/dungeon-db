@@ -116,7 +116,7 @@ impl Into<String> for Error {
         match self {
             Self::AdhocError { msg, mut backtrace } => {
                 backtrace.resolve();
-                return format!("{msg}\n\n{backtrace:#?}");
+                return format!("{msg}\n\n{backtrace:?}");
             }
 
             Self::DuplicateColumnName { column_name } => {
@@ -173,7 +173,7 @@ impl Into<String> for Error {
 
             Self::SqlError { sql, mut backtrace, err } => {
                 backtrace.resolve();
-                return format!("An error occurred while executing SQL expression:\n{sql}\n\n{err}\n\n{backtrace:#?}");
+                return format!("An error occurred while executing SQL expression:\n{sql}\n\n{err}\n\n{backtrace:?}");
             }
 
             Self::RusqliteError(e) => {

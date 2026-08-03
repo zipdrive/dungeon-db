@@ -61,7 +61,7 @@ impl Hash for Datasource {
 }
 
 impl Datasource {
-    fn from_parent_and_path(parent: Self, path: &[String]) -> Result<Self, Error> {
+    fn from_parent_and_path(conn: &Connection, parent: Self, path: &[String]) -> Result<Self, Error> {
         if path.len() == 0 {
             return Ok(parent);
         } else {
@@ -71,6 +71,7 @@ impl Datasource {
             if let Some(master_caps) = master_regex.captures(next_component) {
                 let (_, [master_table_oid_str]) = master_caps.extract();
                 return Self::from_parent_and_path(
+                    conn,
                     Self::MasterTable {
                         parent_datasource: Box::new(parent),
                         table_oid: master_table_oid_str.parse::<i64>().unwrap(),
@@ -83,6 +84,7 @@ impl Datasource {
             if let Some(inheritor_caps) = inheritor_regex.captures(next_component) {
                 let (_, [inheritor_table_oid_str]) = inheritor_caps.extract();
                 return Self::from_parent_and_path(
+                    conn,
                     Self::InheritorTable {
                         parent_datasource: Box::new(parent),
                         table_oid: inheritor_table_oid_str.parse::<i64>().unwrap(),
@@ -95,8 +97,9 @@ impl Datasource {
             if let Some(column_caps) = column_regex.captures(next_component) {
                 let (_, [column_oid_str]) = column_caps.extract();
                 let column_oid: i64 = column_oid_str.parse::<i64>().unwrap();
-                let column: column::FullMetadata = column::FullMetadata::get(column_oid)?;
+                let column: column::FullMetadata = column::FullMetadata::get_transact(conn, column_oid)?;
                 return Self::from_parent_and_path(
+                    conn,
                     Self::Column {
                         parent_datasource: Box::new(parent),
                         column,
@@ -113,23 +116,8 @@ impl Datasource {
 
     /// Construct a datasource from a path.
     pub fn from_alias(alias: String) -> Result<Self, Error> {
-        let path: Vec<String> = alias.split('_').map(|s| String::from(s)).collect();
-        if path.len() == 0 {
-            return Err(Error::adhoc("Datasource cannot be empty!"));
-        }
-
-        // Check for root datasource
-        let root_regex: Regex = Regex::new(r#"^ROOT(\d+)$"#).unwrap();
-        if let Some(root_caps) = root_regex.captures(&path[0]) {
-            let (_, [root_datasource_oid_str]) = root_caps.extract();
-            let root_datasource_oid: i64 = root_datasource_oid_str.parse().unwrap();
-            let root: Self = Self::get(root_datasource_oid)?;
-            return Self::from_parent_and_path(root, &path[1..]);
-        } else {
-            return Err(Error::adhoc(
-                "Root datasource is expected to be an OID of a row in METADATA_DATASOURCE.",
-            ));
-        };
+        let conn: Connection = db::open()?;
+        Self::from_alias_transact(&conn, alias)
     }
 
     /// Construct a datasource from an alias.
@@ -145,7 +133,7 @@ impl Datasource {
             let (_, [root_datasource_oid_str]) = root_caps.extract();
             let root_datasource_oid: i64 = root_datasource_oid_str.parse().unwrap();
             let root: Self = Self::get_transact(conn, root_datasource_oid)?;
-            return Self::from_parent_and_path(root, &path[1..]);
+            return Self::from_parent_and_path(conn, root, &path[1..]);
         } else {
             return Err(Error::adhoc(
                 "Root datasource is expected to be an OID of a row in METADATA_DATASOURCE.",
@@ -162,7 +150,7 @@ impl Datasource {
         if path.len() == 0 {
             Ok(self.clone())
         } else {
-            Self::from_parent_and_path(self.clone(), &path)
+            Self::from_parent_and_path(conn, self.clone(), &path)
         }
     }
 
@@ -387,13 +375,9 @@ impl Datasource {
             ", 
             [], 
             |row| {
-                Ok((
-                    row.get::<_, i64>("OID")?,
-                    row.get::<_, i64>("TABLE_OID")?,
-                    row.get::<_, String>("LABEL")?,
-                ))
-            }, 
-            |(datasource_oid, table_oid, datasource_label)| {
+                let datasource_oid: i64 = row.get::<_, i64>("OID")?;
+                let table_oid: i64 = row.get::<_, i64>("TABLE_OID")?;
+                let datasource_label: String = row.get::<_, String>("LABEL")?;
                 sender.send(DatasourceDropdownValue {
                     value: Self::Table {
                         oid: datasource_oid,
@@ -459,9 +443,8 @@ impl Datasource {
             ",
             params![table_oid],
             |row| {
-                Ok::<(i64, String), rusqlite::Error>((row.get("OID")?, row.get("NAME")?))
-            },
-            |(master_table_oid, master_table_name)| {
+                let master_table_oid: i64 = row.get("OID")?;
+                let master_table_name: String = row.get("NAME")?;
                 let datasource_label: String = format!("MASTER: {master_table_name}");
                 sender.send(DatasourceDropdownValue {
                     value: Self::MasterTable {
@@ -488,9 +471,8 @@ impl Datasource {
             ",
             params![table_oid],
             |row| {
-                Ok::<(i64, String), rusqlite::Error>((row.get("OID")?, row.get("NAME")?))
-            },
-            |(inheritor_table_oid, inheritor_table_name)| {
+                let inheritor_table_oid: i64 = row.get("OID")?;
+                let inheritor_table_name: String = row.get("NAME")?;
                 let datasource_label: String = format!("INHERITOR: {inheritor_table_name}");
                 sender.send(DatasourceDropdownValue {
                     value: Self::InheritorTable {
@@ -585,9 +567,8 @@ impl Datasource {
             ",
             params![table_oid],
             |row| {
-                Ok((row.get::<_, i64>("OID")?, row.get::<_, String>("NAME")?))
-            },
-            |(column_oid, column_name)| {
+                let column_oid: i64 = row.get::<_, i64>("OID")?;
+                let column_name: String = row.get::<_, String>("NAME")?;
                 let parameter_path: String = format!("{}_COLUMN{column_oid}", self.get_alias());
                 sender.send(ParameterDropdownValue {
                     value: parameter_path,

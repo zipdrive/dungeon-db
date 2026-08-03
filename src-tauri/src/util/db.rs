@@ -1,5 +1,6 @@
 use crate::util::error::Error;
-use rusqlite::{Connection, Error as RusqliteError, OptionalExtension, Params, Result, Row};
+use rusqlite::{Connection, Error as RusqliteError, OptionalExtension, Params, Result, Row, RowIndex};
+use rusqlite::types::FromSql;
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
@@ -729,61 +730,6 @@ pub fn sql_map_then_iter<T, U, S, P, F1, F2>(conn: &Connection, sql: S, params: 
     Ok(None)
 }
 
-/// Iterates progressively over all rows of a query.
-pub fn sql_iter<T, U, S, P, F1, F2>(conn: &Connection, sql: S, params: P, row_parser: F1, mut row_fn: F2) -> Result<Option<U>, Error> where S: AsRef<str>, P : Params, F1 : Fn(&Row) -> Result<T, RusqliteError>, F2 : FnMut(T) -> Result<Option<U>, Error> {
-    match conn.prepare(sql.as_ref()) {
-        Ok(mut stmt) => {
-            match stmt.query(params) {
-                Ok(mut rows) => {
-                    loop {
-                        let Some(row) = (match rows.next() {
-                            Ok(row) => row,
-                            Err(err) => {
-                                return Err(Error::SqlError {
-                                    sql: String::from(sql.as_ref()),
-                                    backtrace: Backtrace::new_unresolved(),
-                                    err
-                                });
-                            }
-                        }) else {
-                            break;
-                        };
-
-                        let values: T = match row_parser(&row) {
-                            Ok(values) => values,
-                            Err(err) => {
-                                return Err(Error::SqlError {
-                                    sql: String::from(sql.as_ref()),
-                                    backtrace: Backtrace::new_unresolved(),
-                                    err
-                                });
-                            } 
-                        };
-                        if let Some(u) = row_fn(values)? {
-                            return Ok(Some(u));
-                        }
-                    }
-                }
-                Err(err) => {
-                    return Err(Error::SqlError {
-                        sql: String::from(sql.as_ref()),
-                        backtrace: Backtrace::new_unresolved(),
-                        err
-                    });
-                }
-            }
-        }
-        Err(err) => {
-            return Err(Error::SqlError {
-                sql: String::from(sql.as_ref()),
-                backtrace: Backtrace::new_unresolved(),
-                err
-            });
-        }
-    }
-    Ok(None)
-}
-
 /// Maps and collects all rows of a query into a Vec object.
 pub fn sql_map<T, S, P, F1, F2>(conn: &Connection, sql: S, params: P, row_parser: F1) -> Result<Vec<T>, Error> where S: AsRef<str>, P : Params, F1 : Fn(&Row) -> Result<T, RusqliteError> {
     let mut result: Vec<T> = Vec::new();
@@ -838,31 +784,207 @@ pub fn sql_map<T, S, P, F1, F2>(conn: &Connection, sql: S, params: P, row_parser
 }
 
 
+pub struct RowWrapper<'a> {
+    sql: String,
+    row: &'a Row<'a> 
+}
 
-/// Queries for exactly one row.
-pub fn sql_one<S, T, P, F1>(conn: &Connection, sql: S, params: P, row_parser: F1) -> Result<T, Error> where S : AsRef<str>, P : Params, F1 : FnOnce(&Row) -> Result<T, RusqliteError> {
-    match conn.query_one(sql.as_ref(), params, row_parser) {
-        Ok(value) => Ok(value),
-        Err(err) => {
-            Err(Error::SqlError { 
-                sql: String::from(sql.as_ref()), 
-                backtrace: Backtrace::new_unresolved(),
+impl<'a> RowWrapper<'a> {
+    /// Creates a new row wrapper.
+    fn new<S>(sql: &S, row: &'a Row<'a>) -> Self where S : AsRef<str> {
+        Self {
+            sql: String::from(sql.as_ref()),
+            row 
+        }
+    }
+
+    /// Gets an index from the row.
+    pub fn get<I, T>(&self, idx: I) -> Result<T, Error> where I : RowIndex, T : FromSql {
+        match self.row.get::<I, T>(idx) {
+            Ok(value) => Ok(value),
+            Err(err) => Err(Error::SqlError { 
+                sql: self.sql.clone(), 
+                backtrace: Backtrace::new_unresolved(), 
                 err 
             })
         }
     }
 }
 
-/// Queries for up to one row.
-pub fn sql_zero_or_one<S, T, P, F1>(conn: &Connection, sql: S, params: P, row_parser: F1) -> Result<Option<T>, Error> where S : AsRef<str>, P : Params, F1 : FnOnce(&Row) -> Result<T, RusqliteError> {
-    match conn.query_one(sql.as_ref(), params, row_parser).optional() {
-        Ok(value) => Ok(value),
+/// Iterates progressively over all rows of a query.
+pub fn sql_iter<U, S, P, F>(conn: &Connection, sql: S, params: P, mut row_fn: F) -> Result<Option<U>, Error> where S: AsRef<str>, P : Params, F : FnMut(&RowWrapper) -> Result<Option<U>, Error> {
+    match conn.prepare(sql.as_ref()) {
+        Ok(mut stmt) => {
+            match stmt.query(params) {
+                Ok(mut rows) => {
+                    loop {
+                        let Some(row) = (match rows.next() {
+                            Ok(row) => row,
+                            Err(err) => {
+                                return Err(Error::SqlError {
+                                    sql: String::from(sql.as_ref()),
+                                    backtrace: Backtrace::new_unresolved(),
+                                    err
+                                });
+                            }
+                        }) else {
+                            break;
+                        };
+
+                        let row_wrapped: RowWrapper = RowWrapper::new(&sql, row);
+                        if let Some(u) = row_fn(&row_wrapped)? {
+                            return Ok(Some(u));
+                        }
+                    }
+                }
+                Err(err) => {
+                    return Err(Error::SqlError {
+                        sql: String::from(sql.as_ref()),
+                        backtrace: Backtrace::new_unresolved(),
+                        err
+                    });
+                }
+            }
+        }
         Err(err) => {
-            Err(Error::SqlError { 
-                sql: String::from(sql.as_ref()), 
+            return Err(Error::SqlError {
+                sql: String::from(sql.as_ref()),
                 backtrace: Backtrace::new_unresolved(),
-                err 
-            })
+                err
+            });
+        }
+    }
+    Ok(None)
+}
+
+/// Iterates progressively over all rows of a query, collecting the mapped value from each row into a Vec.
+pub fn sql_collect<U, S, P, F>(conn: &Connection, sql: S, params: P, mut row_fn: F) -> Result<Vec<U>, Error> where S: AsRef<str>, P : Params, F : FnMut(&RowWrapper) -> Result<U, Error> {
+    match conn.prepare(sql.as_ref()) {
+        Ok(mut stmt) => {
+            match stmt.query(params) {
+                Ok(mut rows) => {
+                    let mut output: Vec<U> = Vec::new();
+                    loop {
+                        let Some(row) = (match rows.next() {
+                            Ok(row) => row,
+                            Err(err) => {
+                                return Err(Error::SqlError {
+                                    sql: String::from(sql.as_ref()),
+                                    backtrace: Backtrace::new_unresolved(),
+                                    err
+                                });
+                            }
+                        }) else {
+                            break;
+                        };
+
+                        let row_wrapped: RowWrapper = RowWrapper::new(&sql, row);
+                        output.push(row_fn(&row_wrapped)?);
+                    }
+                    return Ok(output);
+                }
+                Err(err) => {
+                    return Err(Error::SqlError {
+                        sql: String::from(sql.as_ref()),
+                        backtrace: Backtrace::new_unresolved(),
+                        err
+                    });
+                }
+            }
+        }
+        Err(err) => {
+            return Err(Error::SqlError {
+                sql: String::from(sql.as_ref()),
+                backtrace: Backtrace::new_unresolved(),
+                err
+            });
+        }
+    }
+}
+
+
+/// Queries for exactly one row.
+pub fn sql_one<S, T, P, F>(conn: &Connection, sql: S, params: P, row_fn: F) -> Result<T, Error> where S : AsRef<str>, P : Params, F : FnOnce(&RowWrapper) -> Result<T, Error> {
+    match conn.prepare(sql.as_ref()) {
+        Ok(mut stmt) => {
+            match stmt.query(params) {
+                Ok(mut rows) => {
+                    let Some(row) = (match rows.next() {
+                        Ok(row) => row,
+                        Err(err) => {
+                            return Err(Error::SqlError {
+                                sql: String::from(sql.as_ref()),
+                                backtrace: Backtrace::new_unresolved(),
+                                err
+                            });
+                        }
+                    }) else {
+                        return Err(Error::SqlError {
+                            sql: String::from(sql.as_ref()),
+                            backtrace: Backtrace::new_unresolved(),
+                            err: rusqlite::Error::QueryReturnedNoRows
+                        });
+                    };
+
+                    let row_wrapped: RowWrapper = RowWrapper::new(&sql, row);
+                    return row_fn(&row_wrapped);
+                }
+                Err(err) => {
+                    return Err(Error::SqlError {
+                        sql: String::from(sql.as_ref()),
+                        backtrace: Backtrace::new_unresolved(),
+                        err
+                    });
+                }
+            }
+        }
+        Err(err) => {
+            return Err(Error::SqlError {
+                sql: String::from(sql.as_ref()),
+                backtrace: Backtrace::new_unresolved(),
+                err
+            });
+        }
+    }
+}
+
+/// Queries for up to one row.
+pub fn sql_zero_or_one<S, T, P, F>(conn: &Connection, sql: S, params: P, row_fn: F) -> Result<Option<T>, Error> where S : AsRef<str>, P : Params, F : FnOnce(&RowWrapper) -> Result<T, Error> {
+    match conn.prepare(sql.as_ref()) {
+        Ok(mut stmt) => {
+            match stmt.query(params) {
+                Ok(mut rows) => {
+                    let Some(row) = (match rows.next() {
+                        Ok(row) => row,
+                        Err(err) => {
+                            return Err(Error::SqlError {
+                                sql: String::from(sql.as_ref()),
+                                backtrace: Backtrace::new_unresolved(),
+                                err
+                            });
+                        }
+                    }) else {
+                        return Ok(None);
+                    };
+
+                    let row_wrapped: RowWrapper = RowWrapper::new(&sql, row);
+                    return Ok(Some(row_fn(&row_wrapped)?));
+                }
+                Err(err) => {
+                    return Err(Error::SqlError {
+                        sql: String::from(sql.as_ref()),
+                        backtrace: Backtrace::new_unresolved(),
+                        err
+                    });
+                }
+            }
+        }
+        Err(err) => {
+            return Err(Error::SqlError {
+                sql: String::from(sql.as_ref()),
+                backtrace: Backtrace::new_unresolved(),
+                err
+            });
         }
     }
 }

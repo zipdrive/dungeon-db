@@ -153,16 +153,12 @@ impl DropdownValue {
                 "
             ),
             [],
-            |row| Ok((
-                row.get::<_, i64>("OID")?, 
-                row.get::<_, String>("LABEL")?
-            )),
-            |(oid, label)| {
+            |row| {
                 app.emit(PUSH_DROPDOWN_VALUE_SIGNAL, DropdownValueEmit {
                     processid: processid.clone(),
                     dropdown_value: Self { 
-                        id: oid, 
-                        name: label 
+                        id: row.get::<_, i64>("OID")?, 
+                        name: row.get::<_, String>("LABEL")? 
                     }
                 })?;
                 Ok(None::<()>)

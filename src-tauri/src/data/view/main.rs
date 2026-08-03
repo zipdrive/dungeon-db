@@ -139,8 +139,8 @@ pub fn construct_main_view(trans: &Transaction, schema_oid: i64) -> Result<(), E
                             trans,
                             format!("PRAGMA table_info(SCHEMA{report_oid}_LABEL_VIEW)"),
                             [],
-                            |row| row.get::<_, String>("name"),
-                            |subreport_column_name| {
+                            |row| {
+                                let subreport_column_name: String = row.get::<_, String>("name")?;
                                 if subreport_column_name.ends_with("_OID") {
                                     let subreport_datasource: Datasource = {
                                         let subreport_datasource_alias: String = subreport_column_name.replace("_OID", "");
@@ -224,8 +224,8 @@ pub fn construct_main_view(trans: &Transaction, schema_oid: i64) -> Result<(), E
                             trans,
                             format!("PRAGMA table_info(SCHEMA{report_oid}_LABEL_VIEW)"),
                             [],
-                            |row| row.get::<_, String>("name"),
-                            |subreport_column_name| {
+                            |row| {
+                                let subreport_column_name: String = row.get::<_, String>("name")?;
                                 if subreport_column_name.ends_with("_OID") {
                                     let subreport_datasource: Datasource = {
                                         let subreport_datasource_alias: String = subreport_column_name.replace("_OID", "");

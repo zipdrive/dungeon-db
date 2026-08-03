@@ -241,12 +241,8 @@ impl FullMetadata {
             ", 
             [], 
             |row| {
-                Ok((
-                    row.get::<_, i64>("OID")?,
-                    row.get::<_, String>("LABEL")?,
-                ))
-            }, 
-            |(value, label)| {
+                let value: i64 = row.get::<_, i64>("OID")?;
+                let label: String = row.get::<_, String>("LABEL")?;
                 sender.send(DropdownValue { label, value })?;
                 Ok(None::<()>)
             }
@@ -271,12 +267,8 @@ impl FullMetadata {
             ", 
             [], 
             |row| {
-                Ok::<(i64, String), rusqlite::Error>((
-                    row.get::<_, i64>("OID")?,
-                    row.get::<_, String>("LABEL")?,
-                ))
-            }, 
-            |(value, label)| {
+                let value: i64 = row.get::<_, i64>("OID")?;
+                let label: String = row.get::<_, String>("LABEL")?;
                 sender.send(DropdownValue { label, value })?;
                 Ok(None::<()>)
             }
@@ -302,12 +294,8 @@ impl FullMetadata {
             ), 
             [], 
             |row| {
-                Ok((
-                    row.get::<_, i64>("OID")?,
-                    row.get::<_, String>("LABEL")?,
-                ))
-            }, 
-            |(value, label)| {
+                let value: i64 = row.get::<_, i64>("OID")?;
+                let label: String = row.get::<_, String>("LABEL")?;
                 sender.send(DropdownValue { label, value })?;
                 Ok(None::<()>)
             }

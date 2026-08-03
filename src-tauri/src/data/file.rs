@@ -24,7 +24,7 @@ impl File {
 
     /// Retrieve the file with the given OID.
     pub fn get_transact(conn: &Connection, oid: i64) -> Result<Self, Error> {
-        let (oid, path) = sql_one(
+        sql_one(
             conn,
             "
             SELECT
@@ -43,16 +43,13 @@ impl File {
             ",
             params![oid],
             |row| {
-                Ok::<(i64, Option<String>), rusqlite::Error>((
-                    row.get("OID")?,
-                    row.get("FILEPATH")?,
-                ))
-            },
-        )?;
-        Ok(match path {
-            Some(path) => Self::Path { oid, path },
-            None => Self::Blob { oid },
-        })
+                let oid: i64 = row.get::<_, i64>("OID")?;
+                Ok(match row.get::<_, Option<String>>("FILEPATH")? {
+                    Some(path) => Self::Path { oid, path },
+                    None => Self::Blob { oid }
+                })
+            }
+        )
     }
 
     /// Loads the file as a URI (e.g. for an img tag).
