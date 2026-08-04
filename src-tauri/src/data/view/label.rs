@@ -4,7 +4,7 @@ use rusqlite::{
 };
 use crate::util::encode::{sql_encode_string, json_encode_expr};
 use crate::util::error::Error;
-use crate::util::db::{sql_execute};
+use crate::util::db::{sql_collect, sql_execute};
 use crate::data::column;
 use crate::data::column_type;
 use crate::data::datasource::Datasource;
@@ -17,7 +17,7 @@ struct NonRecursiveLabelExpression {
     column_metadata: column::FullMetadata,
 
     /// True if the column is required. False otherwise.
-    is_required: bool,
+    is_required_expr: String,
 
     /// The expression for a plain label.
     plain_label_expr: String,
@@ -40,7 +40,7 @@ impl NonRecursiveLabelExpression {
 
     /// Constructs an expression for a plaintext label.
     fn construct_plain_label_expr(partition_expr: String, schema_columns: &Vec<Self>) -> String {
-        let table_columns: Vec<&Self> = schema_columns.iter().filter(|table_column| table_column.is_required).collect();
+        let table_columns: Vec<&Self> = schema_columns.iter().filter(|table_column| table_column.is_required_expr == "TRUE").collect();
         if table_columns.len() == 0 {
             if partition_expr.contains(",") {
                 String::from("'N/A'")
@@ -56,7 +56,7 @@ impl NonRecursiveLabelExpression {
     
     /// Constructs an expression for a JSON object with no polymorphism.
     fn construct_nonpolymorphic_json_label_expr(partition_expr: String, schema_columns: &Vec<Self>) -> String {
-        let table_columns: Vec<&Self> = schema_columns.iter().filter(|table_column| table_column.is_required).collect();
+        let table_columns: Vec<&Self> = schema_columns.iter().filter(|table_column| table_column.is_required_expr == "TRUE").collect();
         if table_columns.len() == 0 {
             if partition_expr.contains(",") {
                 String::from("'N/A'")
@@ -64,27 +64,25 @@ impl NonRecursiveLabelExpression {
                 format!("IIF({partition_expr} IS NULL, NULL, '\"N/A\"')")
             }
         } else if table_columns.len() == 1 {
-            table_columns[0].get_json_label()
+            let json_label_expr: String = table_columns[0].get_json_label();
+            format!("IIF({}, COALESCE({json_label_expr}, 'null'), {json_label_expr})", table_columns[0].is_required_expr)
         } else {
             format!(
                 "
-(
-    '{{ '
-        || (
-            GROUP_CONCAT(({}), ', ') OVER (PARTITION BY {partition_expr})
-        )
-        || ' }}'
-)
+('{{ ' || CONCAT_WS(', ', {}) || ' }}')
                 ",
                 table_columns.iter()
                     .map(|table_column| {
                         format!(
-                            "SELECT '\"{}\": ' || {}", 
+                            "('\"{}\": ' || {})", 
                             sql_encode_string(&table_column.column_metadata.name),
-                            table_column.get_json_label()
+                            {
+                                let json_label_expr: String = table_column.get_json_label();
+                                format!("IIF({}, COALESCE({json_label_expr}, 'null'), {json_label_expr})", table_column.is_required_expr)
+                            }
                         )
                     })
-                    .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
+                    .reduce(|acc, e| format!("{acc}, {e}"))
                     .unwrap()
             )
         }
@@ -101,30 +99,32 @@ impl NonRecursiveLabelExpression {
             format!(
                 "('{{ \"' || (SELECT {} FROM METADATA_SCHEMA s WHERE s.OID = w.{partition_alias}_TABLE_SCHEMA_OID) || '\": ' || {} || ' }}')",
                 json_encode_expr(&String::from("s.NAME")),
-                table_columns[0].get_json_label()
+                {
+                    let json_label_expr: String = table_columns[0].get_json_label();
+                    format!("IIF({}, COALESCE({json_label_expr}, 'null'), {json_label_expr})", table_columns[0].is_required_expr)
+                }
             )
         } else {
             format!(
                 "
 (
-    '{{ \"' || (SELECT {} FROM METADATA_SCHEMA s WHERE s.OID = w.{partition_alias}_TABLE_SCHEMA_OID) || '\": ' 
-        || COALESCE(
-            '{{ ' || (GROUP_CONCAT(({})) OVER (PARTITION BY w.{partition_alias}_OID)) || ' }}',
-            '\"N/A\"'
-        )
-        || ' }}'
+    '{{ \"' || (SELECT {} FROM METADATA_SCHEMA s WHERE s.OID = w.{partition_alias}_TABLE_SCHEMA_OID) 
+        || '\": {{ ' || COALESCE(CONCAT_WS(', ', {}) || ' ', '') || '}} }}'
 )
                 ",
                 json_encode_expr(&String::from("s.NAME")),
                 table_columns.iter()
                     .map(|table_column| {
                         format!(
-                            "SELECT '\"{}\": ' || {}", 
+                            "('\"{}\": ' || {})", 
                             sql_encode_string(&table_column.column_metadata.name),
-                            table_column.get_json_label()
+                            {
+                                let json_label_expr: String = table_column.get_json_label();
+                                format!("IIF({}, COALESCE({json_label_expr}, 'null'), {json_label_expr})", table_column.is_required_expr)
+                            }
                         )
                     })
-                    .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
+                    .reduce(|acc, e| format!("{acc}, {e}"))
                     .unwrap()
             )
         }
@@ -141,7 +141,7 @@ impl NonRecursiveLabelExpression {
                 let json_label_expr: String = scalar_type.construct_json_label_expr(&value_expr);
                 Self {
                     column_metadata: table_column.column_metadata,
-                    is_required: table_column.is_required,
+                    is_required_expr: table_column.is_required_expr,
                     plain_label_expr: scalar_type.construct_plain_label_expr(&value_expr),
                     json_nonpolymorphic_label_expr: json_label_expr.clone(),
                     json_polymorphic_label_expr: json_label_expr
@@ -165,13 +165,18 @@ impl NonRecursiveLabelExpression {
                                     );
                                 }
                                 Some(_) => {
-                                    let json_label_expr: String = format!("IIF(w.{partition_alias} IS NULL, {}, '\"...\"')", if table_column.is_required { "'null'" } else { "NULL" });
+                                    let is_null_expr: String = format!(
+                                        "{}_COLUMN{} IS NULL", 
+                                        child_table_column.datasource_alias, 
+                                        child_table_column.column_metadata.oid
+                                    );
+                                    let json_label_expr: String = format!("IIF({is_null_expr}, IIF({}, 'null', NULL), '\"...\"')", table_column.is_required_expr);
                                     child_table_column_labels.push(Self {
-                                        plain_label_expr: format!("IIF(w.{partition_alias} IS NULL, NULL, '...')"),
+                                        plain_label_expr: format!("IIF({is_null_expr}, NULL, '...')"),
                                         json_nonpolymorphic_label_expr: json_label_expr.clone(),
                                         json_polymorphic_label_expr: json_label_expr,
                                         column_metadata: table_column.column_metadata.clone(),
-                                        is_required: table_column.is_required,
+                                        is_required_expr: table_column.is_required_expr.clone(),
                                     });
                                 }
                             }
@@ -183,7 +188,7 @@ impl NonRecursiveLabelExpression {
 
                 Self {
                     column_metadata: table_column.column_metadata,
-                    is_required: table_column.is_required,
+                    is_required_expr: table_column.is_required_expr,
                     plain_label_expr: Self::construct_plain_label_expr(
                         partition_expr.clone(), 
                         &child_table_column_labels),
@@ -226,7 +231,7 @@ impl NonRecursiveLabelExpression {
 
                 Self {
                     column_metadata: table_column.column_metadata,
-                    is_required: table_column.is_required,
+                    is_required_expr: table_column.is_required_expr,
                     plain_label_expr: String::from("NULL"),
                     json_nonpolymorphic_label_expr: json_label_expr.clone(),
                     json_polymorphic_label_expr: json_label_expr
@@ -265,7 +270,7 @@ impl NonRecursiveLabelExpression {
 
                 Self {
                     column_metadata: report_column.column_metadata,
-                    is_required: true,
+                    is_required_expr: String::from("TRUE"),
                     plain_label_expr: String::from("NULL"),
                     json_nonpolymorphic_label_expr: json_label_expr.clone(),
                     json_polymorphic_label_expr: json_label_expr

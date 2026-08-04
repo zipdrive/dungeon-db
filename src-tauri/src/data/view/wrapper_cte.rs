@@ -6,7 +6,7 @@ use rusqlite::{
     params
 };
 use crate::util::error::Error;
-use crate::util::db::{sql_map_then_iter};
+use crate::util::db::{sql_collect, sql_map_then_iter};
 use crate::data::datasource::Datasource;
 use crate::data::column;
 use crate::data::column_type;
@@ -26,8 +26,8 @@ pub struct WrapperCteTableColumn {
     /// For labels, these are the keys of the JSON object for this column
     pub child_columns: Option<WrapperCteColumns>,
 
-    /// True if the column is required for the schema. False if it belongs to an inheritor table.
-    pub is_required: bool,
+    /// Expression for if the column is required for the schema. The expression is not TRUE if it belongs to an inheritor table, but returns true if it is a key of the Object for that row.
+    pub is_required_expr: String,
 
     /// If recursive, this is the alias of the datasource that it recurses back to.
     pub recurses_back_to: Option<String>
@@ -188,10 +188,33 @@ impl WrapperCteConstructor {
                         if let Datasource::Column { column: parent_column_metadata, .. } = &parent_datasource {
                             if parent_column_metadata.oid == column_metadata.oid {
                                 columns.push(WrapperCteTableColumn {
+                                    is_required_expr: if is_required {
+                                        String::from("TRUE")
+                                    } else {
+                                        let table_schema_oid_list: String = sql_collect(
+                                                trans, 
+                                                format!(
+                                                    "
+                                                    SELECT 
+                                                        INHERITOR_SCHEMA_OID 
+                                                    FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW
+                                                    WHERE MASTER_SCHEMA_OID = ?1
+                                                    "
+                                                ), 
+                                                params![column_metadata.schema.oid], 
+                                                |row| row.get::<_, i64>("INHERITOR_SCHEMA_OID")
+                                            )?
+                                            .into_iter()
+                                            .fold(format!("{}", column_metadata.schema.oid), |acc, e| format!("{acc}, {e}"));
+                                        if table_schema_oid_list.contains(",") {
+                                            format!("w.{}_TABLE_SCHEMA_OID IN ({table_schema_oid_list})", root_datasource.get_alias()) // __TABLE_SCHEMA_OID__ is temporary and replaced by the table's schema OID in the base table
+                                        } else {
+                                            format!("w.{}_TABLE_SCHEMA_OID = {table_schema_oid_list}", root_datasource.get_alias()) // __TABLE_SCHEMA_OID__ is temporary and replaced by the table's schema OID in the base table
+                                        }
+                                    },
                                     datasource_alias: datasource.get_alias(),
                                     column_metadata,
                                     child_columns: None,
-                                    is_required,
                                     recurses_back_to: Some(parent_datasource.get_alias())
                                 });
                                 return Ok(None::<()>);
@@ -203,7 +226,11 @@ impl WrapperCteConstructor {
                 // Check if the column is one of the parameters that need to be added
                 if !is_label || column_metadata.is_primary_key {
                     // Add the parameters of the concrete column
-                    let column: WrapperCteTableColumn = self.add_concrete_parameter(trans, &datasource, column_metadata, is_collection, is_label, is_required)?;
+                    let mut column: WrapperCteTableColumn = self.add_concrete_parameter(trans, &datasource, column_metadata, is_collection, is_label, is_required)?;
+                    column.is_required_expr = column.is_required_expr.replace(
+                        "__TABLE_SCHEMA_OID__", 
+                        &format!("{}_TABLE_SCHEMA_OID", root_datasource.get_alias())
+                    );
 
                     // Add the column to the list of columns to select in the top-level view
                     columns.push(column);
@@ -268,6 +295,31 @@ impl WrapperCteConstructor {
     fn add_concrete_parameter(&mut self, trans: &Transaction, datasource: &Datasource, column: column::FullMetadata, is_collection: bool, is_label: bool, is_required: bool) -> Result<WrapperCteTableColumn, Error> {
         // Add in any datasources that the parameter is dependent on
         self.add_datasource(datasource, is_collection);
+
+        let is_required_expr: String = if is_required {
+            String::from("TRUE")
+        } else {
+            let table_schema_oid_list: String = sql_collect(
+                    trans, 
+                    format!(
+                        "
+                        SELECT 
+                            INHERITOR_SCHEMA_OID 
+                        FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW
+                        WHERE MASTER_SCHEMA_OID = ?1
+                        "
+                    ), 
+                    params![column.schema.oid], 
+                    |row| row.get::<_, i64>("INHERITOR_SCHEMA_OID")
+                )?
+                .into_iter()
+                .fold(format!("{}", column.schema.oid), |acc, e| format!("{acc}, {e}"));
+            if table_schema_oid_list.contains(",") {
+                format!("w.__TABLE_SCHEMA_OID__ IN ({table_schema_oid_list})") // __TABLE_SCHEMA_OID__ is temporary and replaced by the table's schema OID in the base table
+            } else {
+                format!("w.__TABLE_SCHEMA_OID__ = {table_schema_oid_list}") // __TABLE_SCHEMA_OID__ is temporary and replaced by the table's schema OID in the base table
+            }
+        };
         
         // 
         match &column.column_type {
@@ -278,7 +330,7 @@ impl WrapperCteConstructor {
                         datasource_alias: datasource.get_alias(),
                         column_metadata: column,
                         child_columns: None,
-                        is_required,
+                        is_required_expr,
                         recurses_back_to: None
                     });
                 } else {
@@ -305,7 +357,7 @@ impl WrapperCteConstructor {
                                 None
                             },
                         column_metadata: column,
-                        is_required,
+                        is_required_expr,
                         recurses_back_to: None
                     });
                 } else {
@@ -332,7 +384,7 @@ impl WrapperCteConstructor {
                                 None 
                             },
                         column_metadata: column,
-                        is_required,
+                        is_required_expr,
                         recurses_back_to: None
                     });
                 } else {
@@ -364,7 +416,7 @@ impl WrapperCteConstructor {
                             } else {
                                 None 
                             },
-                        is_required,
+                        is_required_expr,
                         recurses_back_to: None
                     });
                 } else {
@@ -383,24 +435,26 @@ impl WrapperCteConstructor {
                             Datasource::get_default_datasource_oid_transact(trans, datasource.get_table_oid()?)?, 
                             datasource.clone()
                         );
-                    let param_column: column::FullMetadata = column::FullMetadata::get_transact(trans, param_column_oid)?;
-                    params.push(
-                        self.add_concrete_parameter(
-                            trans, 
-                            &param_datasource, 
-                            param_column, 
-                            param_is_collection, 
-                            is_label, 
-                            true
-                        )?
-                    );
+                    let param_column: column::FullMetadata = column::FullMetadata::get_transact(trans, param_column_oid.clone())?;
+                    let mut param = self.add_concrete_parameter(
+                        trans, 
+                        &param_datasource, 
+                        param_column, 
+                        param_is_collection, 
+                        is_label, 
+                        true
+                    )?;
+                    if param.is_required_expr.contains("__TABLE_SCHEMA_OID__") {
+                        param.is_required_expr = param.is_required_expr.replace("__TABLE_SCHEMA_OID__", &format!("{}_COLUMN{param_column_oid}_TABLE_SCHEMA_OID", param_datasource.get_alias()));
+                    }
+                    params.push(param);
                 }
 
                 return Ok(WrapperCteTableColumn { 
                     datasource_alias: datasource.get_alias(),
                     column_metadata: column, 
                     child_columns: Some(WrapperCteColumns::TableColumns { columns: params }),
-                    is_required,
+                    is_required_expr,
                     recurses_back_to: None
                 });
             }
@@ -420,7 +474,7 @@ impl WrapperCteConstructor {
                             None 
                         },
                     column_metadata: column,
-                    is_required,
+                    is_required_expr,
                     recurses_back_to: None
                 });
             }
