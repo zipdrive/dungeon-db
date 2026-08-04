@@ -45,7 +45,7 @@ impl NonRecursiveLabelExpression {
             if partition_expr.contains(",") {
                 String::from("'N/A'")
             } else {
-                format!("IF({partition_expr} IS NULL, NULL, 'N/A')")
+                format!("IIF({partition_expr} IS NULL, NULL, 'N/A')")
             }
         } else if table_columns.len() == 1 {
             table_columns[0].plain_label_expr.clone()
@@ -61,7 +61,7 @@ impl NonRecursiveLabelExpression {
             if partition_expr.contains(",") {
                 String::from("'N/A'")
             } else {
-                format!("IF({partition_expr} IS NULL, NULL, '\"N/A\"')")
+                format!("IIF({partition_expr} IS NULL, NULL, '\"N/A\"')")
             }
         } else if table_columns.len() == 1 {
             table_columns[0].get_json_label()
@@ -94,12 +94,12 @@ impl NonRecursiveLabelExpression {
     fn construct_polymorphic_json_label_expr(partition_alias: String, table_columns: &Vec<Self>) -> String {
         if table_columns.len() == 0 {
             format!(
-                "('\"' || (SELECT {} FROM METADATA_SCHEMA s WHERE s.OID = w.{partition_alias}_TABLE) || '\"')",
+                "('\"' || (SELECT {} FROM METADATA_SCHEMA s WHERE s.OID = w.{partition_alias}_TABLE_SCHEMA_OID) || '\"')",
                 json_encode_expr(&String::from("s.NAME"))
             )
         } else if table_columns.len() == 1 {
             format!(
-                "('{{ \"' || (SELECT {} FROM METADATA_SCHEMA s WHERE s.OID = w.{partition_alias}_TABLE) || '\": ' || {} || ' }}')",
+                "('{{ \"' || (SELECT {} FROM METADATA_SCHEMA s WHERE s.OID = w.{partition_alias}_TABLE_SCHEMA_OID) || '\": ' || {} || ' }}')",
                 json_encode_expr(&String::from("s.NAME")),
                 table_columns[0].get_json_label()
             )
@@ -107,9 +107,10 @@ impl NonRecursiveLabelExpression {
             format!(
                 "
 (
-    '{{ \"' || (SELECT {} FROM METADATA_SCHEMA s WHERE s.OID = w.{partition_alias}_TABLE) || '\": ' 
-        || (
-            GROUP_CONCAT(({})) OVER (PARTITION BY w.{partition_alias}_OID)
+    '{{ \"' || (SELECT {} FROM METADATA_SCHEMA s WHERE s.OID = w.{partition_alias}_TABLE_SCHEMA_OID) || '\": ' 
+        || COALESCE(
+            '{{ ' || (GROUP_CONCAT(({})) OVER (PARTITION BY w.{partition_alias}_OID)) || ' }}',
+            '\"N/A\"'
         )
         || ' }}'
 )
@@ -157,9 +158,23 @@ impl NonRecursiveLabelExpression {
                     Some(WrapperCteColumns::TableColumns { columns: child_table_columns }) => {
                         let mut child_table_column_labels: Vec<Self> = Vec::new();
                         for child_table_column in child_table_columns {
-                            child_table_column_labels.push(
-                                Self::construct_labels_for_table(child_table_column)?
-                            );
+                            match child_table_column.recurses_back_to {
+                                None => {
+                                    child_table_column_labels.push(
+                                        Self::construct_labels_for_table(child_table_column)?
+                                    );
+                                }
+                                Some(_) => {
+                                    let json_label_expr: String = format!("IIF(w.{partition_alias} IS NULL, {}, '\"...\"')", if table_column.is_required { "'null'" } else { "NULL" });
+                                    child_table_column_labels.push(Self {
+                                        plain_label_expr: format!("IIF(w.{partition_alias} IS NULL, NULL, '...')"),
+                                        json_nonpolymorphic_label_expr: json_label_expr.clone(),
+                                        json_polymorphic_label_expr: json_label_expr,
+                                        column_metadata: table_column.column_metadata.clone(),
+                                        is_required: table_column.is_required,
+                                    });
+                                }
+                            }
                         }
                         child_table_column_labels
                     }
@@ -357,6 +372,12 @@ pub fn construct_label_view(trans: &Transaction, schema_oid: i64) -> Result<(), 
                     )
                 );
 
+                // Add OID
+                c.insert(
+                    String::from("OID"),
+                    format!("{}_OID", root_datasource.get_alias())
+                );
+
                 // Add TABLE
                 c.insert(
                     String::from("TABLE_SCHEMA_OID"), 
@@ -374,35 +395,33 @@ pub fn construct_label_view(trans: &Transaction, schema_oid: i64) -> Result<(), 
     }
 
     // Build and execute the CREATE VIEW expression
-    sql_execute(
-        trans,
+    let sql: String = format!(
+        "
+        CREATE VIEW IF NOT EXISTS SCHEMA{schema_oid}_LABEL_VIEW AS
+        
+        WITH {}
+        {}
+        ",
+
+        // CTEs
+        wrapper.build()?,
+
+        // Top-level SELECT statement
         format!(
             "
-            CREATE VIEW IF NOT EXISTS SCHEMA{schema_oid}_LABEL_VIEW AS
-            
-            WITH {}
-            {}
+            SELECT
+                {}
+            FROM WRAPPER w
             ",
-
-            // CTEs
-            wrapper.build()?,
-
-            // Top-level SELECT statement
-            format!(
-                "
-                SELECT
-                    {}
-                FROM WRAPPER w
-                ",
-                // Index, OIDs, and columns of the schema
-                c.iter()
-                    .map(|(column_alias, column_expression)| format!("{column_expression} AS {column_alias}"))
-                    .reduce(|acc, e| format!("{acc}, {e}"))
-                    .unwrap()
-            )
-        ),
-        []
-    )?;
+            // Index, OIDs, and columns of the schema
+            c.iter()
+                .map(|(column_alias, column_expression)| format!("{column_expression} AS {column_alias}"))
+                .reduce(|acc, e| format!("{acc}, {e}"))
+                .unwrap()
+        )
+    );
+    println!("\n{sql}\n");
+    sql_execute(trans, sql, [])?;
 
     Ok(())
 }

@@ -4,7 +4,7 @@ use rusqlite::{
     params
 };
 use crate::util::error::Error;
-use crate::util::db::{sql_map_then_iter, sql_iter, sql_execute};
+use crate::util::db::{sql_map_then_iter, sql_iter, sql_collect, sql_execute};
 use crate::data::column_type;
 use crate::data::column;
 use crate::data::datasource::Datasource;
@@ -19,11 +19,6 @@ pub fn construct_main_view(trans: &Transaction, schema_oid: i64) -> Result<(), E
 
     // Map from column alias to column expression
     let mut c: HashMap<String, String> = HashMap::new();
-
-    // Add all OIDs as selected columns
-    for (oid_alias, oid_expr) in wrapper.get_oids().into_iter() {
-        c.insert(oid_alias, oid_expr);
-    }
 
     // Iterate over all columns of the schema
     match columns {
@@ -309,30 +304,63 @@ pub fn construct_main_view(trans: &Transaction, schema_oid: i64) -> Result<(), E
     );
 
     // Build and execute the CREATE VIEW expression
-    sql_execute(
-        trans,
-        format!(
-            "
-            CREATE VIEW IF NOT EXISTS SCHEMA{schema_oid}_VIEW AS
-            
-            WITH {}
+    let sql: String = format!(
+        "
+        CREATE VIEW IF NOT EXISTS SCHEMA{schema_oid}_VIEW AS
+        
+        WITH {}
 
-            SELECT
-                {}
-            FROM WRAPPER w
-            ",
+        SELECT
+            l0.*
+            {}
+        FROM WRAPPER w
+        INNER JOIN SCHEMA{schema_oid}_LABEL_VIEW l0 ON {}
+        ",
 
-            // CTEs
-            wrapper.build()?,
+        // CTEs
+        wrapper.build()?,
 
-            // Index, OIDs, and columns of the schema
-            c.iter()
-                .map(|(column_alias, column_expression)| format!("{column_expression} AS {column_alias}"))
-                .reduce(|acc, e| format!("{acc}, {e}"))
-                .unwrap()
-        ),
-        []
-    )?;
+        // Index, OIDs, and columns of the schema
+        c.iter()
+            .map(|(column_alias, column_expression)| format!("{column_expression} AS {column_alias}"))
+            .fold(String::from(""), |acc, e| format!("{acc}, {e}")),
+
+        match Datasource::check_default_datasource_transact(trans, schema_oid.clone())? {
+            Some(root_datasource) => format!("l0.OID = w.{}_OID", root_datasource.get_alias()),
+            None => {
+                let filters: Vec<Option<String>> = sql_collect(
+                    trans,
+                    format!("PRAGMA table_info(SCHEMA{schema_oid}_LABEL_VIEW)"),
+                    [],
+                    |row| {
+                        let column_name: String = row.get::<_, String>("name")?;
+                        if column_name.ends_with("_OID") {
+                            let datasource: Datasource = {
+                                let datasource_alias: String = column_name.replace("_OID", "");
+                                Datasource::from_alias_transact(trans, datasource_alias)?
+                            };
+
+                            // Check if the OID is present in this view
+                            if let Some(datasource_cte) = wrapper.get_datasource_cte(&datasource) {
+                                if !datasource_cte.is_always_collection {
+                                    // The OID is present in the subreport and in this view, 
+                                    // so add the OID as a filter on the subreport
+                                    return Ok(Some(format!("l0.{column_name} = w.{}_OID", datasource.get_alias())));
+                                }
+                            }
+                        }
+                        Ok(None)
+                    }
+                )?;
+                match filters.into_iter().filter_map(|f| f).reduce(|acc, e| format!("{acc} AND {e}")) {
+                    Some(filters) => filters,
+                    None => String::from("FALSE")
+                }
+            }
+        }
+    );
+    println!("\n{sql}\n");
+    sql_execute(trans, sql, [])?;
 
     Ok(())
 }

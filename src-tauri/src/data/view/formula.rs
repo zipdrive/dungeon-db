@@ -116,7 +116,7 @@ impl FormulaReturnType {
             } else if self.primitive_types.contains(&column_type::Primitive::Integer) {
                 return format!("CAST({value_expr} AS TEXT)");
             } else if self.primitive_types.contains(&column_type::Primitive::Boolean) {
-                return format!("IF({value_expr}, 'true', {value_expr} IS NULL, NULL, 'false')")
+                return format!("IIF({value_expr}, 'true', {value_expr} IS NULL, NULL, 'false')")
             }
         }
 
@@ -152,7 +152,7 @@ impl FormulaReturnType {
             } else if self.primitive_types.contains(&column_type::Primitive::Integer) {
                 return format!("CAST({value_expr} AS TEXT)");
             } else if self.primitive_types.contains(&column_type::Primitive::Boolean) {
-                return format!("IF({value_expr}, 'true', {value_expr} IS NULL, NULL, 'false')")
+                return format!("IIF({value_expr}, 'true', {value_expr} IS NULL, NULL, 'false')")
             }
         }
 
@@ -1837,7 +1837,7 @@ impl Formula {
 
             Formula::Conditional { condition, formula_if_true, formula_if_false } => {
                 verify_scalar_type!(
-                    "Argument x of IF(x: Boolean, a: Any, b: Any)",
+                    "Argument x of IIF(x: Boolean, a: Any, b: Any)",
                     FormulaReturnType::from(column_type::Primitive::Boolean),
                     condition
                 );

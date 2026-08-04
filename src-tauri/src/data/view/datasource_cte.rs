@@ -95,12 +95,12 @@ impl DatasourceCteConstructor {
                     .collect();
                 let datasource_alias: String = self.datasource.get_alias();
                 format!(
-                    ", {} AS {datasource_alias}_TABLE_OID, {} AS {datasource_alias}_TABLE_ROW_OID",
+                    ", {} AS {datasource_alias}_TABLE_SCHEMA_OID, {} AS {datasource_alias}_TABLE_ROW_OID",
                     if child_inheritor_datasources.len() > 0 {
                         format!(
                             "COALESCE({})",
                             child_inheritor_datasources.iter()
-                                .fold(format!("{}", self.datasource.get_table_oid()?), |acc, e| format!("{e}_TABLE_OID, {acc}"))
+                                .fold(format!("{}", self.datasource.get_table_oid()?), |acc, e| format!("{e}_TABLE_SCHEMA_OID, {acc}"))
                         )
                     } else {
                         format!("{}", self.datasource.get_table_oid()?)

@@ -575,7 +575,7 @@ impl FullMetadata {
                                     UPDATE TABLE{} AS t SET 
                                         COLUMN{} = COALESCE(
                                             NULLIF(CAST(l.COLUMN{}_LABEL AS INTEGER), 0),
-                                            IF(l.COLUMN{}_LABEL LIKE '0%', 0, NULL)
+                                            IIF(l.COLUMN{}_LABEL LIKE '0%', 0, NULL)
                                         )
                                     FROM SCHEMA{}_VIEW l 
                                     WHERE t.OID = l.OID
@@ -597,7 +597,7 @@ impl FullMetadata {
                                     UPDATE TABLE{} AS t SET 
                                         COLUMN{} = COALESCE(
                                             NULLIF(CAST(l.COLUMN{}_LABEL AS REAL), 0.0),
-                                            IF(l.COLUMN{}_LABEL LIKE '0%', 0.0, NULL)
+                                            IIF(l.COLUMN{}_LABEL LIKE '0%', 0.0, NULL)
                                         )
                                     FROM SCHEMA{}_VIEW l 
                                     WHERE t.OID = l.OID
@@ -721,7 +721,7 @@ impl FullMetadata {
                             UPDATE TABLE{} AS t SET 
                                 COLUMN{} = l2.OID
                             FROM SCHEMA{}_VIEW l 
-                            LEFT JOIN SCHEMA{table_oid} VIEW l2 
+                            LEFT JOIN SCHEMA{table_oid}_VIEW l2 
                                 ON l2.PLAIN_LABEL = l.COLUMN{}_LABEL 
                                     OR l2.JSON_LABEL = l.COLUMN{}_LABEL 
                                     OR l2.OBJECT_LABEL = l.COLUMN{}_LABEL
