@@ -155,34 +155,7 @@ impl NonRecursiveLabelExpression {
                 let partition_expr: String = format!("w.{partition_alias}_OID");
 
                 let child_table_column_labels: Vec<Self> = match table_column.child_columns {
-                    Some(WrapperCteColumns::TableColumns { columns: child_table_columns }) => {
-                        let mut child_table_column_labels: Vec<Self> = Vec::new();
-                        for child_table_column in child_table_columns {
-                            match child_table_column.recurses_back_to {
-                                None => {
-                                    child_table_column_labels.push(
-                                        Self::construct_labels_for_table(child_table_column)?
-                                    );
-                                }
-                                Some(_) => {
-                                    let is_null_expr: String = format!(
-                                        "{}_COLUMN{} IS NULL", 
-                                        child_table_column.datasource_alias, 
-                                        child_table_column.column_metadata.oid
-                                    );
-                                    let json_label_expr: String = format!("IIF({is_null_expr}, IIF({}, 'null', NULL), '\"...\"')", table_column.is_required_expr);
-                                    child_table_column_labels.push(Self {
-                                        plain_label_expr: format!("IIF({is_null_expr}, NULL, '...')"),
-                                        json_nonpolymorphic_label_expr: json_label_expr.clone(),
-                                        json_polymorphic_label_expr: json_label_expr,
-                                        column_metadata: table_column.column_metadata.clone(),
-                                        is_required_expr: table_column.is_required_expr.clone(),
-                                    });
-                                }
-                            }
-                        }
-                        child_table_column_labels
-                    }
+                    Some(columns) => Self::construct_labels(columns)?,
                     _ => Vec::new()
                 };
 
@@ -295,9 +268,28 @@ impl NonRecursiveLabelExpression {
             WrapperCteColumns::TableColumns { columns } => {
                 let mut column_labels: Vec<Self> = Vec::new();
                 for table_column in columns {
-                    column_labels.push(
-                        Self::construct_labels_for_table(table_column)?
-                    );
+                    match table_column.recurses_back_to {
+                        None => {
+                            column_labels.push(
+                                Self::construct_labels_for_table(table_column)?
+                            );
+                        }
+                        Some(_) => {
+                            let is_null_expr: String = format!(
+                                "{}_COLUMN{} IS NULL", 
+                                table_column.datasource_alias, 
+                                table_column.column_metadata.oid
+                            );
+                            let json_label_expr: String = format!("IIF({is_null_expr}, IIF({}, 'null', NULL), '\"...\"')", table_column.is_required_expr);
+                            column_labels.push(Self {
+                                plain_label_expr: format!("IIF({is_null_expr}, NULL, '...')"),
+                                json_nonpolymorphic_label_expr: json_label_expr.clone(),
+                                json_polymorphic_label_expr: json_label_expr,
+                                column_metadata: table_column.column_metadata.clone(),
+                                is_required_expr: table_column.is_required_expr.clone(),
+                            });
+                        }
+                    }
                 }
                 column_labels
             }

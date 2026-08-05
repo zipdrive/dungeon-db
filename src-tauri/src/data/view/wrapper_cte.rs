@@ -181,47 +181,6 @@ impl WrapperCteConstructor {
 
                 // Schema is a table, so utilize the datasource_path to determine the path to the datasource
                 let datasource: Datasource = root_datasource.append_path_transact(trans, datasource_path)?;
-
-                // Cut off infinite recursion in labels
-                if is_label {
-                    for parent_datasource in datasource.linearize() {
-                        if let Datasource::Column { column: parent_column_metadata, .. } = &parent_datasource {
-                            if parent_column_metadata.oid == column_metadata.oid {
-                                columns.push(WrapperCteTableColumn {
-                                    is_required_expr: if is_required {
-                                        String::from("TRUE")
-                                    } else {
-                                        let table_schema_oid_list: String = sql_collect(
-                                                trans, 
-                                                format!(
-                                                    "
-                                                    SELECT 
-                                                        INHERITOR_SCHEMA_OID 
-                                                    FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW
-                                                    WHERE MASTER_SCHEMA_OID = ?1
-                                                    "
-                                                ), 
-                                                params![column_metadata.schema.oid], 
-                                                |row| row.get::<_, i64>("INHERITOR_SCHEMA_OID")
-                                            )?
-                                            .into_iter()
-                                            .fold(format!("{}", column_metadata.schema.oid), |acc, e| format!("{acc}, {e}"));
-                                        if table_schema_oid_list.contains(",") {
-                                            format!("w.{}_TABLE_SCHEMA_OID IN ({table_schema_oid_list})", root_datasource.get_alias()) // __TABLE_SCHEMA_OID__ is temporary and replaced by the table's schema OID in the base table
-                                        } else {
-                                            format!("w.{}_TABLE_SCHEMA_OID = {table_schema_oid_list}", root_datasource.get_alias()) // __TABLE_SCHEMA_OID__ is temporary and replaced by the table's schema OID in the base table
-                                        }
-                                    },
-                                    datasource_alias: datasource.get_alias(),
-                                    column_metadata,
-                                    child_columns: None,
-                                    recurses_back_to: Some(parent_datasource.get_alias())
-                                });
-                                return Ok(None::<()>);
-                            }
-                        }
-                    }
-                }
                 
                 // Check if the column is one of the parameters that need to be added
                 if !is_label || column_metadata.is_primary_key {
@@ -341,11 +300,34 @@ impl WrapperCteConstructor {
                 if let Some(cte) = self.cte_datasource.get_mut(&datasource.get_alias()) {
                     cte.add_object_column(column.oid);
 
+                    // Cut off infinite recursion in labels
+                    let recurses_back_to: Option<String> = if is_label {
+                        // Scan the parent datasources to see if any create a recursive loop when this column is added
+                        let mut parent_datasource_table_oids: Vec<(String, i64)> = Vec::new();
+                        for parent_datasource in datasource.linearize() {
+                            parent_datasource_table_oids.push((parent_datasource.get_alias(), parent_datasource.get_table_oid()?));
+                        }
+                        print!("{parent_datasource_table_oids:?} ");
+                        parent_datasource_table_oids.into_iter().filter_map(|(parent_datasource_alias, parent_datasource_table_oid)| {
+                                if parent_datasource_table_oid == *table_oid {
+                                    // Is recursive back to this parent datasource
+                                    Some(parent_datasource_alias)
+                                } else {
+                                    // No recursion to this parent datasource
+                                    None
+                                }
+                            })
+                            .next()
+                    } else {
+                        None 
+                    };
+                    println!("{}.COLUMN{} => {recurses_back_to:?}", datasource.get_alias(), column.oid);
+
                     return Ok(WrapperCteTableColumn {
                         datasource_alias: datasource.get_alias(),
                         child_columns: 
-                            // If part of a label, add all parameters for key columns to the wrapper
-                            if is_label {
+                            // If part of a label and is not recursive, add all parameters for key columns to the wrapper
+                            if is_label && match &recurses_back_to { Some(_) => false, None => true } {
                                 Some(self.add_all_table_parameters(
                                     trans, 
                                     &datasource.append_path_transact(trans, format!("_COLUMN{}", column.oid))?, 
@@ -358,7 +340,7 @@ impl WrapperCteConstructor {
                             },
                         column_metadata: column,
                         is_required_expr,
-                        recurses_back_to: None
+                        recurses_back_to
                     });
                 } else {
                     return Err(Error::adhoc(format!("Datasource {} has not been added as a CTE!", datasource.get_alias())));
@@ -368,11 +350,34 @@ impl WrapperCteConstructor {
                 if let Some(cte) = self.cte_datasource.get_mut(&datasource.get_alias()) {
                     cte.add_select_column(column.oid);
 
+                    // Cut off infinite recursion in labels
+                    let recurses_back_to: Option<String> = if is_label {
+                        // Scan the parent datasources to see if any create a recursive loop when this column is added
+                        let mut parent_datasource_table_oids: Vec<(String, i64)> = Vec::new();
+                        for parent_datasource in datasource.linearize() {
+                            parent_datasource_table_oids.push((parent_datasource.get_alias(), parent_datasource.get_table_oid()?));
+                        }
+                        print!("{parent_datasource_table_oids:?} ");
+                        parent_datasource_table_oids.into_iter().filter_map(|(parent_datasource_alias, parent_datasource_table_oid)| {
+                                if parent_datasource_table_oid == *table_oid {
+                                    // Is recursive back to this parent datasource
+                                    Some(parent_datasource_alias)
+                                } else {
+                                    // No recursion to this parent datasource
+                                    None
+                                }
+                            })
+                            .next()
+                    } else {
+                        None 
+                    };
+                    println!("{}.COLUMN{} => {recurses_back_to:?}", datasource.get_alias(), column.oid);
+
                     return Ok(WrapperCteTableColumn {
                         datasource_alias: datasource.get_alias(),
                         child_columns:
-                            // If part of a label, add all parameters for key columns to the wrapper
-                            if is_label {
+                            // If part of a label and not recursive, add all parameters for key columns to the wrapper
+                            if is_label && match &recurses_back_to { Some(_) => false, None => true } {
                                 Some(self.add_all_table_parameters(
                                     trans, 
                                     &datasource.append_path_transact(trans, format!("_COLUMN{}", column.oid))?, 
@@ -385,7 +390,7 @@ impl WrapperCteConstructor {
                             },
                         column_metadata: column,
                         is_required_expr,
-                        recurses_back_to: None
+                        recurses_back_to
                     });
                 } else {
                     return Err(Error::adhoc(format!("Datasource {} has not been added as a CTE!", datasource.get_alias())));
@@ -400,12 +405,35 @@ impl WrapperCteConstructor {
                 if let Some(cte) = self.cte_datasource.get_mut(&datasource.get_alias()) {
                     cte.add_multiselect_column(column.oid);
 
+                    // Cut off infinite recursion in labels
+                    let recurses_back_to: Option<String> = if is_label {
+                        // Scan the parent datasources to see if any create a recursive loop when this column is added
+                        let mut parent_datasource_table_oids: Vec<(String, i64)> = Vec::new();
+                        for parent_datasource in datasource.linearize() {
+                            parent_datasource_table_oids.push((parent_datasource.get_alias(), parent_datasource.get_table_oid()?));
+                        }
+                        print!("{parent_datasource_table_oids:?} ");
+                        parent_datasource_table_oids.into_iter().filter_map(|(parent_datasource_alias, parent_datasource_table_oid)| {
+                                if parent_datasource_table_oid == *table_oid {
+                                    // Is recursive back to this parent datasource
+                                    Some(parent_datasource_alias)
+                                } else {
+                                    // No recursion to this parent datasource
+                                    None
+                                }
+                            })
+                            .next()
+                    } else {
+                        None 
+                    };
+                    println!("{}.COLUMN{} => {recurses_back_to:?}", datasource.get_alias(), column.oid);
+
                     return Ok(WrapperCteTableColumn {
                         datasource_alias: datasource.get_alias(),
                         column_metadata: column,
                         child_columns:
                             // If part of a label, add all parameters for key columns to the wrapper
-                            if is_label {
+                            if is_label && match &recurses_back_to { Some(_) => false, None => true } {
                                 Some(self.add_all_table_parameters(
                                     trans, 
                                     &multiselect_datasource, 
@@ -417,43 +445,46 @@ impl WrapperCteConstructor {
                                 None 
                             },
                         is_required_expr,
-                        recurses_back_to: None
+                        recurses_back_to
                     });
                 } else {
                     return Err(Error::adhoc(format!("Datasource {} has not been added as a CTE!", datasource.get_alias())));
                 }
             }
             column_type::ColumnType::Formula { formula, .. } => {
-                // Parse the formula
-                let formula = Formula::parse(formula.clone())?;
-                
-                // Add each parameter to the formula
-                let mut params: Vec<WrapperCteTableColumn> = Vec::new();
-                for (param_datasource_alias, param_column_oid, param_is_collection) in formula.get_all_params(is_collection).into_iter() {
-                    let param_datasource: Datasource = Datasource::from_alias_transact(trans, param_datasource_alias)?
-                        .substitute_root(
-                            Datasource::get_default_datasource_oid_transact(trans, datasource.get_table_oid()?)?, 
-                            datasource.clone()
-                        );
-                    let param_column: column::FullMetadata = column::FullMetadata::get_transact(trans, param_column_oid.clone())?;
-                    let mut param = self.add_concrete_parameter(
-                        trans, 
-                        &param_datasource, 
-                        param_column, 
-                        param_is_collection, 
-                        is_label, 
-                        true
-                    )?;
-                    if param.is_required_expr.contains("__TABLE_SCHEMA_OID__") {
-                        param.is_required_expr = param.is_required_expr.replace("__TABLE_SCHEMA_OID__", &format!("{}_COLUMN{param_column_oid}_TABLE_SCHEMA_OID", param_datasource.get_alias()));
-                    }
-                    params.push(param);
-                }
-
                 return Ok(WrapperCteTableColumn { 
+                    child_columns: if !is_label {
+                        // Parse the formula
+                        let formula = Formula::parse(formula.clone())?;
+                        
+                        // Add each parameter to the formula
+                        let mut params: Vec<WrapperCteTableColumn> = Vec::new();
+                        for (param_datasource_alias, param_column_oid, param_is_collection) in formula.get_all_params(is_collection).into_iter() {
+                            let param_datasource: Datasource = Datasource::from_alias_transact(trans, param_datasource_alias)?
+                                .substitute_root(
+                                    Datasource::get_default_datasource_oid_transact(trans, datasource.get_table_oid()?)?, 
+                                    datasource.clone()
+                                );
+                            let param_column: column::FullMetadata = column::FullMetadata::get_transact(trans, param_column_oid.clone())?;
+                            let mut param = self.add_concrete_parameter(
+                                trans, 
+                                &param_datasource, 
+                                param_column, 
+                                param_is_collection, 
+                                is_label, 
+                                true
+                            )?;
+                            if param.is_required_expr.contains("__TABLE_SCHEMA_OID__") {
+                                param.is_required_expr = param.is_required_expr.replace("__TABLE_SCHEMA_OID__", &format!("{}_COLUMN{param_column_oid}_TABLE_SCHEMA_OID", param_datasource.get_alias()));
+                            }
+                            params.push(param);
+                        }
+                        Some(WrapperCteColumns::TableColumns { columns: params })
+                    } else {
+                        None
+                    },
                     datasource_alias: datasource.get_alias(),
                     column_metadata: column, 
-                    child_columns: Some(WrapperCteColumns::TableColumns { columns: params }),
                     is_required_expr,
                     recurses_back_to: None
                 });
