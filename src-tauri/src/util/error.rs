@@ -13,6 +13,13 @@ pub enum Error {
 
 
 
+    /// An error for a feature that is intended but has not yet been implemented.
+    NotImplementedError {
+        msg: String 
+    },
+
+
+
     /// Error for when there are two columns with the same name.
     DuplicateColumnName {
         column_name: String,
@@ -117,6 +124,10 @@ impl Into<String> for Error {
             Self::AdhocError { msg, mut backtrace } => {
                 backtrace.resolve();
                 return format!("{msg}\n\n{backtrace:?}");
+            }
+
+            Self::NotImplementedError { msg } => {
+                return msg;
             }
 
             Self::DuplicateColumnName { column_name } => {

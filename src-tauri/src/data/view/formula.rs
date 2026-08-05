@@ -1,8 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 use regex::Regex;
 use rusqlite::{Connection};
+use crate::util::encode::{json_encode_string, sql_encode_string};
 use crate::util::error::Error;
-use crate::data::{column, column_type};
+use crate::data::column;
+use crate::data::column_type;
+use crate::data::datasource::Datasource;
 
 #[derive(Clone)]
 pub struct FormulaReturnType {
@@ -196,7 +199,9 @@ pub enum Formula {
     LiteralFloat(f64),
     LiteralString(String),
     LiteralArray(Vec<Formula>),
-    RandomInt,
+    RandomInt {
+        id: Option<usize>
+    },
 
     And(Box<Formula>, Box<Formula>),
     Or(Box<Formula>, Box<Formula>),
@@ -957,7 +962,7 @@ impl Formula {
                     regular_fn_name,
                     &close_parenthesis_regex,
                 )?;
-                return Self::parse_dependent_expr(full_str, &after_fn_close, Formula::RandomInt);
+                return Self::parse_dependent_expr(full_str, &after_fn_close, Formula::RandomInt { id: None });
             } else if regular_fn_name == "abs" {
                 // Absolute value of number
 
@@ -1393,6 +1398,307 @@ impl Formula {
     }
 
 
+    /// Assigns an ID to each distinct random value in the formula.
+    pub fn assign_random_value_ids(&mut self, random_value_count: &mut usize) {
+        match self {
+            Formula::RandomInt { id } => {
+                *id = Some(random_value_count.clone());
+                *random_value_count = *random_value_count + 1;
+            }
+
+            Formula::Null 
+            | Formula::LiteralBool(_) 
+            | Formula::LiteralFloat(_) 
+            | Formula::LiteralInt(_) 
+            | Formula::LiteralString(_) => {}
+            
+            /*
+             * Single-parameter functions
+             */
+
+            Formula::Wrap(inner)
+            | Formula::Round(inner)
+            | Formula::Ceiling(inner)
+            | Formula::Floor(inner)
+            | Formula::Sign(inner)
+            | Formula::Abs(inner)
+            | Formula::Lowercase(inner)
+            | Formula::Uppercase(inner)
+            | Formula::Length(inner)
+            | Formula::Not(inner) => {
+                inner.assign_random_value_ids(random_value_count);
+            }
+            
+            /*
+             * Two-parameter operation functions
+             */
+
+            Formula::Add(lhs, rhs) 
+            | Formula::Subtract(lhs, rhs) 
+            | Formula::Multiply(lhs, rhs) 
+            | Formula::Modulo(lhs, rhs) 
+            | Formula::Divide(lhs, rhs) 
+            | Formula::Exponent(lhs, rhs) 
+            | Formula::Concat(lhs, rhs) 
+            | Formula::And(lhs, rhs) 
+            | Formula::Or(lhs, rhs) 
+            | Formula::Eq(lhs, rhs) 
+            | Formula::LessThan(lhs, rhs) 
+            | Formula::LessThanOrEq(lhs, rhs) 
+            | Formula::Glob { str: lhs, pattern: rhs } 
+            | Formula::NullIf { value: lhs, null_if_match: rhs } => {
+                lhs.assign_random_value_ids(random_value_count);
+                rhs.assign_random_value_ids(random_value_count);
+            }
+
+            /*
+             * Three-parameter functions
+             */
+
+            Formula::Conditional { condition: x1, formula_if_true: x2, formula_if_false: x3 }  
+            | Formula::Replace { original: x1, pattern: x2, replacement: x3 } => {
+                x1.assign_random_value_ids(random_value_count);
+                x2.assign_random_value_ids(random_value_count);
+                x3.assign_random_value_ids(random_value_count);
+            }
+
+            Formula::Substring { str: x1, start: x2, length: x3 } => {
+                x1.assign_random_value_ids(random_value_count);
+                x2.assign_random_value_ids(random_value_count);
+                if let Some(x3) = x3 {
+                    x3.assign_random_value_ids(random_value_count);
+                }
+            }
+
+            /*
+             * Arbitrary parameter functions
+             */
+
+            Formula::LiteralArray(inners) 
+            | Formula::Coalesce(inners) 
+            | Formula::Argmax(inners) 
+            | Formula::Argmin(inners) => {
+                for inner in inners.iter_mut() {
+                    inner.assign_random_value_ids(random_value_count);
+                }
+            }
+
+            Formula::Switch { value, matches, formula_if_no_match } => {
+                value.assign_random_value_ids(random_value_count);
+                for (x1, x2) in matches.iter_mut() {
+                    x1.assign_random_value_ids(random_value_count);
+                    x2.assign_random_value_ids(random_value_count);
+                }
+                formula_if_no_match.assign_random_value_ids(random_value_count);
+            }
+
+            Formula::Format { format, format_params } => {
+                format.assign_random_value_ids(random_value_count);
+                for format_param in format_params.iter_mut() {
+                    format_param.assign_random_value_ids(random_value_count);
+                }
+            }
+
+            /*
+             * Aggregation functions
+             */
+
+            Formula::Count(collection)
+            | Formula::Average(collection) 
+            | Formula::Sum(collection) 
+            | Formula::Max(collection) 
+            | Formula::Min(collection) => {
+                collection.assign_random_value_ids(random_value_count);
+            }
+
+            Formula::Join { collection, delimiter } => {
+                collection.assign_random_value_ids(random_value_count);
+                delimiter.assign_random_value_ids(random_value_count);
+            }
+
+            Formula::In { collection, value }
+            | Formula::Index { collection, index: value } => {
+                collection.assign_random_value_ids(random_value_count);
+                value.assign_random_value_ids(random_value_count);
+            }
+
+            /*
+             * Parameter
+             */
+            
+            Formula::Param { datasource_alias, column_oid } => {
+                
+            }
+        }
+    }
+
+    /// Replaces a parameter with a formula.
+    pub fn replace_param_with_formula(&mut self, datasource_alias: &String, column_oid: &i64, replacement: &Formula) -> Option<Formula> {
+        match self {
+            Formula::Null 
+            | Formula::LiteralBool(_) 
+            | Formula::LiteralFloat(_) 
+            | Formula::LiteralInt(_) 
+            | Formula::LiteralString(_)
+            | Formula::RandomInt { .. } => {}
+            
+            /*
+             * Single-parameter functions
+             */
+
+            Formula::Wrap(inner)
+            | Formula::Round(inner)
+            | Formula::Ceiling(inner)
+            | Formula::Floor(inner)
+            | Formula::Sign(inner)
+            | Formula::Abs(inner)
+            | Formula::Lowercase(inner)
+            | Formula::Uppercase(inner)
+            | Formula::Length(inner)
+            | Formula::Not(inner) => {
+                if let Some(new_inner) = inner.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                    *inner = Box::new(new_inner);
+                }
+            }
+            
+            /*
+             * Two-parameter operation functions
+             */
+
+            Formula::Add(lhs, rhs) 
+            | Formula::Subtract(lhs, rhs) 
+            | Formula::Multiply(lhs, rhs) 
+            | Formula::Modulo(lhs, rhs) 
+            | Formula::Divide(lhs, rhs) 
+            | Formula::Exponent(lhs, rhs) 
+            | Formula::Concat(lhs, rhs) 
+            | Formula::And(lhs, rhs) 
+            | Formula::Or(lhs, rhs) 
+            | Formula::Eq(lhs, rhs) 
+            | Formula::LessThan(lhs, rhs) 
+            | Formula::LessThanOrEq(lhs, rhs) 
+            | Formula::Glob { str: lhs, pattern: rhs } 
+            | Formula::NullIf { value: lhs, null_if_match: rhs } => {
+                if let Some(new_lhs) = lhs.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                    *lhs = Box::new(new_lhs);
+                }
+                if let Some(new_rhs) = rhs.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                    *rhs = Box::new(new_rhs);
+                }
+            }
+
+            /*
+             * Three-parameter functions
+             */
+
+            Formula::Conditional { condition: x1, formula_if_true: x2, formula_if_false: x3 }  
+            | Formula::Replace { original: x1, pattern: x2, replacement: x3 } => {
+                if let Some(new_x1) = x1.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                    *x1 = Box::new(new_x1);
+                }
+                if let Some(new_x2) = x2.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                    *x2 = Box::new(new_x2);
+                }
+                if let Some(new_x3) = x3.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                    *x3 = Box::new(new_x3);
+                }
+            }
+
+            Formula::Substring { str: x1, start: x2, length: x3 } => {
+                if let Some(new_x1) = x1.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                    *x1 = Box::new(new_x1);
+                }
+                if let Some(new_x2) = x2.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                    *x2 = Box::new(new_x2);
+                }
+                if let Some(x3) = x3 {
+                    if let Some(new_x3) = x3.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                        *x3 = Box::new(new_x3);
+                    }
+                }
+            }
+
+            /*
+             * Arbitrary parameter functions
+             */
+
+            Formula::LiteralArray(inners) 
+            | Formula::Coalesce(inners) 
+            | Formula::Argmax(inners) 
+            | Formula::Argmin(inners) => {
+                for inner in inners.iter_mut() {
+                    if let Some(new_inner) = inner.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                        *inner = new_inner;
+                    }
+                }
+            }
+
+            Formula::Switch { value, matches, formula_if_no_match } => {
+                if let Some(new_value) = value.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                    *value = Box::new(new_value);
+                }
+                for (x1, x2) in matches.iter_mut() {
+                    if let Some(new_x1) = x1.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                        *x1 = new_x1;
+                    }
+                    if let Some(new_x2) = x2.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                        *x2 = new_x2;
+                    }
+                }
+                if let Some(new_formula_if_no_match) = formula_if_no_match.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                    *formula_if_no_match = Box::new(new_formula_if_no_match);
+                }
+            }
+
+            Formula::Format { format, format_params } => {
+                if let Some(new_format) = format.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                    *format = Box::new(new_format);
+                }
+                for format_param in format_params.iter_mut() {
+                    if let Some(new_format_param) = format_param.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                        *format_param = new_format_param;
+                    }
+                }
+            }
+
+            /*
+             * Aggregation functions
+             */
+
+            Formula::Count(collection)
+            | Formula::Average(collection) 
+            | Formula::Sum(collection) 
+            | Formula::Max(collection) 
+            | Formula::Min(collection) => {
+                if let Some(new_collection) = collection.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                    *collection = Box::new(new_collection);
+                }
+            }
+
+            Formula::Join { collection, delimiter: value }
+            | Formula::In { collection, value }
+            | Formula::Index { collection, index: value } => {
+                if let Some(new_collection) = collection.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                    *collection = Box::new(new_collection);
+                }
+                if let Some(new_value) = value.replace_param_with_formula(datasource_alias, column_oid, replacement) {
+                    *value = Box::new(new_value);
+                }
+            }
+
+            /*
+             * Parameter
+             */
+            
+            Formula::Param { datasource_alias: param_datasource_alias, column_oid: param_column_oid } => {
+                if *datasource_alias == *param_datasource_alias && *column_oid == *param_column_oid {
+                    return Some(replacement.clone());
+                }
+            }
+        }
+        return None;
+    }
+    
     /// Iterates over all parameters used by the formula.
     pub fn get_all_params(&self, is_collection: bool) -> Vec<(String, i64, bool)> {
         match self {
@@ -1401,7 +1707,7 @@ impl Formula {
             | Formula::LiteralFloat(_) 
             | Formula::LiteralInt(_) 
             | Formula::LiteralString(_) 
-            | Formula::RandomInt => {
+            | Formula::RandomInt { .. } => {
                 Vec::new()
             }
             
@@ -1572,7 +1878,7 @@ impl Formula {
             Formula::LiteralFloat(_) => FormulaReturnType::from(column_type::Primitive::Number),
             Formula::LiteralInt(_) => FormulaReturnType::from(column_type::Primitive::Integer),
             Formula::LiteralString(_) => FormulaReturnType::from(column_type::Primitive::PlainText),
-            Formula::RandomInt => FormulaReturnType::from(column_type::Primitive::Integer),
+            Formula::RandomInt { .. } => FormulaReturnType::from(column_type::Primitive::Integer),
             
             /*
              * Single-parameter functions
@@ -1622,7 +1928,7 @@ impl Formula {
 
             Formula::Lowercase(inner) => {
                 verify_scalar_type!(
-                    "Argument x of UPPER(x: Text)",
+                    "Argument x of LOWER(x: Text)",
                     FormulaReturnType::from(column_type::Primitive::PlainText),
                     inner 
                 )
@@ -2074,7 +2380,7 @@ impl Formula {
             Self::NullIf { .. } => String::from("NULLIF<_T: Any>(x: _T, y: Any) -> _T"),
             Self::Or(_, _) => String::from("OR(lhs: Boolean"),
             Self::Param { .. } => String::from("PARAM"),
-            Self::RandomInt => String::from("RANDOM() -> Integer"),
+            Self::RandomInt { .. } => String::from("RANDOM() -> Integer"),
             Self::Replace { .. } => String::from("REPLACE(str: Text, pattern: Text, replacement: Text) -> Text"),
             Self::Round(_) => String::from("ROUND(x: Number) -> Integer"),
             Self::Sign(_) => String::from("SIGN(x: Number) -> Integer"),
@@ -2085,5 +2391,625 @@ impl Formula {
             Self::Uppercase(_) => String::from("UPPER<_T: Text>(x: _T) -> _T"),
             Self::Wrap(inner) => inner.to_string(),
         }
+    }
+}
+
+
+
+enum CollectionSlice {
+    /// No slicing will be performed.
+    None,
+
+    /// The n-th value in the collection.
+    Index {
+        /// The expression for the n-th value in the collection.
+        index_expr: String
+    }
+}
+
+enum FormulaExpressionContext {
+    /// A scalar value.
+    Scalar,
+
+    /// A collection of values.
+    Collection {
+        /// How the collection is sliced, if at all.
+        slice: CollectionSlice,
+
+        /// The expression used to filter the collection.
+        filter_expr: Option<String>,
+
+        /// The first item in the tuple is the expression that is sorted over.
+        /// The second item in the tuple is true if the order is ascending, and false if descending.
+        order_exprs: Vec<(String, bool)>,
+
+        /// The datasource representing the minimum depth excluded from the grouping.
+        /// The keys are the root datasource OIDs.
+        min_depth: HashMap<i64, Option<Datasource>>,
+
+        /// True if changes to the window (e.g. filters, ordering, indexing) are disabled. False if modifications are still permitted.
+        window_changes_disabled: bool 
+    }
+}
+
+impl FormulaExpressionContext {
+    /// Wraps an expression in the context.
+    fn wrap(&self, inner_expr: String) -> String {
+        match self {
+            Self::Scalar => inner_expr,
+            Self::Collection { slice, filter_expr, order_exprs, min_depth, window_changes_disabled } => {
+                format!(
+                    "({} {} OVER ({} {}))",
+
+                    // Wraps the inner expression in the window function
+                    match slice {
+                        CollectionSlice::Index { index_expr } => format!("NTH_VALUE({inner_expr}, {index_expr} + 1)"),
+                        _ => inner_expr,
+                    },
+
+                    // Filters based on the filter expression
+                    match filter_expr {
+                        Some(filter_expr) => format!("FILTER (WHERE {filter_expr})"),
+                        None => String::from("")
+                    },
+
+                    // Partition based on the minimum datasource depths that are excluded
+                    match min_depth.values()
+                        .filter_map(|d| if let Some(d) = d { Some(format!("{}_OID", d.get_alias())) } else { None })
+                        .reduce(|acc, e| format!("{acc}, {e}")) {
+                        Some(partition_exprs) => format!("PARTITION BY {partition_exprs}"),
+                        None => String::from("")
+                    },
+
+                    // Order by the ordering expressions
+                    match order_exprs.iter()
+                        .map(|(order_expr, order_dir)| format!("{order_expr} {}", if *order_dir { "ASC" } else { "DESC" }))
+                        .reduce(|acc, e| format!("{acc}, {e}")) {
+                        Some(ordering_exprs) => format!("ORDER BY {ordering_exprs}"),
+                        None => String::from("")
+                    }
+                )
+            }
+        }
+    }
+
+    /// Disables changes to the window.
+    fn disable_window_changes(&mut self) {
+        if let Self::Collection { mut window_changes_disabled, .. } = self {
+            window_changes_disabled = true;
+        }
+    }
+}
+
+
+pub struct FormulaExpression {
+    /// Expression 
+    value_expr: String,
+
+    /// Expression for the value as a plaintext string.
+    plain_label_expr: String,
+
+    /// Expression for the value as a JSON string.
+    json_label_expr: String,
+
+    /// Expression for the cell.
+    cell_expr: String,
+}
+
+
+impl FormulaExpression {
+    /// Converts a formula into a set of SQL expressions.
+    pub fn from(conn: &Connection, formula: &Formula) -> Result<Self, Error> {
+        Self::from_contextual(conn, formula, &mut FormulaExpressionContext::Scalar)
+    }
+
+    fn from_contextual(conn: &Connection, formula: &Formula, context: &mut FormulaExpressionContext) -> Result<Self, Error> {
+        macro_rules! wrap_inner {
+            ( $inner:expr, $fn:expr ) => {
+                {
+                    let inner = Self::from_contextual(conn, $inner.as_ref(), context)?;
+                    let value_expr: String = format!("{}({})", $fn, inner.value_expr);
+                    let label_expr: String = format!("CAST({value_expr} AS TEXT)");
+                    Self {
+                        value_expr,
+                        plain_label_expr: label_expr.clone(),
+                        json_label_expr: label_expr,
+                        cell_expr: String::from("NULL")
+                    }
+                }
+            };
+        }
+
+        macro_rules! wrap_binary_operator {
+            ( $lhs:expr, $rhs:expr, ) => {
+                
+            };
+        }
+
+        Ok(match formula {
+            Formula::Null => {
+                Self { 
+                    plain_label_expr: String::from("NULL"),
+                    json_label_expr: String::from('null'),
+                    value_expr: String::from("NULL"),
+                    cell_expr: String::from("NULL"),
+                }
+            }
+            Formula::LiteralBool(value) => {
+                let (value_expr, label_expr) = if value {
+                    (String::from("TRUE"), String::from("'true'"))
+                } else {
+                    (String::from("FALSE"), String::from("'false'"))
+                };
+                Self {
+                    value_expr,
+                    plain_label_expr: label_expr.clone(),
+                    json_label_expr: label_expr,
+                    cell_expr: String::from("NULL")
+                }
+            }
+            Formula::LiteralFloat(value) => {
+                let label_expr: String = format!("'{value}'");
+                let value_expr: String = format!("{value}");
+                Self {
+                    value_expr,
+                    plain_label_expr: label_expr.clone(),
+                    json_label_expr: label_expr,
+                    cell_expr: String::from("NULL")
+                }
+            }
+            Formula::LiteralInt(value) => {
+                let label_expr: String = format!("'{value}'");
+                let value_expr: String = format!("{value}");
+                Self {
+                    value_expr,
+                    plain_label_expr: label_expr.clone(),
+                    json_label_expr: label_expr,
+                    cell_expr: String::from("NULL")
+                }
+            }
+            Formula::LiteralString(value) => {
+                let value_expr: String = format!("'{}'", sql_encode_string(value));
+                let json_label_expr: String = format!("'\"{}\"'", json_encode_string(value));
+                Self {
+                    plain_label_expr: value_expr.clone(),
+                    json_label_expr,
+                    value_expr,
+                    cell_expr: String::from("NULL")
+                }
+            }
+        
+            Formula::RandomInt { id } => {
+                match id {
+                    Some(id) => {
+                        let label_expr: String = format!("CAST(w.RANDOM{id} AS TEXT)");
+                        let value_expr: String = format!("w.RANDOM{id}");
+                        Self {
+                            value_expr,
+                            plain_label_expr: label_expr.clone(),
+                            json_label_expr: label_expr,
+                            cell_expr: String::from("NULL")
+                        }
+                    }
+                    None => {
+                        return Err(Error::adhoc("An ID was not generated for RANDOM()!"));
+                    }
+                }
+            }
+        
+            /*
+             * Single-parameter functions
+             */
+
+            Formula::Wrap(inner) => Self::from_contextual(conn, inner.as_ref(), context)?,
+
+            Formula::Round(inner) => {
+                wrap_inner!(inner, "ROUND")
+            }
+            Formula::Ceiling(inner) => {
+                wrap_inner!(inner, "CEILING")
+            }
+            Formula::Floor(inner) => {
+                wrap_inner!(inner, "FLOOR")
+            }
+            Formula::Sign(inner) => {
+                wrap_inner!(inner, "SIGN")
+            }
+            Formula::Abs(inner) => {
+                wrap_inner!(inner, "ABS")
+            }
+
+            Formula::Lowercase(inner) => {
+                wrap_inner!(inner, "LOWER")
+            }
+            Formula::Uppercase(inner) => {
+                wrap_inner!(inner, "UPPER")
+            }
+            Formula::Length(inner) => {
+                wrap_inner!(inner, "LENGTH")
+            }
+
+            Formula::Not(inner) => {
+                wrap_inner!(inner, "NOT")
+            }
+            
+            /*
+             * Two-parameter operation functions
+             */
+
+            Formula::Add(lhs, rhs) => {
+                let lhs_scalar_type: FormulaReturnType = verify_scalar_type!(
+                    "Argument lhs of ADD(lhs: Number, rhs: Number)",
+                    FormulaReturnType::from(column_type::Primitive::Number),
+                    lhs
+                );
+                let rhs_scalar_type: FormulaReturnType = verify_scalar_type!(
+                    "Argument rhs of ADD(lhs: Number, rhs: Number)",
+                    FormulaReturnType::from(column_type::Primitive::Number),
+                    rhs
+                );
+                lhs_scalar_type.generalize(&rhs_scalar_type)
+            }
+            Formula::Subtract(lhs, rhs) => {
+                let lhs_scalar_type: FormulaReturnType = verify_scalar_type!(
+                    "Argument lhs of SUBTRACT(lhs: Number, rhs: Number)",
+                    FormulaReturnType::from(column_type::Primitive::Number),
+                    lhs
+                );
+                let rhs_scalar_type: FormulaReturnType = verify_scalar_type!(
+                    "Argument rhs of SUBTRACT(lhs: Number, rhs: Number)",
+                    FormulaReturnType::from(column_type::Primitive::Number),
+                    rhs
+                );
+                lhs_scalar_type.generalize(&rhs_scalar_type)
+            }
+            Formula::Multiply(lhs, rhs) => {
+                let lhs_scalar_type: FormulaReturnType = verify_scalar_type!(
+                    "Argument lhs of MULTIPLY(lhs: Number, rhs: Number)",
+                    FormulaReturnType::from(column_type::Primitive::Number),
+                    lhs
+                );
+                let rhs_scalar_type: FormulaReturnType = verify_scalar_type!(
+                    "Argument rhs of MULTIPLY(lhs: Number, rhs: Number)",
+                    FormulaReturnType::from(column_type::Primitive::Number),
+                    rhs
+                );
+                lhs_scalar_type.generalize(&rhs_scalar_type)
+            }
+            Formula::Modulo(lhs, rhs) => {
+                let lhs_scalar_type: FormulaReturnType = verify_scalar_type!(
+                    "Argument lhs of MODULO(lhs: Number, rhs: Number)",
+                    FormulaReturnType::from(column_type::Primitive::Number),
+                    lhs
+                );
+                let rhs_scalar_type: FormulaReturnType = verify_scalar_type!(
+                    "Argument rhs of MODULO(lhs: Number, rhs: Number)",
+                    FormulaReturnType::from(column_type::Primitive::Number),
+                    rhs
+                );
+                lhs_scalar_type.generalize(&rhs_scalar_type)
+            }
+            Formula::Divide(lhs, rhs) => {
+                verify_scalar_type!(
+                    "Argument lhs of DIVIDE(lhs: Number, rhs: Number)",
+                    FormulaReturnType::from(column_type::Primitive::Number),
+                    lhs
+                );
+                verify_scalar_type!(
+                    "Argument rhs of DIVIDE(lhs: Number, rhs: Number)",
+                    FormulaReturnType::from(column_type::Primitive::Number),
+                    rhs
+                );
+                FormulaReturnType::from(column_type::Primitive::Number)
+            }
+            Formula::Exponent(lhs, rhs) => {
+                let lhs_scalar_type: FormulaReturnType = verify_scalar_type!(
+                    "Argument lhs of POW(lhs: Number, rhs: Number)",
+                    FormulaReturnType::from(column_type::Primitive::Number),
+                    lhs
+                );
+                let rhs_scalar_type: FormulaReturnType = verify_scalar_type!(
+                    "Argument rhs of POW(lhs: Number, rhs: Number)",
+                    FormulaReturnType::from(column_type::Primitive::Number),
+                    rhs
+                );
+                lhs_scalar_type.generalize(&rhs_scalar_type)
+            }
+            
+            Formula::Concat(lhs, rhs) => {
+                verify_scalar_type!(
+                    "Argument lhs of CONCAT(lhs: Text, rhs: Text)",
+                    FormulaReturnType::from(column_type::Primitive::PlainText),
+                    lhs
+                );
+                verify_scalar_type!(
+                    "Argument rhs of CONCAT(lhs: Text, rhs: Text)",
+                    FormulaReturnType::from(column_type::Primitive::PlainText),
+                    rhs
+                );
+                FormulaReturnType::from(column_type::Primitive::PlainText)
+            }
+
+            Formula::And(lhs, rhs) => {
+                let lhs_scalar_type: FormulaReturnType = verify_scalar_type!(
+                    "Argument lhs of AND(lhs: Number, rhs: Number)",
+                    FormulaReturnType::from(column_type::Primitive::Boolean),
+                    lhs
+                );
+                let rhs_scalar_type: FormulaReturnType = verify_scalar_type!(
+                    "Argument rhs of AND(lhs: Number, rhs: Number)",
+                    FormulaReturnType::from(column_type::Primitive::Boolean),
+                    rhs
+                );
+                lhs_scalar_type.generalize(&rhs_scalar_type)
+            }
+            Formula::Or(lhs, rhs) => {
+                let lhs_scalar_type: FormulaReturnType = verify_scalar_type!(
+                    "Argument lhs of OR(lhs: Number, rhs: Number)",
+                    FormulaReturnType::from(column_type::Primitive::Boolean),
+                    lhs
+                );
+                let rhs_scalar_type: FormulaReturnType = verify_scalar_type!(
+                    "Argument rhs of OR(lhs: Number, rhs: Number)",
+                    FormulaReturnType::from(column_type::Primitive::Boolean),
+                    rhs
+                );
+                lhs_scalar_type.generalize(&rhs_scalar_type)
+            }
+
+            Formula::Eq(lhs, rhs) => FormulaReturnType::from(column_type::Primitive::Boolean),
+            Formula::LessThan(lhs, rhs) => {
+                let inner_expected_type: FormulaReturnType = FormulaReturnType::from(column_type::Primitive::Number)
+                    .generalize(&FormulaReturnType::from(column_type::Primitive::PlainText));
+                verify_scalar_type!(
+                    "Argument lhs of LESSTHAN(lhs: Number | Text, rhs: Number | Text)",
+                    inner_expected_type,
+                    lhs 
+                );
+                verify_scalar_type!(
+                    "Argument rhs of LESSTHAN(lhs: Number | Text, rhs: Number | Text)",
+                    inner_expected_type,
+                    rhs
+                );
+                FormulaReturnType::from(column_type::Primitive::Boolean)
+            }
+            Formula::LessThanOrEq(lhs, rhs) => {
+                let inner_expected_type: FormulaReturnType = FormulaReturnType::from(column_type::Primitive::Number)
+                    .generalize(&FormulaReturnType::from(column_type::Primitive::PlainText));
+                verify_scalar_type!(
+                    "Argument lhs of LESSTHANEQ(lhs: Number | Text, rhs: Number | Text)",
+                    inner_expected_type,
+                    lhs 
+                );
+                verify_scalar_type!(
+                    "Argument rhs of LESSTHANEQ(lhs: Number | Text, rhs: Number | Text)",
+                    inner_expected_type,
+                    rhs
+                );
+                FormulaReturnType::from(column_type::Primitive::Boolean)
+            }
+
+            Formula::Glob { str, pattern } => {
+                verify_scalar_type!(
+                    "Argument str of ISMATCH(str: Text, pattern: Text)",
+                    FormulaReturnType::from(column_type::Primitive::PlainText),
+                    str 
+                );
+                verify_scalar_type!(
+                    "Argument pattern of ISMATCH(str: Text, pattern: Text)",
+                    FormulaReturnType::from(column_type::Primitive::PlainText),
+                    pattern
+                );
+                FormulaReturnType::from(column_type::Primitive::Boolean)
+            }
+
+            Formula::Index { collection, index } => {
+                verify_scalar_type!(
+                    "Argument idx of INDEX(x: List<Any>, idx: Integer)",
+                    FormulaReturnType::from(column_type::Primitive::Integer),
+                    index
+                );
+                collection.get_scalar_type(conn)?
+            }
+            Formula::NullIf { value, null_if_match } => value.get_scalar_type(conn)?,
+
+            /*
+             * Three-parameter functions
+             */
+
+            Formula::Conditional { condition, formula_if_true, formula_if_false } => {
+                verify_scalar_type!(
+                    "Argument x of IIF(x: Boolean, a: Any, b: Any)",
+                    FormulaReturnType::from(column_type::Primitive::Boolean),
+                    condition
+                );
+                let lhs_scalar_type: FormulaReturnType = formula_if_true.get_scalar_type(conn)?;
+                let rhs_scalar_type: FormulaReturnType = formula_if_false.get_scalar_type(conn)?;
+                lhs_scalar_type.generalize(&rhs_scalar_type)
+            }
+
+            Formula::Substring { str, start, length } => {
+                verify_scalar_type!(
+                    match length {
+                        Some(_) => "Argument str of SUBSTRING(str: Text, start: Integer, length: Integer)",
+                        None => "Argument str of SUBSTRING(str: Text, start: Integer)"
+                    },
+                    FormulaReturnType::from(column_type::Primitive::PlainText),
+                    str 
+                );
+                verify_scalar_type!(
+                    match length {
+                        Some(_) => "Argument start of SUBSTRING(str: Text, start: Integer, length: Integer)",
+                        None => "Argument start of SUBSTRING(str: Text, start: Integer)"
+                    },
+                    FormulaReturnType::from(column_type::Primitive::Integer),
+                    start 
+                );
+                if let Some(length) = length {
+                    verify_scalar_type!(
+                        "Argument length of SUBSTRING(str: Text, start: Integer, length: Integer)",
+                        FormulaReturnType::from(column_type::Primitive::Integer),
+                        length 
+                    );
+                }
+                FormulaReturnType::from(column_type::Primitive::PlainText)
+            }
+            Formula::Replace { original, pattern, replacement } => {
+                verify_scalar_type!(
+                    "Argument str of REPLACE(str: Text, pattern: Text, replacement: Text)",
+                    FormulaReturnType::from(column_type::Primitive::PlainText),
+                    original 
+                );
+                verify_scalar_type!(
+                    "Argument pattern of REPLACE(str: Text, pattern: Text, replacement: Text)",
+                    FormulaReturnType::from(column_type::Primitive::PlainText),
+                    pattern 
+                );
+                verify_scalar_type!(
+                    "Argument replacement of REPLACE(str: Text, pattern: Text, replacement: Text)",
+                    FormulaReturnType::from(column_type::Primitive::PlainText),
+                    replacement
+                );
+                FormulaReturnType::from(column_type::Primitive::PlainText)
+            }
+
+            /*
+             * Arbitrary parameter functions
+             */
+
+            Formula::LiteralArray(inners) => {
+                let mut scalar_type: FormulaReturnType = FormulaReturnType::new();
+                for inner in inners {
+                    scalar_type = scalar_type.generalize(&inner.get_scalar_type(conn)?);
+                }
+                scalar_type
+            }
+
+            Formula::Coalesce(inners) => {
+                let mut scalar_type: FormulaReturnType = FormulaReturnType::new();
+                for inner in inners {
+                    scalar_type = scalar_type.generalize(&inner.get_scalar_type(conn)?);
+                }
+                scalar_type
+            }
+            Formula::Argmax(inners) => {
+                let inner_expected_type: FormulaReturnType = FormulaReturnType::from(column_type::Primitive::Number)
+                    .generalize(&FormulaReturnType::from(column_type::Primitive::PlainText));
+                let mut scalar_type: FormulaReturnType = FormulaReturnType::new();
+                for inner in inners {
+                    scalar_type = scalar_type.generalize(&verify_scalar_type!(
+                        "Argument x of ARGMAX(...x: Number | Text)",
+                        inner_expected_type,
+                        inner 
+                    ));
+                }
+                scalar_type
+            }
+            Formula::Argmin(inners) => {
+                let inner_expected_type: FormulaReturnType = FormulaReturnType::from(column_type::Primitive::Number)
+                    .generalize(&FormulaReturnType::from(column_type::Primitive::PlainText));
+                let mut scalar_type: FormulaReturnType = FormulaReturnType::new();
+                for inner in inners {
+                    scalar_type = scalar_type.generalize(&verify_scalar_type!(
+                        "Argument x of ARGMIN(...x: Number | Text)",
+                        inner_expected_type,
+                        inner 
+                    ));
+                }
+                scalar_type
+            }
+            Formula::Switch { value, matches, formula_if_no_match } => {
+                let mut scalar_type: FormulaReturnType = formula_if_no_match.get_scalar_type(conn)?;
+                for (_, inner) in matches {
+                    scalar_type = scalar_type.generalize(&inner.get_scalar_type(conn)?);
+                }
+                scalar_type
+            }
+
+            Formula::Format { format, format_params } => {
+                verify_scalar_type!(
+                    "Argument format of FORMAT(format: Text, ...x: Any)",
+                    FormulaReturnType::from(column_type::Primitive::PlainText),
+                    format 
+                );
+                FormulaReturnType::from(column_type::Primitive::PlainText)
+            }
+
+            /*
+             * Aggregation functions
+             */
+
+            Formula::Count(collection) => FormulaReturnType::from(column_type::Primitive::Integer),
+
+            Formula::Average(collection) => {
+                verify_scalar_type!(
+                    "Argument x of AVG(x: List<Number>)",
+                    FormulaReturnType::from(column_type::Primitive::Number),
+                    collection
+                );
+                FormulaReturnType::from(column_type::Primitive::Number)
+            }
+            Formula::Sum(collection) => {
+                verify_scalar_type!(
+                    "Argument x of SUM(x: List<Number>)",
+                    FormulaReturnType::from(column_type::Primitive::Number),
+                    collection
+                )
+            }
+            Formula::Max(collection) => {
+                verify_scalar_type!(
+                    "Argument x of MAX(x: List<Number | Text>)",
+                    FormulaReturnType::from(column_type::Primitive::Number)
+                        .generalize(&FormulaReturnType::from(column_type::Primitive::PlainText)),
+                    collection
+                )
+            }
+            Formula::Min(collection) => {
+                verify_scalar_type!(
+                    "Argument x of MIN(x: List<Number | Text>)",
+                    FormulaReturnType::from(column_type::Primitive::Number)
+                        .generalize(&FormulaReturnType::from(column_type::Primitive::PlainText)),
+                    collection
+                )
+            }
+
+            Formula::Join { collection, delimiter } => {
+                verify_scalar_type!(
+                    "Argument x of JOIN(x: List<Text>, delimiter: Text)",
+                    FormulaReturnType::from(column_type::Primitive::PlainText),
+                    collection
+                );
+                verify_scalar_type!(
+                    "Argument delimiter of JOIN(x: List<Text>, delimiter: Text)",
+                    FormulaReturnType::from(column_type::Primitive::PlainText),
+                    delimiter
+                );
+                FormulaReturnType::from(column_type::Primitive::PlainText)
+            }
+
+            Formula::In { value, collection } => FormulaReturnType::from(column_type::Primitive::Boolean),
+
+            /*
+             * Parameter
+             */
+            
+            Formula::Param { column_oid, .. } => {
+                match column::FullMetadata::get_transact(conn, column_oid.clone()) {
+                    Ok(column_metadata) => {
+                        match column_metadata.column_type {
+                            column_type::ColumnType::Primitive(prim) => FormulaReturnType::from(prim),
+                            _ => FormulaReturnType::new()
+                        }
+                    }
+                    Err(Error::SqlError { .. }) => {
+                        // Parameter has been orphaned
+                        FormulaReturnType::new()
+                    }
+                    Err(e) => {
+                        return Err(e);
+                    }
+                }
+            }
+        })
     }
 }
