@@ -2509,6 +2509,39 @@ impl FormulaExpression {
                 {
                     let inner = Self::from_contextual(conn, $inner.as_ref(), context)?;
                     let value_expr: String = format!("{}({})", $fn, inner.value_expr);
+                    let scalar_type: FormulaReturnType = formula.get_scalar_type(conn)?;
+                    Self {
+                        value_expr,
+                        plain_label_expr: scalar_type.construct_plain_label_expr(value_expr),
+                        json_label_expr: label_expr,
+                        cell_expr: String::from("NULL")
+                    }
+                }
+            };
+        }
+
+        macro_rules! wrap_numeric_binary_operator {
+            ( $lhs:expr, $rhs:expr, $op:expr ) => {
+                {
+                    let lhs = Self::from_contextual(conn, $lhs.as_ref(), context)?;
+                    let rhs = Self::from_contextual(conn, $rhs.as_ref(), context)?;
+                    let value_expr: String = format!("({} {} {})", lhs.value_expr, $op, rhs.value_expr);
+                    let label_expr: String = format!("CAST({value_expr} AS TEXT)");
+                    Self {
+                        value_expr,
+                        plain_label_expr: label_expr.clone(),
+                        json_label_expr: label_expr,
+                        cell_expr: String::from("NULL")
+                    }
+                }
+            };
+        }
+        macro_rules! wrap_numeric_binary_operator {
+            ( $lhs:expr, $rhs:expr, $op:expr ) => {
+                {
+                    let lhs = Self::from_contextual(conn, $lhs.as_ref(), context)?;
+                    let rhs = Self::from_contextual(conn, $rhs.as_ref(), context)?;
+                    let value_expr: String = format!("({} {} {})", lhs.value_expr, $op, rhs.value_expr);
                     let label_expr: String = format!("CAST({value_expr} AS TEXT)");
                     Self {
                         value_expr,
@@ -2520,23 +2553,17 @@ impl FormulaExpression {
             };
         }
 
-        macro_rules! wrap_binary_operator {
-            ( $lhs:expr, $rhs:expr, ) => {
-                
-            };
-        }
-
         Ok(match formula {
             Formula::Null => {
                 Self { 
                     plain_label_expr: String::from("NULL"),
-                    json_label_expr: String::from('null'),
+                    json_label_expr: String::from("'null'"),
                     value_expr: String::from("NULL"),
                     cell_expr: String::from("NULL"),
                 }
             }
             Formula::LiteralBool(value) => {
-                let (value_expr, label_expr) = if value {
+                let (value_expr, label_expr) = if *value {
                     (String::from("TRUE"), String::from("'true'"))
                 } else {
                     (String::from("FALSE"), String::from("'false'"))
@@ -2630,7 +2657,18 @@ impl FormulaExpression {
             }
 
             Formula::Not(inner) => {
-                wrap_inner!(inner, "NOT")
+                let inner = Self::from_contextual(conn, inner.as_ref(), context)?;
+                let value_expr: String = format!("(NOT {})", inner.value_expr);
+                let label_expr: String = format!(
+                    "CASE WHEN {} IS NULL THEN NULL WHEN {} IS TRUE THEN 'false' ELSE 'true' AS TEXT)",
+                    inner.value_expr, inner.value_expr
+                );
+                Self {
+                    value_expr,
+                    plain_label_expr: label_expr.clone(),
+                    json_label_expr: label_expr,
+                    cell_expr: String::from("NULL")
+                }
             }
             
             /*
@@ -2638,82 +2676,22 @@ impl FormulaExpression {
              */
 
             Formula::Add(lhs, rhs) => {
-                let lhs_scalar_type: FormulaReturnType = verify_scalar_type!(
-                    "Argument lhs of ADD(lhs: Number, rhs: Number)",
-                    FormulaReturnType::from(column_type::Primitive::Number),
-                    lhs
-                );
-                let rhs_scalar_type: FormulaReturnType = verify_scalar_type!(
-                    "Argument rhs of ADD(lhs: Number, rhs: Number)",
-                    FormulaReturnType::from(column_type::Primitive::Number),
-                    rhs
-                );
-                lhs_scalar_type.generalize(&rhs_scalar_type)
+                wrap_numeric_binary_operator!(lhs, rhs, "+")
             }
             Formula::Subtract(lhs, rhs) => {
-                let lhs_scalar_type: FormulaReturnType = verify_scalar_type!(
-                    "Argument lhs of SUBTRACT(lhs: Number, rhs: Number)",
-                    FormulaReturnType::from(column_type::Primitive::Number),
-                    lhs
-                );
-                let rhs_scalar_type: FormulaReturnType = verify_scalar_type!(
-                    "Argument rhs of SUBTRACT(lhs: Number, rhs: Number)",
-                    FormulaReturnType::from(column_type::Primitive::Number),
-                    rhs
-                );
-                lhs_scalar_type.generalize(&rhs_scalar_type)
+                wrap_numeric_binary_operator!(lhs, rhs, "-")
             }
             Formula::Multiply(lhs, rhs) => {
-                let lhs_scalar_type: FormulaReturnType = verify_scalar_type!(
-                    "Argument lhs of MULTIPLY(lhs: Number, rhs: Number)",
-                    FormulaReturnType::from(column_type::Primitive::Number),
-                    lhs
-                );
-                let rhs_scalar_type: FormulaReturnType = verify_scalar_type!(
-                    "Argument rhs of MULTIPLY(lhs: Number, rhs: Number)",
-                    FormulaReturnType::from(column_type::Primitive::Number),
-                    rhs
-                );
-                lhs_scalar_type.generalize(&rhs_scalar_type)
+                wrap_numeric_binary_operator!(lhs, rhs, "*")
             }
             Formula::Modulo(lhs, rhs) => {
-                let lhs_scalar_type: FormulaReturnType = verify_scalar_type!(
-                    "Argument lhs of MODULO(lhs: Number, rhs: Number)",
-                    FormulaReturnType::from(column_type::Primitive::Number),
-                    lhs
-                );
-                let rhs_scalar_type: FormulaReturnType = verify_scalar_type!(
-                    "Argument rhs of MODULO(lhs: Number, rhs: Number)",
-                    FormulaReturnType::from(column_type::Primitive::Number),
-                    rhs
-                );
-                lhs_scalar_type.generalize(&rhs_scalar_type)
+                wrap_numeric_binary_operator!(lhs, rhs, "%")
             }
             Formula::Divide(lhs, rhs) => {
-                verify_scalar_type!(
-                    "Argument lhs of DIVIDE(lhs: Number, rhs: Number)",
-                    FormulaReturnType::from(column_type::Primitive::Number),
-                    lhs
-                );
-                verify_scalar_type!(
-                    "Argument rhs of DIVIDE(lhs: Number, rhs: Number)",
-                    FormulaReturnType::from(column_type::Primitive::Number),
-                    rhs
-                );
-                FormulaReturnType::from(column_type::Primitive::Number)
+                wrap_numeric_binary_operator!(lhs, rhs, "/")
             }
             Formula::Exponent(lhs, rhs) => {
-                let lhs_scalar_type: FormulaReturnType = verify_scalar_type!(
-                    "Argument lhs of POW(lhs: Number, rhs: Number)",
-                    FormulaReturnType::from(column_type::Primitive::Number),
-                    lhs
-                );
-                let rhs_scalar_type: FormulaReturnType = verify_scalar_type!(
-                    "Argument rhs of POW(lhs: Number, rhs: Number)",
-                    FormulaReturnType::from(column_type::Primitive::Number),
-                    rhs
-                );
-                lhs_scalar_type.generalize(&rhs_scalar_type)
+                wrap_numeric_binary_operator!(lhs, rhs, "^")
             }
             
             Formula::Concat(lhs, rhs) => {
