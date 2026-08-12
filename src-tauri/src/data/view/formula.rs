@@ -1,7 +1,7 @@
 use std::collections::{HashSet, HashMap};
 use regex::Regex;
 use rusqlite::{Connection};
-use crate::util::encode::{json_encode_string, sql_encode_string};
+use crate::util::encode::{json_encode_string, sql_encode_string, sql_json_encode_string};
 use crate::util::error::Error;
 use crate::data::column;
 use crate::data::column_type;
@@ -2338,9 +2338,88 @@ impl Formula {
     }
 
 
+    /// Converts the formula into a standardized format.
+    pub fn stringify(&self) -> String {
+        match self {
+            Self::Null => String::from("null"),
+            Self::LiteralBool(value) => if *value { String::from("true") } else { String::from("false") },
+            Self::LiteralInt(value) => format!("{value}"),
+            Self::LiteralFloat(value) => format!("{value}"),
+            Self::LiteralString(value) => format!("\"{}\"", json_encode_string(value)),
+            Self::RandomInt { .. } => format!("RANDOM()"),
+            
+            Self::Wrap(inner) => {
+                let inner_stringified: String = inner.stringify();
+                if inner_stringified.starts_with("(") && inner_stringified.ends_with(")") {
+                    inner_stringified
+                } else {
+                    format!("({inner_stringified})")
+                }
+            },
+            Self::Abs(inner) => format!("ABS({})", inner.stringify()),
+            Self::Ceiling(inner) => format!("CEIL({})", inner.stringify()),
+            Self::Round(inner) => format!("ROUND({})", inner.stringify()),
+            Self::Floor(inner) => format!("FLOOR({})", inner.stringify()),
+            Self::Sign(inner) => format!("SIGN({})", inner.stringify()),
+            Self::Uppercase(inner) => format!("UPPER({})", inner.stringify()),
+            Self::Lowercase(inner) => format!("LOWER({})", inner.stringify()),
+            Self::Length(inner) => format!("LENGTH({})", inner.stringify()),
+            Self::Not(inner) => {
+                if let Self::Eq(lhs, rhs) = inner.as_ref() {
+                    format!("({} <> {})", lhs.stringify(), rhs.stringify())
+                } else {
+                    format!("(NOT {})", inner.stringify())
+                }
+            }
+            
+            Self::Add(lhs, rhs) => format!("({} + {})", lhs.stringify(), rhs.stringify()),
+            Self::And(lhs, rhs) => format!("({} AND {})", lhs.stringify(), rhs.stringify()),
+            Self::Concat(lhs, rhs) => format!("({} || {})", lhs.stringify(), rhs.stringify()),
+            Self::Divide(lhs, rhs) => format!("({} / {})", lhs.stringify(), rhs.stringify()),
+            Self::Eq(lhs, rhs) => format!("({} = {})", lhs.stringify(), rhs.stringify()),
+            Self::Glob { str, pattern } => format!("ISMATCH({}, {})", str.stringify(), pattern.stringify()),
+            Self::Exponent(lhs, rhs) => format!("POW({}, {})", lhs.stringify(), rhs.stringify()),
+            Self::LessThan(lhs, rhs) => format!("({} < {})", lhs.stringify(), rhs.stringify()),
+            Self::LessThanOrEq(lhs, rhs) => format!("({} <= {})", lhs.stringify(), rhs.stringify()),
+            Self::Modulo(lhs, rhs) => format!("({} % {})", lhs.stringify(), rhs.stringify()),
+            Self::Multiply(lhs, rhs) => format!("({} * {})", lhs.stringify(), rhs.stringify()),
+            Self::Subtract(lhs, rhs) => format!("({} - {})", lhs.stringify(), rhs.stringify()),
+            Self::Or(lhs, rhs) => format!("({} OR {})", lhs.stringify(), rhs.stringify()),
+            Self::NullIf { value, null_if_match } => format!("NULLIF({}, {})", value.stringify(), null_if_match.stringify()),
+            
+            Self::Substring { str, start, length } => {
+                match length {
+                    Some(length) => format!("SUBSTRING({}, {}, {})", str.stringify(), start.stringify(), length.stringify()),
+                    None => format!("SUBSTRING({}, {})", str.stringify(), start.stringify())
+                }
+            }
+            Self::Replace { original, pattern, replacement } => format!("REPLACE({}, {}, {})", original.stringify(), pattern.stringify(), replacement.stringify()),
+            Self::Conditional { condition, formula_if_true, formula_if_false } => format!("IF({}, {}, {})", condition.stringify(), formula_if_true.stringify(), formula_if_false.stringify()),
+            
+            Self::LiteralArray(inners) => format!("[{}]", inners.iter().map(|f| f.stringify()).reduce(|acc, e| format!("{acc}, {e}")).unwrap_or(String::from(""))),
+            Self::Argmax(inners) => format!("MAX({})", inners.iter().map(|f| f.stringify()).reduce(|acc, e| format!("{acc}, {e}")).unwrap_or(String::from(""))),
+            Self::Argmin(inners) => format!("MIN({})", inners.iter().map(|f| f.stringify()).reduce(|acc, e| format!("{acc}, {e}")).unwrap_or(String::from(""))),
+            Self::Coalesce(inners) => format!("COALESCE({})", inners.iter().map(|f| f.stringify()).reduce(|acc, e| format!("{acc}, {e}")).unwrap_or(String::from(""))),
+            Self::Format { format, format_params} => format!("FORMAT({})", format_params.iter().map(|f| f.stringify()).fold(format.stringify(), |acc, e| format!("{acc}, {e}"))),
+            Self::Switch { value, matches, formula_if_no_match } => format!("SWITCH({}, {})", matches.iter().map(|(a, b)| format!("{}, {}", a.stringify(), b.stringify())).fold(value.stringify(), |acc, e| format!("{acc}, {e}")), formula_if_no_match.stringify()),
 
-    /// Converts formula to a basic string indicating the function name.
-    pub fn to_string(&self) -> String {
+            Self::Average(collection) => format!("AVG({})", collection.stringify()),
+            Self::Count(collection) => format!("COUNT({})", collection.stringify()),
+            Self::Sum(collection) => format!("SUM({})", collection.stringify()),
+            Self::Max(collection) => format!("MAX({})", collection.stringify()),
+            Self::Min(collection) => format!("MIN({})", collection.stringify()),
+            Self::Join { collection, delimiter } => format!("JOIN({}, {})", collection.stringify(), delimiter.stringify()),
+            Self::In { value, collection } => format!("({} IN {})", value.stringify(), collection.stringify()),
+
+            Self::Index { collection, index } => format!("({}[{}])", collection.stringify(), index.stringify()),
+
+            Self::Param { datasource_alias, column_oid } => format!("@{{{datasource_alias}_COLUMN{column_oid}}}")
+        }
+    }
+
+
+    /// Converts formula to a documentation string indicating the function name.
+    pub fn to_docstring(&self) -> String {
         match self {
             Self::Abs(_) => String::from("ABS(x: Number) -> Number"),
             Self::Add(_, _) => String::from("ADD<_T: Number>(lhs: _T, rhs: _T) -> _T"),
@@ -2365,11 +2444,11 @@ impl Formula {
             Self::Length(_) => String::from("LENGTH(x: Text) -> Integer"),
             Self::LessThan(_, _) => String::from("LESSTHAN(lhs: Number, rhs: Number) -> Boolean"),
             Self::LessThanOrEq(_, _) => String::from("LESSTHANEQUALTO(lhs: Number, rhs: Number) -> Boolean"),
-            Self::LiteralArray(items) => String::from("LIST<_T>(...args: _T) -> List<_T>"),
+            Self::LiteralArray(_) => String::from("LIST<_T>(...args: _T) -> List<_T>"),
             Self::LiteralBool(b) => String::from(if *b { "true" } else { "false" }),
             Self::LiteralFloat(lit) => format!("{lit}"),
             Self::LiteralInt(lit) => format!("{lit}"),
-            Self::LiteralString(str) => format!("\"{}\"", str.replace("\"", "\\\"").replace("\\", "\\\\")),
+            Self::LiteralString(str) => format!("\"{}\"", json_encode_string(str)),
             Self::Lowercase(_) => String::from("LOWER<_T: Text>(x: _T) -> _T"),
             Self::Max(_) => String::from("MAX<_T: Number>(collection: List<_T>) -> _T"),
             Self::Min(_) => String::from("MIN<_T: Number>(collection: List<_T>) -> _T"),
@@ -2389,7 +2468,7 @@ impl Formula {
             Self::Sum(_) => String::from("SUM<_T: Number>(collection: List<_T>) -> _T"),
             Self::Switch { .. } => String::from("SWITCH<_T: Any>(x: Any, ...[matchedValue1: Any, returnedValue1: _T], returnValueIfNoMatch?: _T) -> _T"),
             Self::Uppercase(_) => String::from("UPPER<_T: Text>(x: _T) -> _T"),
-            Self::Wrap(inner) => inner.to_string(),
+            Self::Wrap(inner) => inner.to_docstring(),
         }
     }
 }
@@ -2428,7 +2507,7 @@ enum FormulaExpressionContext {
         min_depth: HashMap<i64, Option<Datasource>>,
 
         /// True if changes to the window (e.g. filters, ordering, indexing) are disabled. False if modifications are still permitted.
-        window_changes_disabled: bool 
+        window_changes_disabled: usize 
     }
 }
 
@@ -2473,10 +2552,27 @@ impl FormulaExpressionContext {
         }
     }
 
+    /// Enables changes to the window.
+    fn enable_window_changes(&mut self) {
+        if let Self::Collection { window_changes_disabled, .. } = self {
+            if *window_changes_disabled > 0 {
+                *window_changes_disabled = *window_changes_disabled - 1;
+            }
+        }
+    }
+
     /// Disables changes to the window.
     fn disable_window_changes(&mut self) {
-        if let Self::Collection { mut window_changes_disabled, .. } = self {
-            window_changes_disabled = true;
+        if let Self::Collection { window_changes_disabled, .. } = self {
+            *window_changes_disabled = *window_changes_disabled + 1;
+        }
+    }
+
+    /// Returns true if window changes are disabled.
+    fn are_window_changes_disabled(&self) -> bool {
+        match self {
+            Self::Scalar => true,
+            Self::Collection { window_changes_disabled, .. } => *window_changes_disabled > 0
         }
     }
 }
@@ -2504,49 +2600,135 @@ impl FormulaExpression {
     }
 
     fn from_contextual(conn: &Connection, formula: &Formula, context: &mut FormulaExpressionContext) -> Result<Self, Error> {
-        macro_rules! wrap_inner {
-            ( $inner:expr, $fn:expr ) => {
+        /// Constructs expressions for an SQLite built-in function with a known number of arguments.
+        macro_rules! fn_expr {
+            ( $f:expr, $( $x:expr ),* ) => {
                 {
-                    let inner = Self::from_contextual(conn, $inner.as_ref(), context)?;
-                    let value_expr: String = format!("{}({})", $fn, inner.value_expr);
                     let scalar_type: FormulaReturnType = formula.get_scalar_type(conn)?;
+
+                    context.disable_window_changes();
+                    let value_expr: String = format!("{}({})",
+                        $f,
+                        vec![ $( Self::from_contextual(conn, $x.as_ref(), context)?, )* ].into_iter()
+                            .map(|e| e.value_expr)
+                            .reduce(|acc, e| format!("{acc}, {e}"))
+                            .unwrap_or(String::from(""))
+                    );
+                    context.enable_window_changes();
+
                     Self {
+                        plain_label_expr: scalar_type.construct_plain_label_expr(&value_expr),
+                        json_label_expr: scalar_type.construct_json_label_expr(&value_expr),
                         value_expr,
-                        plain_label_expr: scalar_type.construct_plain_label_expr(value_expr),
-                        json_label_expr: label_expr,
                         cell_expr: String::from("NULL")
                     }
                 }
             };
         }
 
-        macro_rules! wrap_numeric_binary_operator {
-            ( $lhs:expr, $rhs:expr, $op:expr ) => {
+        macro_rules! fn_agg_expr {
+            ( $f:expr, $collection:expr ) => {
                 {
-                    let lhs = Self::from_contextual(conn, $lhs.as_ref(), context)?;
-                    let rhs = Self::from_contextual(conn, $rhs.as_ref(), context)?;
-                    let value_expr: String = format!("({} {} {})", lhs.value_expr, $op, rhs.value_expr);
-                    let label_expr: String = format!("CAST({value_expr} AS TEXT)");
+                    let scalar_type: FormulaReturnType = formula.get_scalar_type(conn)?;
+
+                    let mut collection_context: FormulaExpressionContext = FormulaExpressionContext::Collection {
+                        slice: CollectionSlice::None,
+                        filter_expr: None,
+                        order_exprs: Vec::new(),
+                        min_depth: HashMap::new(),
+                        window_changes_disabled: 0
+                    };
+                    let collection: Self = Self::from_contextual(conn, $collection, &mut collection_context)?;
+
+                    let value_expr: String = collection_context.wrap(
+                        format!(
+                            "{}({})",
+                            $f,
+                            collection.value_expr
+                        )
+                    );
                     Self {
+                        plain_label_expr: scalar_type.construct_plain_label_expr(&value_expr),
+                        json_label_expr: scalar_type.construct_json_label_expr(&value_expr),
                         value_expr,
-                        plain_label_expr: label_expr.clone(),
-                        json_label_expr: label_expr,
+                        cell_expr: String::from("NULL")
+                    }
+                }
+            };
+
+            ( $f:expr, $collection:expr, $( $x:expr ),* ) => {
+                {
+                    let scalar_type: FormulaReturnType = formula.get_scalar_type(conn)?;
+
+                    let mut collection_context: FormulaExpressionContext = FormulaExpressionContext::Collection {
+                        slice: CollectionSlice::None,
+                        filter_expr: None,
+                        order_exprs: Vec::new(),
+                        min_depth: HashMap::new(),
+                        window_changes_disabled: 0
+                    };
+                    let collection: Self = Self::from_contextual(conn, $collection, &mut collection_context)?;
+
+                    let value_expr: String = collection_context.wrap(
+                        format!(
+                            "{}({})",
+                            $f,
+                            vec![ $( Self::from_contextual(conn, $x.as_ref(), context)?, )* ].into_iter()
+                                .map(|e| e.value_expr)
+                                .fold(collection.value_expr, |acc, e| format!("{acc}, {e}"))
+                        )
+                    );
+                    Self {
+                        plain_label_expr: scalar_type.construct_plain_label_expr(&value_expr),
+                        json_label_expr: scalar_type.construct_json_label_expr(&value_expr),
+                        value_expr,
                         cell_expr: String::from("NULL")
                     }
                 }
             };
         }
-        macro_rules! wrap_numeric_binary_operator {
-            ( $lhs:expr, $rhs:expr, $op:expr ) => {
+
+        /// Constructs expressions for an SQLite built-in function with an unknown number of arguments.
+        macro_rules! fn_variable_expr {
+            ( $f:expr, $inners:expr ) => {
+                {
+                    context.disable_window_changes();
+                    let mut inner_exprs: Vec<Self> = Vec::new();
+                    for inner in $inners.iter() {
+                        inner_exprs.push(Self::from_contextual(conn, inner, context)?);
+                    }
+                    context.enable_window_changes();
+
+                    let scalar_type: FormulaReturnType = formula.get_scalar_type(conn)?;
+                    let value_expr: String = format!("{}({})",
+                        $f,
+                        inner_exprs.into_iter()
+                            .map(|e| e.value_expr)
+                            .reduce(|acc, e| format!("{acc}, {e}"))
+                            .unwrap_or(String::from(""))
+                    );
+                    Self {
+                        plain_label_expr: scalar_type.construct_plain_label_expr(&value_expr),
+                        json_label_expr: scalar_type.construct_json_label_expr(&value_expr),
+                        value_expr,
+                        cell_expr: String::from("NULL")
+                    }
+                }
+            };
+        }
+
+        /// Constructs expressions for a binary operator.
+        macro_rules! binary_operator_expr {
+            ( $op:expr, $lhs:expr, $rhs:expr ) => {
                 {
                     let lhs = Self::from_contextual(conn, $lhs.as_ref(), context)?;
                     let rhs = Self::from_contextual(conn, $rhs.as_ref(), context)?;
                     let value_expr: String = format!("({} {} {})", lhs.value_expr, $op, rhs.value_expr);
-                    let label_expr: String = format!("CAST({value_expr} AS TEXT)");
+                    let scalar_type: FormulaReturnType = formula.get_scalar_type(conn)?;
                     Self {
+                        plain_label_expr: scalar_type.construct_plain_label_expr(&value_expr),
+                        json_label_expr: scalar_type.construct_json_label_expr(&value_expr),
                         value_expr,
-                        plain_label_expr: label_expr.clone(),
-                        json_label_expr: label_expr,
                         cell_expr: String::from("NULL")
                     }
                 }
@@ -2597,7 +2779,7 @@ impl FormulaExpression {
             }
             Formula::LiteralString(value) => {
                 let value_expr: String = format!("'{}'", sql_encode_string(value));
-                let json_label_expr: String = format!("'\"{}\"'", json_encode_string(value));
+                let json_label_expr: String = format!("'\"{}\"'", sql_json_encode_string(value));
                 Self {
                     plain_label_expr: value_expr.clone(),
                     json_label_expr,
@@ -2631,29 +2813,29 @@ impl FormulaExpression {
             Formula::Wrap(inner) => Self::from_contextual(conn, inner.as_ref(), context)?,
 
             Formula::Round(inner) => {
-                wrap_inner!(inner, "ROUND")
+                fn_expr!("ROUND", inner)
             }
             Formula::Ceiling(inner) => {
-                wrap_inner!(inner, "CEILING")
+                fn_expr!("CEILING", inner)
             }
             Formula::Floor(inner) => {
-                wrap_inner!(inner, "FLOOR")
+                fn_expr!("FLOOR", inner)
             }
             Formula::Sign(inner) => {
-                wrap_inner!(inner, "SIGN")
+                fn_expr!("SIGN", inner)
             }
             Formula::Abs(inner) => {
-                wrap_inner!(inner, "ABS")
+                fn_expr!("ABS", inner)
             }
 
             Formula::Lowercase(inner) => {
-                wrap_inner!(inner, "LOWER")
+                fn_expr!("LOWER", inner)
             }
             Formula::Uppercase(inner) => {
-                wrap_inner!(inner, "UPPER")
+                fn_expr!("UPPER", inner)
             }
             Formula::Length(inner) => {
-                wrap_inner!(inner, "LENGTH")
+                fn_expr!("LENGTH", inner)
             }
 
             Formula::Not(inner) => {
@@ -2676,179 +2858,70 @@ impl FormulaExpression {
              */
 
             Formula::Add(lhs, rhs) => {
-                wrap_numeric_binary_operator!(lhs, rhs, "+")
+                binary_operator_expr!("+", lhs, rhs)
             }
             Formula::Subtract(lhs, rhs) => {
-                wrap_numeric_binary_operator!(lhs, rhs, "-")
+                binary_operator_expr!("-", lhs, rhs)
             }
             Formula::Multiply(lhs, rhs) => {
-                wrap_numeric_binary_operator!(lhs, rhs, "*")
+                binary_operator_expr!("*", lhs, rhs)
             }
             Formula::Modulo(lhs, rhs) => {
-                wrap_numeric_binary_operator!(lhs, rhs, "%")
+                binary_operator_expr!("%", lhs, rhs)
             }
             Formula::Divide(lhs, rhs) => {
-                wrap_numeric_binary_operator!(lhs, rhs, "/")
+                binary_operator_expr!("/", lhs, rhs)
             }
             Formula::Exponent(lhs, rhs) => {
-                wrap_numeric_binary_operator!(lhs, rhs, "^")
+                fn_expr!("POW", lhs, rhs)
             }
             
             Formula::Concat(lhs, rhs) => {
-                verify_scalar_type!(
-                    "Argument lhs of CONCAT(lhs: Text, rhs: Text)",
-                    FormulaReturnType::from(column_type::Primitive::PlainText),
-                    lhs
-                );
-                verify_scalar_type!(
-                    "Argument rhs of CONCAT(lhs: Text, rhs: Text)",
-                    FormulaReturnType::from(column_type::Primitive::PlainText),
-                    rhs
-                );
-                FormulaReturnType::from(column_type::Primitive::PlainText)
+                binary_operator_expr!("||", lhs, rhs)
             }
 
             Formula::And(lhs, rhs) => {
-                let lhs_scalar_type: FormulaReturnType = verify_scalar_type!(
-                    "Argument lhs of AND(lhs: Number, rhs: Number)",
-                    FormulaReturnType::from(column_type::Primitive::Boolean),
-                    lhs
-                );
-                let rhs_scalar_type: FormulaReturnType = verify_scalar_type!(
-                    "Argument rhs of AND(lhs: Number, rhs: Number)",
-                    FormulaReturnType::from(column_type::Primitive::Boolean),
-                    rhs
-                );
-                lhs_scalar_type.generalize(&rhs_scalar_type)
+                binary_operator_expr!("AND", lhs, rhs)
             }
             Formula::Or(lhs, rhs) => {
-                let lhs_scalar_type: FormulaReturnType = verify_scalar_type!(
-                    "Argument lhs of OR(lhs: Number, rhs: Number)",
-                    FormulaReturnType::from(column_type::Primitive::Boolean),
-                    lhs
-                );
-                let rhs_scalar_type: FormulaReturnType = verify_scalar_type!(
-                    "Argument rhs of OR(lhs: Number, rhs: Number)",
-                    FormulaReturnType::from(column_type::Primitive::Boolean),
-                    rhs
-                );
-                lhs_scalar_type.generalize(&rhs_scalar_type)
+                binary_operator_expr!("OR", lhs, rhs)
             }
 
-            Formula::Eq(lhs, rhs) => FormulaReturnType::from(column_type::Primitive::Boolean),
+            Formula::Eq(lhs, rhs) => {
+                binary_operator_expr!("IS", lhs, rhs)
+            }
             Formula::LessThan(lhs, rhs) => {
-                let inner_expected_type: FormulaReturnType = FormulaReturnType::from(column_type::Primitive::Number)
-                    .generalize(&FormulaReturnType::from(column_type::Primitive::PlainText));
-                verify_scalar_type!(
-                    "Argument lhs of LESSTHAN(lhs: Number | Text, rhs: Number | Text)",
-                    inner_expected_type,
-                    lhs 
-                );
-                verify_scalar_type!(
-                    "Argument rhs of LESSTHAN(lhs: Number | Text, rhs: Number | Text)",
-                    inner_expected_type,
-                    rhs
-                );
-                FormulaReturnType::from(column_type::Primitive::Boolean)
+                binary_operator_expr!("<", lhs, rhs)
             }
             Formula::LessThanOrEq(lhs, rhs) => {
-                let inner_expected_type: FormulaReturnType = FormulaReturnType::from(column_type::Primitive::Number)
-                    .generalize(&FormulaReturnType::from(column_type::Primitive::PlainText));
-                verify_scalar_type!(
-                    "Argument lhs of LESSTHANEQ(lhs: Number | Text, rhs: Number | Text)",
-                    inner_expected_type,
-                    lhs 
-                );
-                verify_scalar_type!(
-                    "Argument rhs of LESSTHANEQ(lhs: Number | Text, rhs: Number | Text)",
-                    inner_expected_type,
-                    rhs
-                );
-                FormulaReturnType::from(column_type::Primitive::Boolean)
+                binary_operator_expr!("<=", lhs, rhs)
             }
 
             Formula::Glob { str, pattern } => {
-                verify_scalar_type!(
-                    "Argument str of ISMATCH(str: Text, pattern: Text)",
-                    FormulaReturnType::from(column_type::Primitive::PlainText),
-                    str 
-                );
-                verify_scalar_type!(
-                    "Argument pattern of ISMATCH(str: Text, pattern: Text)",
-                    FormulaReturnType::from(column_type::Primitive::PlainText),
-                    pattern
-                );
-                FormulaReturnType::from(column_type::Primitive::Boolean)
+                binary_operator_expr!("GLOB", str, pattern)
             }
 
-            Formula::Index { collection, index } => {
-                verify_scalar_type!(
-                    "Argument idx of INDEX(x: List<Any>, idx: Integer)",
-                    FormulaReturnType::from(column_type::Primitive::Integer),
-                    index
-                );
-                collection.get_scalar_type(conn)?
+            Formula::NullIf { value, null_if_match } => {
+                fn_expr!("NULLIF", value, null_if_match)
             }
-            Formula::NullIf { value, null_if_match } => value.get_scalar_type(conn)?,
 
             /*
              * Three-parameter functions
              */
 
             Formula::Conditional { condition, formula_if_true, formula_if_false } => {
-                verify_scalar_type!(
-                    "Argument x of IIF(x: Boolean, a: Any, b: Any)",
-                    FormulaReturnType::from(column_type::Primitive::Boolean),
-                    condition
-                );
-                let lhs_scalar_type: FormulaReturnType = formula_if_true.get_scalar_type(conn)?;
-                let rhs_scalar_type: FormulaReturnType = formula_if_false.get_scalar_type(conn)?;
-                lhs_scalar_type.generalize(&rhs_scalar_type)
+                fn_expr!("IIF", condition, formula_if_true, formula_if_false)
             }
 
             Formula::Substring { str, start, length } => {
-                verify_scalar_type!(
-                    match length {
-                        Some(_) => "Argument str of SUBSTRING(str: Text, start: Integer, length: Integer)",
-                        None => "Argument str of SUBSTRING(str: Text, start: Integer)"
-                    },
-                    FormulaReturnType::from(column_type::Primitive::PlainText),
-                    str 
-                );
-                verify_scalar_type!(
-                    match length {
-                        Some(_) => "Argument start of SUBSTRING(str: Text, start: Integer, length: Integer)",
-                        None => "Argument start of SUBSTRING(str: Text, start: Integer)"
-                    },
-                    FormulaReturnType::from(column_type::Primitive::Integer),
-                    start 
-                );
                 if let Some(length) = length {
-                    verify_scalar_type!(
-                        "Argument length of SUBSTRING(str: Text, start: Integer, length: Integer)",
-                        FormulaReturnType::from(column_type::Primitive::Integer),
-                        length 
-                    );
+                    fn_expr!("SUBSTRING", str, start, length) 
+                } else {
+                    fn_expr!("SUBSTRING", str, start)
                 }
-                FormulaReturnType::from(column_type::Primitive::PlainText)
             }
             Formula::Replace { original, pattern, replacement } => {
-                verify_scalar_type!(
-                    "Argument str of REPLACE(str: Text, pattern: Text, replacement: Text)",
-                    FormulaReturnType::from(column_type::Primitive::PlainText),
-                    original 
-                );
-                verify_scalar_type!(
-                    "Argument pattern of REPLACE(str: Text, pattern: Text, replacement: Text)",
-                    FormulaReturnType::from(column_type::Primitive::PlainText),
-                    pattern 
-                );
-                verify_scalar_type!(
-                    "Argument replacement of REPLACE(str: Text, pattern: Text, replacement: Text)",
-                    FormulaReturnType::from(column_type::Primitive::PlainText),
-                    replacement
-                );
-                FormulaReturnType::from(column_type::Primitive::PlainText)
+                fn_expr!("REPLACE", original, pattern, replacement)
             }
 
             /*
@@ -2856,136 +2929,198 @@ impl FormulaExpression {
              */
 
             Formula::LiteralArray(inners) => {
-                let mut scalar_type: FormulaReturnType = FormulaReturnType::new();
-                for inner in inners {
-                    scalar_type = scalar_type.generalize(&inner.get_scalar_type(conn)?);
-                }
-                scalar_type
+                return Err(Error::NotImplementedError { 
+                    msg: String::from("Literal arrays are syntactically allowed in formulas, but have not been implemented yet!")
+                });
             }
 
             Formula::Coalesce(inners) => {
-                let mut scalar_type: FormulaReturnType = FormulaReturnType::new();
-                for inner in inners {
-                    scalar_type = scalar_type.generalize(&inner.get_scalar_type(conn)?);
+                let mut inner_exprs: Vec<Self> = Vec::new();
+                for inner in inners.iter() {
+                    inner_exprs.push(Self::from_contextual(conn, inner, context)?);
                 }
-                scalar_type
+                Self {
+                    value_expr: match inner_exprs.iter().map(|e| e.value_expr.clone())
+                        .reduce(|acc, e| format!("{acc}, {e}")) {
+                        Some(arg_exprs) => format!("COALESCE({arg_exprs})"),
+                        None => String::from("NULL")
+                    },
+                    plain_label_expr: match inner_exprs.iter()
+                        .map(|e| format!("WHEN {} IS NOT NULL THEN {}", e.value_expr, e.plain_label_expr))
+                        .reduce(|acc, e| format!("{acc} {e}")) {
+                        Some(plain_label_cases) => format!("CASE {plain_label_cases} ELSE NULL END"),
+                        None => String::from("NULL")
+                    },
+                    json_label_expr: match inner_exprs.iter()
+                        .map(|e| format!("WHEN {} IS NOT NULL THEN {}", e.value_expr, e.json_label_expr))
+                        .reduce(|acc, e| format!("{acc} {e}")) {
+                        Some(json_label_cases) => format!("CASE {json_label_cases} ELSE NULL END"),
+                        None => String::from("NULL")
+                    },
+                    cell_expr: match inner_exprs.iter()
+                        .map(|e| format!("WHEN {} IS NOT NULL THEN {}", e.value_expr, e.cell_expr))
+                        .reduce(|acc, e| format!("{acc} {e}")) {
+                        Some(cell_cases) => format!("CASE {cell_cases} ELSE NULL END"),
+                        None => String::from("NULL")
+                    }
+                }
             }
             Formula::Argmax(inners) => {
-                let inner_expected_type: FormulaReturnType = FormulaReturnType::from(column_type::Primitive::Number)
-                    .generalize(&FormulaReturnType::from(column_type::Primitive::PlainText));
-                let mut scalar_type: FormulaReturnType = FormulaReturnType::new();
-                for inner in inners {
-                    scalar_type = scalar_type.generalize(&verify_scalar_type!(
-                        "Argument x of ARGMAX(...x: Number | Text)",
-                        inner_expected_type,
-                        inner 
-                    ));
-                }
-                scalar_type
+                fn_variable_expr!("MAX", inners)
             }
             Formula::Argmin(inners) => {
-                let inner_expected_type: FormulaReturnType = FormulaReturnType::from(column_type::Primitive::Number)
-                    .generalize(&FormulaReturnType::from(column_type::Primitive::PlainText));
-                let mut scalar_type: FormulaReturnType = FormulaReturnType::new();
-                for inner in inners {
-                    scalar_type = scalar_type.generalize(&verify_scalar_type!(
-                        "Argument x of ARGMIN(...x: Number | Text)",
-                        inner_expected_type,
-                        inner 
-                    ));
-                }
-                scalar_type
+                fn_variable_expr!("MIN", inners)
             }
             Formula::Switch { value, matches, formula_if_no_match } => {
-                let mut scalar_type: FormulaReturnType = formula_if_no_match.get_scalar_type(conn)?;
-                for (_, inner) in matches {
-                    scalar_type = scalar_type.generalize(&inner.get_scalar_type(conn)?);
+                let mut value_cases: Vec<String> = Vec::new();
+                let mut plain_label_cases: Vec<String> = Vec::new();
+                let mut json_label_cases: Vec<String> = Vec::new();
+                let mut cell_cases: Vec<String> = Vec::new();
+
+                let value: Self = Self::from_contextual(conn, value.as_ref(), context)?;
+                for (match_key, match_value) in matches.iter() {
+                    let match_key: Self = Self::from_contextual(conn, match_key, context)?;
+                    let match_value: Self = Self::from_contextual(conn, match_value, context)?;
+                    value_cases.push(format!("WHEN {} IS {} THEN {}", value.value_expr, match_key.value_expr, match_value.value_expr));
+                    plain_label_cases.push(format!("WHEN {} IS {} THEN {}", value.value_expr, match_key.value_expr, match_value.plain_label_expr));
+                    json_label_cases.push(format!("WHEN {} IS {} THEN {}", value.value_expr, match_key.value_expr, match_value.json_label_expr));
+                    cell_cases.push(format!("WHEN {} IS {} THEN {}", value.value_expr, match_key.value_expr, match_value.cell_expr));
                 }
-                scalar_type
+
+                let if_no_match: Self = Self::from_contextual(conn, formula_if_no_match.as_ref(), context)?;
+                value_cases.push(format!("ELSE {}", if_no_match.value_expr));
+                plain_label_cases.push(format!("ELSE {}", if_no_match.plain_label_expr));
+                json_label_cases.push(format!("ELSE {}", if_no_match.json_label_expr));
+                cell_cases.push(format!("ELSE {}", if_no_match.cell_expr));
+                
+                Self {
+                    value_expr: format!("CASE {} END", value_cases.into_iter().reduce(|acc, e| format!("{acc} {e}")).unwrap()),
+                    plain_label_expr: format!("CASE {} END", plain_label_cases.into_iter().reduce(|acc, e| format!("{acc} {e}")).unwrap()),
+                    json_label_expr: format!("CASE {} END", json_label_cases.into_iter().reduce(|acc, e| format!("{acc} {e}")).unwrap()),
+                    cell_expr: format!("CASE {} END", cell_cases.into_iter().reduce(|acc, e| format!("{acc} {e}")).unwrap())
+                }
             }
 
             Formula::Format { format, format_params } => {
-                verify_scalar_type!(
-                    "Argument format of FORMAT(format: Text, ...x: Any)",
-                    FormulaReturnType::from(column_type::Primitive::PlainText),
-                    format 
+                let format: Self = Self::from_contextual(conn, format.as_ref(), context)?;
+                let mut inner_exprs: Vec<Self> = Vec::new();
+                for inner in format_params.iter() {
+                    inner_exprs.push(Self::from_contextual(conn, inner, context)?);
+                }
+
+                let scalar_type: FormulaReturnType = formula.get_scalar_type(conn)?;
+                let value_expr: String = format!("FORMAT({})",
+                    inner_exprs.into_iter()
+                        .map(|e| e.value_expr)
+                        .fold(format.value_expr, |acc, e| format!("{acc}, {e}"))
                 );
-                FormulaReturnType::from(column_type::Primitive::PlainText)
+                Self {
+                    plain_label_expr: scalar_type.construct_plain_label_expr(&value_expr),
+                    json_label_expr: scalar_type.construct_json_label_expr(&value_expr),
+                    value_expr,
+                    cell_expr: String::from("NULL")
+                }
             }
 
             /*
              * Aggregation functions
              */
 
-            Formula::Count(collection) => FormulaReturnType::from(column_type::Primitive::Integer),
+            Formula::Count(collection) => {
+                fn_agg_expr!("COUNT", collection)
+            }
 
             Formula::Average(collection) => {
-                verify_scalar_type!(
-                    "Argument x of AVG(x: List<Number>)",
-                    FormulaReturnType::from(column_type::Primitive::Number),
-                    collection
-                );
-                FormulaReturnType::from(column_type::Primitive::Number)
+                fn_agg_expr!("AVG", collection)
             }
             Formula::Sum(collection) => {
-                verify_scalar_type!(
-                    "Argument x of SUM(x: List<Number>)",
-                    FormulaReturnType::from(column_type::Primitive::Number),
-                    collection
-                )
+                fn_agg_expr!("SUM", collection)
             }
             Formula::Max(collection) => {
-                verify_scalar_type!(
-                    "Argument x of MAX(x: List<Number | Text>)",
-                    FormulaReturnType::from(column_type::Primitive::Number)
-                        .generalize(&FormulaReturnType::from(column_type::Primitive::PlainText)),
-                    collection
-                )
+                fn_agg_expr!("MAX", collection)
             }
             Formula::Min(collection) => {
-                verify_scalar_type!(
-                    "Argument x of MIN(x: List<Number | Text>)",
-                    FormulaReturnType::from(column_type::Primitive::Number)
-                        .generalize(&FormulaReturnType::from(column_type::Primitive::PlainText)),
-                    collection
-                )
+                fn_agg_expr!("MIN", collection)
             }
 
             Formula::Join { collection, delimiter } => {
-                verify_scalar_type!(
-                    "Argument x of JOIN(x: List<Text>, delimiter: Text)",
-                    FormulaReturnType::from(column_type::Primitive::PlainText),
-                    collection
-                );
-                verify_scalar_type!(
-                    "Argument delimiter of JOIN(x: List<Text>, delimiter: Text)",
-                    FormulaReturnType::from(column_type::Primitive::PlainText),
-                    delimiter
-                );
-                FormulaReturnType::from(column_type::Primitive::PlainText)
+                fn_agg_expr!("GROUP_CONCAT", collection, delimiter)
             }
 
-            Formula::In { value, collection } => FormulaReturnType::from(column_type::Primitive::Boolean),
+            Formula::In { value, collection } => {
+                let scalar_type: FormulaReturnType = formula.get_scalar_type(conn)?;
+
+                context.disable_window_changes();
+                let value: Self = Self::from_contextual(conn, value.as_ref(), context)?;
+                context.enable_window_changes();
+
+                let mut collection_context: FormulaExpressionContext = FormulaExpressionContext::Collection {
+                    slice: CollectionSlice::None,
+                    filter_expr: None,
+                    order_exprs: Vec::new(),
+                    min_depth: HashMap::new(),
+                    window_changes_disabled: 1
+                };
+                let collection: Self = Self::from_contextual(conn, collection, &mut collection_context)?;
+
+                let value_expr: String = collection_context.wrap(
+                    format!(
+                        "{} IN {}",
+                        value.value_expr,
+                        collection.value_expr
+                    )
+                );
+                Self {
+                    plain_label_expr: scalar_type.construct_plain_label_expr(&value_expr),
+                    json_label_expr: scalar_type.construct_json_label_expr(&value_expr),
+                    value_expr,
+                    cell_expr: String::from("NULL")
+                }
+            }
+
+            Formula::Index { collection, index } => {
+                let scalar_type: FormulaReturnType = formula.get_scalar_type(conn)?;
+
+                context.disable_window_changes();
+                let index: Self = Self::from_contextual(conn, index.as_ref(), context)?;
+                context.enable_window_changes();
+
+                let mut collection_context: FormulaExpressionContext = FormulaExpressionContext::Collection {
+                    slice: CollectionSlice::Index { index_expr: index.value_expr },
+                    filter_expr: None,
+                    order_exprs: Vec::new(),
+                    min_depth: HashMap::new(),
+                    window_changes_disabled: 0
+                };
+                let collection: Self = Self::from_contextual(conn, collection, &mut collection_context)?;
+
+                let value_expr: String = collection_context.wrap(collection.value_expr);
+                Self {
+                    plain_label_expr: scalar_type.construct_plain_label_expr(&value_expr),
+                    json_label_expr: scalar_type.construct_json_label_expr(&value_expr),
+                    value_expr,
+                    cell_expr: String::from("NULL")
+                }
+            }
 
             /*
              * Parameter
              */
             
-            Formula::Param { column_oid, .. } => {
-                match column::FullMetadata::get_transact(conn, column_oid.clone()) {
-                    Ok(column_metadata) => {
-                        match column_metadata.column_type {
-                            column_type::ColumnType::Primitive(prim) => FormulaReturnType::from(prim),
-                            _ => FormulaReturnType::new()
-                        }
-                    }
-                    Err(Error::SqlError { .. }) => {
-                        // Parameter has been orphaned
-                        FormulaReturnType::new()
-                    }
-                    Err(e) => {
-                        return Err(e);
-                    }
+            Formula::Param { datasource_alias, column_oid } => {
+                let datasource: Datasource = Datasource::from_alias_transact(conn, datasource_alias.clone())?;
+                let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(conn, column_oid.clone())?;
+                let value_expr: String = format!("w.{datasource_alias}_COLUMN{column_oid}");
+                let label_expr: String = format!("__{datasource_alias}_COLUMN{column_oid}_LABEL__");
+                Self {
+                    value_expr,
+                    plain_label_expr: label_expr.clone(),
+                    json_label_expr: label_expr,
+                    cell_expr: format!(
+                        "('{}:{}:{column_oid}:' || CAST(w.{datasource_alias}_OID AS TEXT))",
+                        column_metadata.column_type.to_str(),
+                        datasource.get_table_oid()?
+                    )
                 }
             }
         })

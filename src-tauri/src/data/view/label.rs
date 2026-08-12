@@ -1,14 +1,15 @@
 use std::collections::HashMap;
 use rusqlite::{
+    Connection,
     Transaction
 };
-use crate::util::encode::{sql_encode_string, json_encode_expr};
+use crate::util::encode::{sql_encode_string, sql_json_encode_expr};
 use crate::util::error::Error;
 use crate::util::db::{sql_collect, sql_execute};
 use crate::data::column;
 use crate::data::column_type;
 use crate::data::datasource::Datasource;
-use crate::data::view::formula::FormulaReturnType;
+use crate::data::view::formula::{Formula, FormulaReturnType, FormulaExpression};
 use crate::data::view::wrapper_cte::{WrapperCteColumns, WrapperCteConstructor, WrapperCteReportColumn, WrapperCteTableColumn};
 
 
@@ -93,12 +94,12 @@ impl NonRecursiveLabelExpression {
         if table_columns.len() == 0 {
             format!(
                 "('\"' || (SELECT {} FROM METADATA_SCHEMA s WHERE s.OID = w.{partition_alias}_TABLE_SCHEMA_OID) || '\"')",
-                json_encode_expr(&String::from("s.NAME"))
+                sql_json_encode_expr(&String::from("s.NAME"))
             )
         } else if table_columns.len() == 1 {
             format!(
                 "('{{ \"' || (SELECT {} FROM METADATA_SCHEMA s WHERE s.OID = w.{partition_alias}_TABLE_SCHEMA_OID) || '\": ' || {} || ' }}')",
-                json_encode_expr(&String::from("s.NAME")),
+                sql_json_encode_expr(&String::from("s.NAME")),
                 {
                     let json_label_expr: String = table_columns[0].get_json_label();
                     format!("IIF({}, COALESCE({json_label_expr}, 'null'), {json_label_expr})", table_columns[0].is_required_expr)
@@ -112,7 +113,7 @@ impl NonRecursiveLabelExpression {
         || '\": {{ ' || COALESCE(CONCAT_WS(', ', {}) || ' ', '') || '}} }}'
 )
                 ",
-                json_encode_expr(&String::from("s.NAME")),
+                sql_json_encode_expr(&String::from("s.NAME")),
                 table_columns.iter()
                     .map(|table_column| {
                         format!(
@@ -131,7 +132,7 @@ impl NonRecursiveLabelExpression {
     }
 
     /// Constructs non-recursive labels for a column on a table.
-    fn construct_labels_for_table(table_column: WrapperCteTableColumn) -> Result<Self, Error> {
+    fn construct_labels_for_table(conn: &Connection, table_column: WrapperCteTableColumn) -> Result<Self, Error> {
         Ok(match &table_column.column_metadata.column_type {
             column_type::ColumnType::Primitive(prim) => {
                 // For primitives, construct a basic label expression for the value
@@ -155,7 +156,7 @@ impl NonRecursiveLabelExpression {
                 let partition_expr: String = format!("w.{partition_alias}_OID");
 
                 let child_table_column_labels: Vec<Self> = match table_column.child_columns {
-                    Some(columns) => Self::construct_labels(columns)?,
+                    Some(columns) => Self::construct_labels(conn, columns)?,
                     _ => Vec::new()
                 };
 
@@ -179,7 +180,7 @@ impl NonRecursiveLabelExpression {
             column_type::ColumnType::Multiselect { .. }
             | column_type::ColumnType::Subreport { .. } => {
                 let key_labels: Vec<Self> = match table_column.child_columns {
-                    Some(columns) => Self::construct_labels(columns)?,
+                    Some(columns) => Self::construct_labels(conn, columns)?,
                     _ => Vec::new()
                 };
 
@@ -212,16 +213,18 @@ impl NonRecursiveLabelExpression {
             }
 
             column_type::ColumnType::Formula { formula, .. } => {
-                todo!("Formula labels are not yet implemented.");
+                let parsed_formula: Formula = Formula::parse(formula.clone())?;
+                let expr: FormulaExpression = FormulaExpression::from(trans, &parsed_formula)?;
+
             }
         })
     }
 
-    fn construct_labels_for_report(report_column: WrapperCteReportColumn, partition_expr: String) -> Result<Self, Error> {
+    fn construct_labels_for_report(conn: &Connection, report_column: WrapperCteReportColumn, partition_expr: String) -> Result<Self, Error> {
         Ok(match &report_column.column_metadata.column_type {
             column_type::ColumnType::Subreport { .. } => {
                 let key_labels: Vec<Self> = match report_column.child_columns {
-                    Some(columns) => Self::construct_labels(columns)?,
+                    Some(columns) => Self::construct_labels(conn, columns)?,
                     _ => Vec::new()
                 };
 
@@ -251,7 +254,7 @@ impl NonRecursiveLabelExpression {
             }
 
             column_type::ColumnType::Formula { formula, .. } => {
-                todo!("Formula labels are not yet implemented.");
+                
             }
             
             _ => {
@@ -263,7 +266,7 @@ impl NonRecursiveLabelExpression {
         })
     }
 
-    fn construct_labels(keys: WrapperCteColumns) -> Result<Vec<Self>, Error> {
+    fn construct_labels(conn: &Connection, keys: WrapperCteColumns) -> Result<Vec<Self>, Error> {
         Ok(match keys {
             WrapperCteColumns::TableColumns { columns } => {
                 let mut column_labels: Vec<Self> = Vec::new();
@@ -271,7 +274,7 @@ impl NonRecursiveLabelExpression {
                     match table_column.recurses_back_to {
                         None => {
                             column_labels.push(
-                                Self::construct_labels_for_table(table_column)?
+                                Self::construct_labels_for_table(conn, table_column)?
                             );
                         }
                         Some(_) => {
@@ -298,7 +301,7 @@ impl NonRecursiveLabelExpression {
                 let mut column_labels: Vec<Self> = Vec::new();
                 for report_column in columns {
                     column_labels.push(
-                        Self::construct_labels_for_report(report_column, partition_expr.clone())?
+                        Self::construct_labels_for_report(conn, report_column, partition_expr.clone())?
                     );
                 }
                 column_labels
@@ -337,7 +340,7 @@ pub fn construct_label_view(trans: &Transaction, schema_oid: i64) -> Result<(), 
             .unwrap();
 
         // Build the label expressions
-        let json_keys: Vec<NonRecursiveLabelExpression> = NonRecursiveLabelExpression::construct_labels(keys)?;
+        let json_keys: Vec<NonRecursiveLabelExpression> = NonRecursiveLabelExpression::construct_labels(trans, keys)?;
 
         // Add plain label
         c.insert(

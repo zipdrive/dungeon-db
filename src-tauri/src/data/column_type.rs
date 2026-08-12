@@ -1,6 +1,7 @@
 use crate::util::db;
 use crate::util::db::{sql_one, sql_zero_or_one, sql_execute};
 use crate::util::error::Error;
+use crate::data::view::formula::Formula;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 
@@ -59,7 +60,7 @@ impl Primitive {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ColumnType {
-    Formula { oid: i64, formula: String },
+    Formula { oid: i64, formula: Formula },
     Subreport { oid: i64, report_oid: i64 },
     Primitive(Primitive),
     Object { oid: i64, table_oid: i64 },
@@ -140,9 +141,10 @@ impl ColumnType {
             |row| {
                 let mode: String = row.get("MODE")?;
                 if mode == "formula" {
+                    let raw_formula_text: String = row.get("FORMULA")?;
                     Ok(Self::Formula {
                         oid,
-                        formula: row.get("FORMULA")?,
+                        formula: Formula::parse(raw_formula_text)?,
                     })
                 } else if mode == "subreport" {
                     Ok(Self::Subreport {

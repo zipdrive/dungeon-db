@@ -7,7 +7,7 @@ use crate::data::column_type;
 use crate::data::datasource::Datasource;
 
 
-mod formula;
+pub mod formula;
 mod datasource_cte;
 mod wrapper_cte;
 
