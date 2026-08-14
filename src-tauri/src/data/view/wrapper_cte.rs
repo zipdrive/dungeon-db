@@ -454,9 +454,6 @@ impl WrapperCteConstructor {
             column_type::ColumnType::Formula { formula, .. } => {
                 return Ok(WrapperCteTableColumn { 
                     child_columns: if !is_label {
-                        // Parse the formula
-                        let formula = Formula::parse(formula.clone())?;
-                        
                         // Add each parameter to the formula
                         let mut params: Vec<WrapperCteTableColumn> = Vec::new();
                         for (param_datasource_alias, param_column_oid, param_is_collection) in formula.get_all_params(is_collection).into_iter() {
@@ -516,9 +513,6 @@ impl WrapperCteConstructor {
     fn add_virtual_parameter(&mut self, trans: &Transaction, column: column::FullMetadata, is_collection: bool, is_label: bool) -> Result<WrapperCteReportColumn, Error> {
         match &column.column_type {
             column_type::ColumnType::Formula { formula, .. } => {
-                // Parse the formula
-                let formula = Formula::parse(formula.clone())?;
-                
                 // Add each parameter to the formula
                 let mut params: Vec<WrapperCteTableColumn> = Vec::new();
                 for (param_datasource_alias, param_column_oid, param_is_collection) in formula.get_all_params(is_collection).into_iter() {

@@ -213,9 +213,77 @@ impl NonRecursiveLabelExpression {
             }
 
             column_type::ColumnType::Formula { formula, .. } => {
-                let parsed_formula: Formula = Formula::parse(formula.clone())?;
-                let expr: FormulaExpression = FormulaExpression::from(trans, &parsed_formula)?;
+                let expr: FormulaExpression = FormulaExpression::from(conn, formula)?;
+                        
+                // Replace label placeholders
+                match table_column.child_columns {
+                    Some(WrapperCteColumns::TableColumns { columns: params }) => {
+                        for param in params {
+                            let label_placeholder: String = format!("__{}_COLUMN{}_LABEL__", param.datasource_alias, param.column_metadata.oid);
+                            let (plain_label_expr, json_label_expr) = match param.column_metadata.column_type {
+                                column_type::ColumnType::Primitive(prim) => {
+                                    let scalar_type: FormulaReturnType = FormulaReturnType::from(prim);
+                                    let value_expr: String = format!("w.{}_COLUMN{}", param.datasource_alias, param.column_metadata.oid);
+                                    (
+                                        scalar_type.construct_plain_label_expr(&value_expr),
+                                        scalar_type.construct_json_label_expr(&value_expr)
+                                    )
+                                }
+                                column_type::ColumnType::Object { table_oid, .. } => {
+                                    let value_expr: String = format!("w.{}_COLUMN{}", param.datasource_alias, param.column_metadata.oid);
+                                    (
+                                        String::from("NULL"),
+                                        format!("(SELECT l.OBJECT_LABEL FROM SCHEMA{table_oid} l WHERE l.OID = {value_expr})")
+                                    )
+                                }
+                                column_type::ColumnType::Select { table_oid, .. } => {
+                                    let value_expr: String = format!("w.{}_COLUMN{}", param.datasource_alias, param.column_metadata.oid);
+                                    (
+                                        format!("(SELECT l.PLAIN_LABEL FROM SCHEMA{table_oid} l WHERE l.OID = {value_expr})"),
+                                        format!("(SELECT l.JSON_LABEL FROM SCHEMA{table_oid} l WHERE l.OID = {value_expr})")
+                                    )
+                                }
+                                column_type::ColumnType::Multiselect { table_oid, .. } => {
+                                    let partition_expr: String = format!("w.{}_OID", param.datasource_alias);
+                                    let value_expr: String = format!("w.{}_COLUMN{}_OID", param.datasource_alias, param.column_metadata.oid);
+                                    (
+                                        String::from("NULL"),
+                                        format!("('[ ' || (GROUP_CONCAT((SELECT l.JSON_LABEL FROM SCHEMA{table_oid} l WHERE l.OID = {value_expr}), ', ') OVER (PARTITION BY {partition_expr})) || ' ]')")
+                                    )
+                                }
+                                column_type::ColumnType::Subreport { report_oid, .. } => {
+                                    (
+                                        String::from("NULL"),
+                                        format!(
+                                            "('[ ' || (GROUP_CONCAT((SELECT l.JSON_LABEL FROM SCHEMA{report_oid} l WHERE {}), ', ') OVER ({})) || ' ]')",
 
+                                            // Filter expression
+                                            {
+                                                todo!("This");
+                                                String::from("FALSE")
+                                            },
+
+                                            // Partition expression
+                                            match Datasource::from_alias_transact(trans, param.datasource_alias)?
+                                                .linearize()
+                                                .into_iter()
+                                                .map(|d| format!("w.{}_OID", d.get_alias()))
+                                                .reduce(|acc, e| format!("{acc}, {e}")) {
+                                                Some(partition_expr) => format!("PARTITION BY {partition_expr}"),
+                                                None => String::from("")
+                                            }
+                                        )
+                                    )
+                                }
+                                _ => {
+                                    return Err(Error::adhoc("Expected parameter of type Formula to be expanded!"));
+                                }
+                            };
+                            expr.replace_label(label_placeholder, plain_label_expr, json_label_expr);
+                        }
+                    }
+                    _ => {}
+                }
             }
         })
     }

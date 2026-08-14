@@ -57,7 +57,7 @@ impl Primitive {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ColumnType {
     Formula { oid: i64, formula: Formula },
@@ -67,6 +67,14 @@ pub enum ColumnType {
     Select { oid: i64, table_oid: i64 },
     Multiselect { oid: i64, table_oid: i64 },
 }
+
+impl PartialEq for ColumnType {
+    fn eq(&self, other: &Self) -> bool {
+        self.get_oid() == other.get_oid()
+    }
+}
+
+impl Eq for ColumnType {}
 
 impl ColumnType {
     /// Gets the column type metadata from its OID.
@@ -206,7 +214,7 @@ impl ColumnType {
                         VALUES 
                         (?1, ?2)
                     ",
-                    params![oid, formula],
+                    params![oid, formula.stringify()],
                 )?;
 
                 return Ok(Self::Formula { oid, formula });

@@ -1,6 +1,8 @@
 use std::collections::{HashSet, HashMap};
 use regex::Regex;
 use rusqlite::{Connection};
+use serde::{Deserialize, Serialize};
+use crate::data::view::label;
 use crate::util::encode::{json_encode_string, sql_encode_string, sql_json_encode_string};
 use crate::util::error::Error;
 use crate::data::column;
@@ -187,7 +189,7 @@ impl FormulaReturnType {
 
 
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 pub enum Formula {
     Param {
         datasource_alias: String,
@@ -1844,7 +1846,6 @@ impl Formula {
             /*
              * Parameter
              */
-            
             Formula::Param { datasource_alias, column_oid } => {
                 vec![(datasource_alias.clone(), column_oid.clone(), is_collection)]
             }
@@ -1857,7 +1858,7 @@ impl Formula {
         macro_rules! verify_scalar_type {
             ( $s:expr, $expected_type:expr, $to_verify:expr ) => {
                 {
-                    let inner_name: String = $to_verify.to_string();
+                    let inner_name: String = $to_verify.to_docstring();
                     let inner_scalar_type: FormulaReturnType = $to_verify.get_scalar_type(conn)?;
                     if !$expected_type.encompasses(&inner_scalar_type) {
                         return Err(Error::FormulaTypeValidationError {
@@ -2580,16 +2581,16 @@ impl FormulaExpressionContext {
 
 pub struct FormulaExpression {
     /// Expression 
-    value_expr: String,
+    pub value_expr: String,
 
     /// Expression for the value as a plaintext string.
-    plain_label_expr: String,
+    pub plain_label_expr: String,
 
     /// Expression for the value as a JSON string.
-    json_label_expr: String,
+    pub json_label_expr: String,
 
     /// Expression for the cell.
-    cell_expr: String,
+    pub cell_expr: String,
 }
 
 
@@ -2599,6 +2600,7 @@ impl FormulaExpression {
         Self::from_contextual(conn, formula, &mut FormulaExpressionContext::Scalar)
     }
 
+    /// Converts a formula, wrapped in a context, into a set of SQL expressions.
     fn from_contextual(conn: &Connection, formula: &Formula, context: &mut FormulaExpressionContext) -> Result<Self, Error> {
         /// Constructs expressions for an SQLite built-in function with a known number of arguments.
         macro_rules! fn_expr {
@@ -3124,5 +3126,11 @@ impl FormulaExpression {
                 }
             }
         })
+    }
+
+    /// Replaces label placeholders with a label expression.
+    pub fn replace_label(&mut self, label_placeholder: String, plain_label_expr: String, json_label_expr: String) {
+        self.plain_label_expr.replace(&label_placeholder, &plain_label_expr);
+        self.json_label_expr.replace(&label_placeholder, &json_label_expr);
     }
 }

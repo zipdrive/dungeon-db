@@ -8,7 +8,7 @@ use crate::util::db::{sql_map_then_iter, sql_iter, sql_collect, sql_execute};
 use crate::data::column_type;
 use crate::data::column;
 use crate::data::datasource::Datasource;
-use crate::data::view::formula::FormulaReturnType;
+use crate::data::view::formula::{FormulaExpression, FormulaReturnType};
 use crate::data::view::wrapper_cte::{WrapperCteConstructor, WrapperCteColumns, WrapperCteTableColumn, WrapperCteReportColumn};
 
 /// Constructs a SCHEMA{schema_oid}_VIEW to select all columns belonging to a schema.
@@ -122,7 +122,93 @@ pub fn construct_main_view(trans: &Transaction, schema_oid: i64) -> Result<(), E
                     }
 
                     column_type::ColumnType::Formula { formula, .. } => {
-                        todo!("Compile SQL expression for formula in main view");
+                        let mut expr: FormulaExpression = FormulaExpression::from(trans, formula)?;
+                        
+                        // Replace label placeholders
+                        match table_column.child_columns {
+                            Some(WrapperCteColumns::TableColumns { columns: params }) => {
+                                for param in params {
+                                    let label_placeholder: String = format!("__{}_COLUMN{}_LABEL__", param.datasource_alias, param.column_metadata.oid);
+                                    let (plain_label_expr, json_label_expr) = match param.column_metadata.column_type {
+                                        column_type::ColumnType::Primitive(prim) => {
+                                            let scalar_type: FormulaReturnType = FormulaReturnType::from(prim);
+                                            let value_expr: String = format!("w.{}_COLUMN{}", param.datasource_alias, param.column_metadata.oid);
+                                            (
+                                                scalar_type.construct_plain_label_expr(&value_expr),
+                                                scalar_type.construct_json_label_expr(&value_expr)
+                                            )
+                                        }
+                                        column_type::ColumnType::Object { table_oid, .. } => {
+                                            let value_expr: String = format!("w.{}_COLUMN{}", param.datasource_alias, param.column_metadata.oid);
+                                            (
+                                                String::from("NULL"),
+                                                format!("(SELECT l.OBJECT_LABEL FROM SCHEMA{table_oid} l WHERE l.OID = {value_expr})")
+                                            )
+                                        }
+                                        column_type::ColumnType::Select { table_oid, .. } => {
+                                            let value_expr: String = format!("w.{}_COLUMN{}", param.datasource_alias, param.column_metadata.oid);
+                                            (
+                                                format!("(SELECT l.PLAIN_LABEL FROM SCHEMA{table_oid} l WHERE l.OID = {value_expr})"),
+                                                format!("(SELECT l.JSON_LABEL FROM SCHEMA{table_oid} l WHERE l.OID = {value_expr})")
+                                            )
+                                        }
+                                        column_type::ColumnType::Multiselect { table_oid, .. } => {
+                                            let partition_expr: String = format!("w.{}_OID", param.datasource_alias);
+                                            let value_expr: String = format!("w.{}_COLUMN{}_OID", param.datasource_alias, param.column_metadata.oid);
+                                            (
+                                                String::from("NULL"),
+                                                format!("('[ ' || (GROUP_CONCAT((SELECT l.JSON_LABEL FROM SCHEMA{table_oid} l WHERE l.OID = {value_expr}), ', ') OVER (PARTITION BY {partition_expr})) || ' ]')")
+                                            )
+                                        }
+                                        column_type::ColumnType::Subreport { report_oid, .. } => {
+                                            (
+                                                String::from("NULL"),
+                                                format!(
+                                                    "('[ ' || (GROUP_CONCAT((SELECT l.JSON_LABEL FROM SCHEMA{report_oid} l WHERE {}), ', ') OVER ({})) || ' ]')",
+
+                                                    // Filter expression
+                                                    {
+                                                        todo!("This");
+                                                        String::from("FALSE")
+                                                    },
+
+                                                    // Partition expression
+                                                    match Datasource::from_alias_transact(trans, param.datasource_alias)?
+                                                        .linearize()
+                                                        .into_iter()
+                                                        .map(|d| format!("w.{}_OID", d.get_alias()))
+                                                        .reduce(|acc, e| format!("{acc}, {e}")) {
+                                                        Some(partition_expr) => format!("PARTITION BY {partition_expr}"),
+                                                        None => String::from("")
+                                                    }
+                                                )
+                                            )
+                                        }
+                                        _ => {
+                                            return Err(Error::adhoc("Expected parameter of type Formula to be expanded!"));
+                                        }
+                                    };
+                                    expr.replace_label(label_placeholder, plain_label_expr, json_label_expr);
+                                }
+                            }
+                            _ => {}
+                        }
+
+                        // Value expression
+                        c.insert(
+                            format!("COLUMN{}_VALUE", table_column.column_metadata.oid),
+                            expr.value_expr
+                        );
+                        // Label expression
+                        c.insert(
+                            format!("COLUMN{}_LABEL", table_column.column_metadata.oid),
+                            format!("COALESCE({}, {}", expr.plain_label_expr, expr.json_label_expr)
+                        );
+                        // Cell expression
+                        c.insert(
+                            format!("COLUMN{}_CELL", table_column.column_metadata.oid), 
+                            expr.cell_expr
+                        );
                     }
 
                     column_type::ColumnType::Subreport { report_oid, .. } => {
