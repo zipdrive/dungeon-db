@@ -495,7 +495,7 @@ impl WrapperCteConstructor {
                             Some(self.add_all_report_parameters(
                                 trans, 
                                 report_oid.clone(), 
-                                is_collection, 
+                                true, 
                                 is_label
                             )?)
                         } else {
@@ -543,7 +543,7 @@ impl WrapperCteConstructor {
                             Some(self.add_all_report_parameters(
                                 trans, 
                                 report_oid.clone(), 
-                                is_collection, 
+                                true, 
                                 is_label
                             )?)
                         } else {

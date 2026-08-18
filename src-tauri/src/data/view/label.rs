@@ -131,6 +131,97 @@ impl NonRecursiveLabelExpression {
         }
     }
 
+    /// Replaces the label placeholders in the expression for a formula.
+    fn replace_label_placeholders_in_formula(conn: &Connection, expr: &mut FormulaExpression, child_columns: Option<WrapperCteColumns>) -> Result<(), Error> {
+        // Replace label placeholders
+        match child_columns {
+            Some(WrapperCteColumns::TableColumns { columns: params }) => {
+                for param in params {
+                    let label_placeholder: String = format!("__{}_COLUMN{}_LABEL__", param.datasource_alias, param.column_metadata.oid);
+                    let (plain_label_expr, json_label_expr) = match &param.column_metadata.column_type {
+                        column_type::ColumnType::Primitive(prim) => {
+                            let scalar_type: FormulaReturnType = FormulaReturnType::from(prim.clone());
+                            let value_expr: String = format!("w.{}_COLUMN{}", param.datasource_alias, param.column_metadata.oid);
+                            (
+                                scalar_type.construct_plain_label_expr(&value_expr),
+                                scalar_type.construct_json_label_expr(&value_expr)
+                            )
+                        }
+                        column_type::ColumnType::Object { .. } => {
+                            // Use the keys in child_columns to construct a single JSON object
+                            let partition_alias: String = format!("{}_COLUMN{}", param.datasource_alias, param.column_metadata.oid);
+                            
+                            let child_table_column_labels: Vec<Self> = match param.child_columns {
+                                Some(columns) => Self::construct_labels(conn, columns)?,
+                                _ => Vec::new()
+                            };
+
+                            (
+                                String::from("NULL"),
+                                Self::construct_polymorphic_json_label_expr(
+                                    partition_alias,
+                                    &child_table_column_labels
+                                )
+                            )
+                        }
+                        column_type::ColumnType::Select { .. } => {
+                            // Use the keys in child_columns to construct a single JSON object
+                            let partition_alias: String = format!("{}_COLUMN{}", param.datasource_alias, param.column_metadata.oid);
+                            let partition_expr: String = format!("w.{partition_alias}_OID");
+
+                            let child_table_column_labels: Vec<Self> = match param.child_columns {
+                                Some(columns) => Self::construct_labels(conn, columns)?,
+                                _ => Vec::new()
+                            };
+
+                            (
+                                Self::construct_plain_label_expr(partition_expr.clone(), &child_table_column_labels),
+                                Self::construct_nonpolymorphic_json_label_expr(partition_expr, &child_table_column_labels)
+                            )
+                        }
+                        column_type::ColumnType::Multiselect { .. }
+                        | column_type::ColumnType::Subreport { .. } => {
+                            let key_labels: Vec<Self> = match param.child_columns {
+                                Some(columns) => Self::construct_labels(conn, columns)?,
+                                _ => Vec::new()
+                            };
+
+                            let item_partition_alias: String = format!("{}_COLUMN{}", param.datasource_alias, param.column_metadata.oid);
+                            let item_partition_expr: String = format!("w.{item_partition_alias}_OID");
+                            let item_json_label_expr: String = Self::construct_nonpolymorphic_json_label_expr(
+                                item_partition_expr, 
+                                &key_labels
+                            );
+                            let json_label_expr: String = format!(
+                                "
+(
+    '[ ' 
+        || (
+            GROUP_CONCAT({item_json_label_expr}, ', ') OVER (PARTITION BY w.{}_OID)
+        )
+        || ' ]'
+)
+                                ",
+                                param.datasource_alias
+                            );
+
+                            (
+                                String::from("NULL"),
+                                json_label_expr
+                            )
+                        }
+                        _ => {
+                            return Err(Error::adhoc("Expected parameter of type Formula to be expanded!"));
+                        }
+                    };
+                    expr.replace_label(label_placeholder, plain_label_expr, json_label_expr);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// Constructs non-recursive labels for a column on a table.
     fn construct_labels_for_table(conn: &Connection, table_column: WrapperCteTableColumn) -> Result<Self, Error> {
         Ok(match &table_column.column_metadata.column_type {
@@ -213,76 +304,14 @@ impl NonRecursiveLabelExpression {
             }
 
             column_type::ColumnType::Formula { formula, .. } => {
-                let expr: FormulaExpression = FormulaExpression::from(conn, formula)?;
-                        
-                // Replace label placeholders
-                match table_column.child_columns {
-                    Some(WrapperCteColumns::TableColumns { columns: params }) => {
-                        for param in params {
-                            let label_placeholder: String = format!("__{}_COLUMN{}_LABEL__", param.datasource_alias, param.column_metadata.oid);
-                            let (plain_label_expr, json_label_expr) = match param.column_metadata.column_type {
-                                column_type::ColumnType::Primitive(prim) => {
-                                    let scalar_type: FormulaReturnType = FormulaReturnType::from(prim);
-                                    let value_expr: String = format!("w.{}_COLUMN{}", param.datasource_alias, param.column_metadata.oid);
-                                    (
-                                        scalar_type.construct_plain_label_expr(&value_expr),
-                                        scalar_type.construct_json_label_expr(&value_expr)
-                                    )
-                                }
-                                column_type::ColumnType::Object { table_oid, .. } => {
-                                    let value_expr: String = format!("w.{}_COLUMN{}", param.datasource_alias, param.column_metadata.oid);
-                                    (
-                                        String::from("NULL"),
-                                        format!("(SELECT l.OBJECT_LABEL FROM SCHEMA{table_oid} l WHERE l.OID = {value_expr})")
-                                    )
-                                }
-                                column_type::ColumnType::Select { table_oid, .. } => {
-                                    let value_expr: String = format!("w.{}_COLUMN{}", param.datasource_alias, param.column_metadata.oid);
-                                    (
-                                        format!("(SELECT l.PLAIN_LABEL FROM SCHEMA{table_oid} l WHERE l.OID = {value_expr})"),
-                                        format!("(SELECT l.JSON_LABEL FROM SCHEMA{table_oid} l WHERE l.OID = {value_expr})")
-                                    )
-                                }
-                                column_type::ColumnType::Multiselect { table_oid, .. } => {
-                                    let partition_expr: String = format!("w.{}_OID", param.datasource_alias);
-                                    let value_expr: String = format!("w.{}_COLUMN{}_OID", param.datasource_alias, param.column_metadata.oid);
-                                    (
-                                        String::from("NULL"),
-                                        format!("('[ ' || (GROUP_CONCAT((SELECT l.JSON_LABEL FROM SCHEMA{table_oid} l WHERE l.OID = {value_expr}), ', ') OVER (PARTITION BY {partition_expr})) || ' ]')")
-                                    )
-                                }
-                                column_type::ColumnType::Subreport { report_oid, .. } => {
-                                    (
-                                        String::from("NULL"),
-                                        format!(
-                                            "('[ ' || (GROUP_CONCAT((SELECT l.JSON_LABEL FROM SCHEMA{report_oid} l WHERE {}), ', ') OVER ({})) || ' ]')",
-
-                                            // Filter expression
-                                            {
-                                                todo!("This");
-                                                String::from("FALSE")
-                                            },
-
-                                            // Partition expression
-                                            match Datasource::from_alias_transact(trans, param.datasource_alias)?
-                                                .linearize()
-                                                .into_iter()
-                                                .map(|d| format!("w.{}_OID", d.get_alias()))
-                                                .reduce(|acc, e| format!("{acc}, {e}")) {
-                                                Some(partition_expr) => format!("PARTITION BY {partition_expr}"),
-                                                None => String::from("")
-                                            }
-                                        )
-                                    )
-                                }
-                                _ => {
-                                    return Err(Error::adhoc("Expected parameter of type Formula to be expanded!"));
-                                }
-                            };
-                            expr.replace_label(label_placeholder, plain_label_expr, json_label_expr);
-                        }
-                    }
-                    _ => {}
+                let mut expr: FormulaExpression = FormulaExpression::from(conn, formula)?;
+                Self::replace_label_placeholders_in_formula(conn, &mut expr, table_column.child_columns)?;
+                Self {
+                    column_metadata: table_column.column_metadata,
+                    is_required_expr: table_column.is_required_expr,
+                    plain_label_expr: expr.plain_label_expr,
+                    json_nonpolymorphic_label_expr: expr.json_label_expr.clone(),
+                    json_polymorphic_label_expr: expr.json_label_expr
                 }
             }
         })
@@ -322,7 +351,15 @@ impl NonRecursiveLabelExpression {
             }
 
             column_type::ColumnType::Formula { formula, .. } => {
-                
+                let mut expr: FormulaExpression = FormulaExpression::from(conn, formula)?;
+                Self::replace_label_placeholders_in_formula(conn, &mut expr, report_column.child_columns)?;
+                Self {
+                    column_metadata: report_column.column_metadata,
+                    is_required_expr: String::from("TRUE"),
+                    plain_label_expr: expr.plain_label_expr,
+                    json_nonpolymorphic_label_expr: expr.json_label_expr.clone(),
+                    json_polymorphic_label_expr: expr.json_label_expr
+                }
             }
             
             _ => {
@@ -402,6 +439,14 @@ pub fn construct_label_view(trans: &Transaction, schema_oid: i64) -> Result<(), 
     // Map from column alias to column expression
     let mut c: HashMap<String, String> = HashMap::from(oids.clone());
     if oids.len() > 0 {
+        c.insert(
+            String::from("OBJECT_FILTER"),
+            oids.iter()
+                .map(|(oid_alias, oid_expr)| format!("('{oid_alias}=' || {oid_expr})"))
+                .reduce(|acc, e| format!("{acc} || '&' || {e}"))
+                .unwrap()
+        );
+
         let partition_expr: String = oids.iter()
             .map(|(_, oid_expr)| oid_expr.clone())
             .reduce(|acc, e| format!("{acc}, {e}"))
@@ -460,6 +505,21 @@ pub fn construct_label_view(trans: &Transaction, schema_oid: i64) -> Result<(), 
             }
             _ => {}
         }
+    } else {
+        c.insert(
+            String::from("OBJECT_FILTER"),
+            String::from("''")
+        );
+
+        c.insert(
+            String::from("PLAIN_LABEL"),
+            String::from("NULL")
+        );
+
+        c.insert(
+            String::from("JSON_LABEL"), 
+            String::from("NULL")
+        );
     }
 
     // Build and execute the CREATE VIEW expression
@@ -480,12 +540,20 @@ pub fn construct_label_view(trans: &Transaction, schema_oid: i64) -> Result<(), 
             SELECT
                 {}
             FROM WRAPPER w
+            {}
             ",
+            
             // Index, OIDs, and columns of the schema
             c.iter()
                 .map(|(column_alias, column_expression)| format!("{column_expression} AS {column_alias}"))
                 .reduce(|acc, e| format!("{acc}, {e}"))
-                .unwrap()
+                .unwrap(),
+
+            // Group by the OIDs
+            match oids.iter().map(|(_, oid_expr)| oid_expr).cloned().reduce(|acc, e| format!("{acc}, {e}")) {
+                Some(group_by_expr) => format!("GROUP BY {group_by_expr}"),
+                None => String::from("")
+            }
         )
     );
     println!("\n{sql}\n");

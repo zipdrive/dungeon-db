@@ -1,8 +1,9 @@
 use std::collections::{HashSet, HashMap};
 use regex::Regex;
 use rusqlite::{Connection};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Visitor, de::Error as DeserializeError};
 use crate::data::view::label;
+use crate::util::db;
 use crate::util::encode::{json_encode_string, sql_encode_string, sql_json_encode_string};
 use crate::util::error::Error;
 use crate::data::column;
@@ -189,7 +190,7 @@ impl FormulaReturnType {
 
 
 
-#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum Formula {
     Param {
         datasource_alias: String,
@@ -2474,6 +2475,43 @@ impl Formula {
     }
 }
 
+impl Serialize for Formula {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+        self.stringify().serialize(serializer)
+    }
+}
+
+
+struct StringVisitor;
+
+impl<'de> Visitor<'de> for StringVisitor {
+    type Value = String;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a formula string")
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> where E: DeserializeError {
+        Ok(String::from(v))
+    }
+
+    fn visit_string<E>(self, v: String) -> Result<Self::Value, E> where E: DeserializeError {
+        Ok(v)
+    }
+}
+
+impl<'de> Deserialize<'de> for Formula {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+        match Self::parse(deserializer.deserialize_string(StringVisitor)?) {
+            Ok(formula) => Ok(formula),
+            Err(err) => {
+                let err_desc: String = err.into();
+                Err(D::Error::custom(err_desc))
+            }
+        }
+    }
+}
+
 
 
 enum CollectionSlice {
@@ -2591,6 +2629,12 @@ pub struct FormulaExpression {
 
     /// Expression for the cell.
     pub cell_expr: String,
+
+    /// Expression for cells that should trigger a hot reload of the cell.
+    pub isolated_reload_cells: HashSet<String>,
+
+    /// Expression for cells that should trigger a reload of the entire wrapping schema.
+    pub full_reload_cells: HashSet<String>,
 }
 
 
@@ -2609,9 +2653,13 @@ impl FormulaExpression {
                     let scalar_type: FormulaReturnType = formula.get_scalar_type(conn)?;
 
                     context.disable_window_changes();
+                    let f_args: Vec<Self> = vec![ $( Self::from_contextual(conn, $x.as_ref(), context)?, )* ];
+                    let isolated_reload_cells: HashSet<String> = f_args.iter().fold(HashSet::new(), |acc, e| HashSet::from_iter(acc.union(&e.isolated_reload_cells).cloned()));
+                    let full_reload_cells: HashSet<String> = f_args.iter().fold(HashSet::new(), |acc, e| HashSet::from_iter(acc.union(&e.full_reload_cells).cloned()));
+
                     let value_expr: String = format!("{}({})",
                         $f,
-                        vec![ $( Self::from_contextual(conn, $x.as_ref(), context)?, )* ].into_iter()
+                        f_args.into_iter()
                             .map(|e| e.value_expr)
                             .reduce(|acc, e| format!("{acc}, {e}"))
                             .unwrap_or(String::from(""))
@@ -2622,7 +2670,9 @@ impl FormulaExpression {
                         plain_label_expr: scalar_type.construct_plain_label_expr(&value_expr),
                         json_label_expr: scalar_type.construct_json_label_expr(&value_expr),
                         value_expr,
-                        cell_expr: String::from("NULL")
+                        cell_expr: String::from("NULL"),
+                        isolated_reload_cells,
+                        full_reload_cells, 
                     }
                 }
             };
@@ -2653,7 +2703,9 @@ impl FormulaExpression {
                         plain_label_expr: scalar_type.construct_plain_label_expr(&value_expr),
                         json_label_expr: scalar_type.construct_json_label_expr(&value_expr),
                         value_expr,
-                        cell_expr: String::from("NULL")
+                        cell_expr: String::from("NULL"),
+                        isolated_reload_cells: HashSet::from_iter(collection.isolated_reload_cells.union(&collection.full_reload_cells).cloned()),
+                        full_reload_cells: HashSet::new(),
                     }
                 }
             };
@@ -2684,7 +2736,9 @@ impl FormulaExpression {
                         plain_label_expr: scalar_type.construct_plain_label_expr(&value_expr),
                         json_label_expr: scalar_type.construct_json_label_expr(&value_expr),
                         value_expr,
-                        cell_expr: String::from("NULL")
+                        cell_expr: String::from("NULL"),
+                        isolated_reload_cells: HashSet::from_iter(collection.isolated_reload_cells.union(&collection.full_reload_cells).cloned()),
+                        full_reload_cells: HashSet::new(),
                     }
                 }
             };
@@ -2700,6 +2754,9 @@ impl FormulaExpression {
                         inner_exprs.push(Self::from_contextual(conn, inner, context)?);
                     }
                     context.enable_window_changes();
+                    
+                    let isolated_reload_cells: HashSet<String> = inner_exprs.iter().fold(HashSet::new(), |acc, e| HashSet::from_iter(acc.union(&e.isolated_reload_cells).cloned()));
+                    let full_reload_cells: HashSet<String> = inner_exprs.iter().fold(HashSet::new(), |acc, e| HashSet::from_iter(acc.union(&e.full_reload_cells).cloned()));
 
                     let scalar_type: FormulaReturnType = formula.get_scalar_type(conn)?;
                     let value_expr: String = format!("{}({})",
@@ -2713,7 +2770,9 @@ impl FormulaExpression {
                         plain_label_expr: scalar_type.construct_plain_label_expr(&value_expr),
                         json_label_expr: scalar_type.construct_json_label_expr(&value_expr),
                         value_expr,
-                        cell_expr: String::from("NULL")
+                        cell_expr: String::from("NULL"),
+                        isolated_reload_cells,
+                        full_reload_cells,
                     }
                 }
             };
@@ -2731,7 +2790,9 @@ impl FormulaExpression {
                         plain_label_expr: scalar_type.construct_plain_label_expr(&value_expr),
                         json_label_expr: scalar_type.construct_json_label_expr(&value_expr),
                         value_expr,
-                        cell_expr: String::from("NULL")
+                        cell_expr: String::from("NULL"),
+                        isolated_reload_cells: HashSet::from_iter(lhs.isolated_reload_cells.union(&rhs.isolated_reload_cells).cloned()),
+                        full_reload_cells: HashSet::from_iter(lhs.full_reload_cells.union(&rhs.full_reload_cells).cloned()),
                     }
                 }
             };
@@ -2744,6 +2805,8 @@ impl FormulaExpression {
                     json_label_expr: String::from("'null'"),
                     value_expr: String::from("NULL"),
                     cell_expr: String::from("NULL"),
+                    isolated_reload_cells: HashSet::new(),
+                    full_reload_cells: HashSet::new(),
                 }
             }
             Formula::LiteralBool(value) => {
@@ -2756,7 +2819,9 @@ impl FormulaExpression {
                     value_expr,
                     plain_label_expr: label_expr.clone(),
                     json_label_expr: label_expr,
-                    cell_expr: String::from("NULL")
+                    cell_expr: String::from("NULL"),
+                    isolated_reload_cells: HashSet::new(),
+                    full_reload_cells: HashSet::new(),
                 }
             }
             Formula::LiteralFloat(value) => {
@@ -2766,7 +2831,9 @@ impl FormulaExpression {
                     value_expr,
                     plain_label_expr: label_expr.clone(),
                     json_label_expr: label_expr,
-                    cell_expr: String::from("NULL")
+                    cell_expr: String::from("NULL"),
+                    isolated_reload_cells: HashSet::new(),
+                    full_reload_cells: HashSet::new(),
                 }
             }
             Formula::LiteralInt(value) => {
@@ -2776,7 +2843,9 @@ impl FormulaExpression {
                     value_expr,
                     plain_label_expr: label_expr.clone(),
                     json_label_expr: label_expr,
-                    cell_expr: String::from("NULL")
+                    cell_expr: String::from("NULL"),
+                    isolated_reload_cells: HashSet::new(),
+                    full_reload_cells: HashSet::new(),
                 }
             }
             Formula::LiteralString(value) => {
@@ -2786,7 +2855,9 @@ impl FormulaExpression {
                     plain_label_expr: value_expr.clone(),
                     json_label_expr,
                     value_expr,
-                    cell_expr: String::from("NULL")
+                    cell_expr: String::from("NULL"),
+                    isolated_reload_cells: HashSet::new(),
+                    full_reload_cells: HashSet::new(),
                 }
             }
         
@@ -2799,7 +2870,9 @@ impl FormulaExpression {
                             value_expr,
                             plain_label_expr: label_expr.clone(),
                             json_label_expr: label_expr,
-                            cell_expr: String::from("NULL")
+                            cell_expr: String::from("NULL"),
+                            isolated_reload_cells: HashSet::new(),
+                            full_reload_cells: HashSet::new(),
                         }
                     }
                     None => {
@@ -2851,7 +2924,9 @@ impl FormulaExpression {
                     value_expr,
                     plain_label_expr: label_expr.clone(),
                     json_label_expr: label_expr,
-                    cell_expr: String::from("NULL")
+                    cell_expr: String::from("NULL"),
+                    isolated_reload_cells: inner.isolated_reload_cells,
+                    full_reload_cells: inner.full_reload_cells,
                 }
             }
             
@@ -2964,7 +3039,17 @@ impl FormulaExpression {
                         .reduce(|acc, e| format!("{acc} {e}")) {
                         Some(cell_cases) => format!("CASE {cell_cases} ELSE NULL END"),
                         None => String::from("NULL")
-                    }
+                    },
+                    isolated_reload_cells: inner_exprs.iter()
+                        .fold(
+                            HashSet::new(), 
+                            |acc, e| HashSet::from_iter(acc.union(&e.isolated_reload_cells).cloned())
+                        ),
+                    full_reload_cells: inner_exprs.iter()
+                        .fold(
+                            HashSet::new(), 
+                            |acc, e| HashSet::from_iter(acc.union(&e.full_reload_cells).cloned())
+                        ),
                 }
             }
             Formula::Argmax(inners) => {
@@ -2980,6 +3065,11 @@ impl FormulaExpression {
                 let mut cell_cases: Vec<String> = Vec::new();
 
                 let value: Self = Self::from_contextual(conn, value.as_ref(), context)?;
+                let if_no_match: Self = Self::from_contextual(conn, formula_if_no_match.as_ref(), context)?;
+
+                let mut isolated_reload_cells: HashSet<String> = HashSet::from_iter(value.isolated_reload_cells.union(&if_no_match.isolated_reload_cells).cloned());
+                let mut full_reload_cells: HashSet<String> = HashSet::from_iter(value.full_reload_cells.union(&if_no_match.full_reload_cells).cloned());
+
                 for (match_key, match_value) in matches.iter() {
                     let match_key: Self = Self::from_contextual(conn, match_key, context)?;
                     let match_value: Self = Self::from_contextual(conn, match_value, context)?;
@@ -2987,9 +3077,21 @@ impl FormulaExpression {
                     plain_label_cases.push(format!("WHEN {} IS {} THEN {}", value.value_expr, match_key.value_expr, match_value.plain_label_expr));
                     json_label_cases.push(format!("WHEN {} IS {} THEN {}", value.value_expr, match_key.value_expr, match_value.json_label_expr));
                     cell_cases.push(format!("WHEN {} IS {} THEN {}", value.value_expr, match_key.value_expr, match_value.cell_expr));
+
+                    for i in match_key.isolated_reload_cells {
+                        isolated_reload_cells.insert(i);
+                    }
+                    for i in match_value.isolated_reload_cells {
+                        isolated_reload_cells.insert(i);
+                    }
+                    for f in match_key.full_reload_cells {
+                        full_reload_cells.insert(f);
+                    }
+                    for f in match_value.full_reload_cells {
+                        full_reload_cells.insert(f);
+                    }
                 }
 
-                let if_no_match: Self = Self::from_contextual(conn, formula_if_no_match.as_ref(), context)?;
                 value_cases.push(format!("ELSE {}", if_no_match.value_expr));
                 plain_label_cases.push(format!("ELSE {}", if_no_match.plain_label_expr));
                 json_label_cases.push(format!("ELSE {}", if_no_match.json_label_expr));
@@ -2999,7 +3101,9 @@ impl FormulaExpression {
                     value_expr: format!("CASE {} END", value_cases.into_iter().reduce(|acc, e| format!("{acc} {e}")).unwrap()),
                     plain_label_expr: format!("CASE {} END", plain_label_cases.into_iter().reduce(|acc, e| format!("{acc} {e}")).unwrap()),
                     json_label_expr: format!("CASE {} END", json_label_cases.into_iter().reduce(|acc, e| format!("{acc} {e}")).unwrap()),
-                    cell_expr: format!("CASE {} END", cell_cases.into_iter().reduce(|acc, e| format!("{acc} {e}")).unwrap())
+                    cell_expr: format!("CASE {} END", cell_cases.into_iter().reduce(|acc, e| format!("{acc} {e}")).unwrap()),
+                    isolated_reload_cells,
+                    full_reload_cells,
                 }
             }
 
@@ -3009,6 +3113,17 @@ impl FormulaExpression {
                 for inner in format_params.iter() {
                     inner_exprs.push(Self::from_contextual(conn, inner, context)?);
                 }
+
+                let isolated_reload_cells: HashSet<String> = inner_exprs.iter()
+                    .fold(
+                        format.isolated_reload_cells, 
+                        |acc, e| HashSet::from_iter(acc.union(&e.isolated_reload_cells).cloned())
+                    );
+                let full_reload_cells: HashSet<String> = inner_exprs.iter()
+                    .fold(
+                        format.full_reload_cells, 
+                        |acc, e| HashSet::from_iter(acc.union(&e.full_reload_cells).cloned())
+                    );
 
                 let scalar_type: FormulaReturnType = formula.get_scalar_type(conn)?;
                 let value_expr: String = format!("FORMAT({})",
@@ -3020,7 +3135,9 @@ impl FormulaExpression {
                     plain_label_expr: scalar_type.construct_plain_label_expr(&value_expr),
                     json_label_expr: scalar_type.construct_json_label_expr(&value_expr),
                     value_expr,
-                    cell_expr: String::from("NULL")
+                    cell_expr: String::from("NULL"),
+                    isolated_reload_cells,
+                    full_reload_cells,
                 }
             }
 
@@ -3076,7 +3193,14 @@ impl FormulaExpression {
                     plain_label_expr: scalar_type.construct_plain_label_expr(&value_expr),
                     json_label_expr: scalar_type.construct_json_label_expr(&value_expr),
                     value_expr,
-                    cell_expr: String::from("NULL")
+                    cell_expr: String::from("NULL"),
+                    isolated_reload_cells: HashSet::from_iter(
+                        value.isolated_reload_cells.iter()
+                            .chain(collection.isolated_reload_cells.iter())
+                            .chain(collection.full_reload_cells.iter())
+                            .cloned()
+                    ),
+                    full_reload_cells: value.full_reload_cells,
                 }
             }
 
@@ -3101,7 +3225,14 @@ impl FormulaExpression {
                     plain_label_expr: scalar_type.construct_plain_label_expr(&value_expr),
                     json_label_expr: scalar_type.construct_json_label_expr(&value_expr),
                     value_expr,
-                    cell_expr: String::from("NULL")
+                    cell_expr: String::from("NULL"),
+                    isolated_reload_cells: HashSet::from_iter(
+                        index.isolated_reload_cells.iter()
+                            .chain(collection.isolated_reload_cells.iter())
+                            .chain(collection.full_reload_cells.iter())
+                            .cloned()
+                    ),
+                    full_reload_cells: index.full_reload_cells,
                 }
             }
 
@@ -3114,15 +3245,27 @@ impl FormulaExpression {
                 let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(conn, column_oid.clone())?;
                 let value_expr: String = format!("w.{datasource_alias}_COLUMN{column_oid}");
                 let label_expr: String = format!("__{datasource_alias}_COLUMN{column_oid}_LABEL__");
+                
+                let cell_expr: String = format!(
+                    "('{}:{}:{column_oid}:' || CAST(w.{datasource_alias}_OID AS TEXT))",
+                    column_metadata.column_type.to_str(),
+                    datasource.get_table_oid()?
+                );
+                let mut isolated_reload_cells: HashSet<String> = HashSet::new();
+                let mut full_reload_cells: HashSet<String> = HashSet::new();
+                if let Datasource::Table { .. } = datasource.seek_basis()? {
+                    isolated_reload_cells.insert(cell_expr.clone());
+                } else {
+                    full_reload_cells.insert(cell_expr.clone());
+                }
+
                 Self {
                     value_expr,
                     plain_label_expr: label_expr.clone(),
                     json_label_expr: label_expr,
-                    cell_expr: format!(
-                        "('{}:{}:{column_oid}:' || CAST(w.{datasource_alias}_OID AS TEXT))",
-                        column_metadata.column_type.to_str(),
-                        datasource.get_table_oid()?
-                    )
+                    cell_expr,
+                    isolated_reload_cells,
+                    full_reload_cells,
                 }
             }
         })
@@ -3130,7 +3273,7 @@ impl FormulaExpression {
 
     /// Replaces label placeholders with a label expression.
     pub fn replace_label(&mut self, label_placeholder: String, plain_label_expr: String, json_label_expr: String) {
-        self.plain_label_expr.replace(&label_placeholder, &plain_label_expr);
-        self.json_label_expr.replace(&label_placeholder, &json_label_expr);
+        self.plain_label_expr = self.plain_label_expr.replace(&label_placeholder, &plain_label_expr);
+        self.json_label_expr = self.json_label_expr.replace(&label_placeholder, &json_label_expr);
     }
 }

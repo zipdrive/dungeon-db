@@ -562,7 +562,7 @@ impl Cell {
                         },
                         column_metadata.schema.oid,
                         if query_filter != "" {
-                            format!("WHERE {query_filter}")
+                            format!("WHERE {}", query_filter.replace("&", " AND "))
                         } else {
                             String::from("")
                         }
