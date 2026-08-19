@@ -439,14 +439,6 @@ pub fn construct_label_view(trans: &Transaction, schema_oid: i64) -> Result<(), 
     // Map from column alias to column expression
     let mut c: HashMap<String, String> = HashMap::from(oids.clone());
     if oids.len() > 0 {
-        c.insert(
-            String::from("OBJECT_FILTER"),
-            oids.iter()
-                .map(|(oid_alias, oid_expr)| format!("('{oid_alias}=' || {oid_expr})"))
-                .reduce(|acc, e| format!("{acc} || '&' || {e}"))
-                .unwrap()
-        );
-
         let partition_expr: String = oids.iter()
             .map(|(_, oid_expr)| oid_expr.clone())
             .reduce(|acc, e| format!("{acc}, {e}"))
@@ -503,7 +495,19 @@ pub fn construct_label_view(trans: &Transaction, schema_oid: i64) -> Result<(), 
                     format!("{}_TABLE_ROW_OID", root_datasource.get_alias())
                 );
             }
-            _ => {}
+            _ => {
+                // Add OBJECT_FILTER
+                c.insert(
+                    String::from("OBJECT_FILTER"),
+                    format!(
+                        "(SELECT GROUP_CONCAT(QF, '&') FROM ({}))",
+                        oids.iter()
+                            .map(|(oid_alias, oid_expr)| format!("SELECT '{oid_alias}=' || {oid_expr} AS QF"))
+                            .reduce(|acc, e| format!("{acc} UNION ALL {e}"))
+                            .unwrap()
+                    )
+                );
+            }
         }
     } else {
         c.insert(

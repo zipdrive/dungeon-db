@@ -30,14 +30,14 @@ fn replace_label_placeholders_in_formula(trans: &Transaction, expr: &mut Formula
                         let value_expr: String = format!("w.{}_COLUMN{}", param.datasource_alias, param.column_metadata.oid);
                         (
                             String::from("NULL"),
-                            format!("(SELECT l.OBJECT_LABEL FROM SCHEMA{table_oid} l WHERE l.OID = {value_expr})")
+                            format!("(SELECT l.OBJECT_LABEL FROM SCHEMA{table_oid}_LABEL_VIEW l WHERE l.OID = {value_expr})")
                         )
                     }
                     column_type::ColumnType::Select { table_oid, .. } => {
                         let value_expr: String = format!("w.{}_COLUMN{}", param.datasource_alias, param.column_metadata.oid);
                         (
-                            format!("(SELECT l.PLAIN_LABEL FROM SCHEMA{table_oid} l WHERE l.OID = {value_expr})"),
-                            format!("(SELECT l.JSON_LABEL FROM SCHEMA{table_oid} l WHERE l.OID = {value_expr})")
+                            format!("(SELECT l.PLAIN_LABEL FROM SCHEMA{table_oid}_LABEL_VIEW l WHERE l.OID = {value_expr})"),
+                            format!("(SELECT l.JSON_LABEL FROM SCHEMA{table_oid}_LABEL_VIEW l WHERE l.OID = {value_expr})")
                         )
                     }
                     column_type::ColumnType::Multiselect { table_oid, .. } => {
@@ -45,14 +45,14 @@ fn replace_label_placeholders_in_formula(trans: &Transaction, expr: &mut Formula
                         let value_expr: String = format!("w.{}_COLUMN{}_OID", param.datasource_alias, param.column_metadata.oid);
                         (
                             String::from("NULL"),
-                            format!("('[ ' || (GROUP_CONCAT((SELECT l.JSON_LABEL FROM SCHEMA{table_oid} l WHERE l.OID = {value_expr}), ', ') OVER (PARTITION BY {partition_expr})) || ' ]')")
+                            format!("('[ ' || (SELECT GROUP_CONCAT(l.JSON_LABEL, ', ') FROM SCHEMA{table_oid}_LABEL_VIEW l WHERE l.OID = {value_expr} GROUP BY l.OID), ', ')) || ' ]')")
                         )
                     }
                     column_type::ColumnType::Subreport { report_oid, .. } => {
                         (
                             String::from("NULL"),
                             format!(
-                                "('[ ' || (GROUP_CONCAT((SELECT l.JSON_LABEL FROM SCHEMA{report_oid} l WHERE {}), ', ') OVER ({})) || ' ]')",
+                                "('[ ' || (SELECT GROUP_CONCAT(l.JSON_LABEL, ', ') FROM SCHEMA{report_oid}_LABEL_VIEW l WHERE {} {}) || ' ]')",
 
                                 // Filter expression
                                 {
@@ -66,7 +66,7 @@ fn replace_label_placeholders_in_formula(trans: &Transaction, expr: &mut Formula
                                     .into_iter()
                                     .map(|d| format!("w.{}_OID", d.get_alias()))
                                     .reduce(|acc, e| format!("{acc}, {e}")) {
-                                    Some(partition_expr) => format!("PARTITION BY {partition_expr}"),
+                                    Some(partition_expr) => format!("GROUP BY {partition_expr}"),
                                     None => String::from("")
                                 }
                             )
