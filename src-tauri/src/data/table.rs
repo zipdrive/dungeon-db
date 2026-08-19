@@ -7,7 +7,6 @@ use crate::util::channel::Sender;
 use crate::util::db;
 use crate::util::db::{sql_execute, sql_iter};
 use crate::util::error::Error;
-use rocket::serde::{Serialize as RocketSerialize};
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;

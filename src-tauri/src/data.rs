@@ -2,7 +2,6 @@ use crate::data::schema::UPDATE_SCHEMA_SIGNAL;
 use crate::util::channel::Sender;
 use crate::util::error::Error;
 use crate::util::{db, dialog, process};
-use rocket::serde::json::Json;
 use serde::Deserialize;
 use std::sync::Mutex;
 use tauri::ipc::JavaScriptChannelId;

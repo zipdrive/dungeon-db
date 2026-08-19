@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "dungeon-db",
   "version": "0.1.0",
-  "identifier": "com.dungeon-db.app",
+  "identifier": "com.zipdrive.dungeon-db",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -10,12 +10,11 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "withGlobalTauri": true,
     "windows": [
       {
         "title": "DungeonDB",
-        "width": 800,
-        "height": 600
+        "maximized": true,
+        "focus": true
       }
     ],
     "security": {
@@ -31,15 +30,6 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ],
-    "fileAssociations": [
-      {
-        "ext": ["dndb"],
-        "exportedType": {
-          "identifier": "com.dungeon-db.dndb",
-          "conformsTo": ["public.database"]
-        }
-      }
     ]
   }
 }

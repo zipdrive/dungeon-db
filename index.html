@@ -2,36 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="stylesheet" href="/src/styles.css" />
-    <style>
-      #blank-startup {
-        position: fixed;
-        width: 100%;
-        height: 100%;
-        background-color: #f6f6f6;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-      }
-
-      #blank-startup-menu-options {
-        width: 200px;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-      }
-    </style>
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DungeonDB</title>
-    <script type="module" src="/src/index.ts" defer></script>
   </head>
 
   <body>
-    <div id="blank-startup">
-      <div id="blank-startup-menu-options">
-        <button id="new-db-button" class="input">New Database</button>
-        <button id="load-db-button" class="input">Load Database</button>
-      </div>
-    </div>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
