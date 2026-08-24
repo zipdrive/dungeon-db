@@ -3,7 +3,7 @@ import "./App.css";
 import { Sidebar } from './Sidebar';
 import { Page } from './Page';
 import { Popup, PopupProps } from "./popup/Popup";
-import { Dialog, DialogBody, DialogHeader, Typography } from "@material-tailwind/react";
+import { Button, Dialog, Typography } from "@material-tailwind/react";
 
 
 function App() {
@@ -74,12 +74,23 @@ function App() {
         />
       </div>
       <Popup {...popup} />
-      <Dialog open={err !== null} handler={() => { setErr(null); }}>
-          <DialogHeader>Error</DialogHeader>
-          <DialogBody>
-            <Typography variant="small">{err?.message}</Typography>
-            <Typography variant="small">{err?.stack}</Typography>
-          </DialogBody>
+      <Dialog open={err !== null} onOpenChange={(isOpen) => {
+        if (!isOpen) {
+          setErr(null);
+        }
+      }}>
+          <Typography variant="h6">Error</Typography>
+          <Dialog.Overlay>
+            <Dialog.Content>
+              <Typography variant="small">{err?.message}</Typography>
+              <Typography variant="small">{err?.stack}</Typography>
+            </Dialog.Content>
+            <div className="mb-1 flex items-center justify-end gap-2">
+              <Dialog.DismissTrigger as={Button} color="error">
+                OK
+              </Dialog.DismissTrigger>
+            </div>
+          </Dialog.Overlay>
       </Dialog>
     </main>
   );

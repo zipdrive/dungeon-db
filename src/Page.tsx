@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { PageBreadcrumb, SchemaPageBreadcrumb, ObjectPageBreadcrumb } from "./breadcrumb";
 import { 
     Typography,
-    Breadcrumbs,
+    Breadcrumb,
 } from "@material-tailwind/react";
 import { Schema } from "./Schema";
 import { Object } from "./Object";
@@ -52,18 +52,21 @@ export function Page(props: PageProps): React.JSX.Element {
     if (props.schema !== null && pageBreadcrumbs.length > 0) {
         const lastPageBreadcrumb: PageBreadcrumb = pageBreadcrumbs[pageBreadcrumbs.length - 1];
         return (<div className="flex flex-col w-full">
-            <Breadcrumbs className="rounded-none h-10 border-b-1 border-b-blue-gray-100" fullWidth>
+            <Breadcrumb className="rounded-none h-10 border-b-1 border-b-blue-gray-100" fullWidth>
                 {pageBreadcrumbs.map((breadcrumb, idx) => {
-                    return (<a href="#" 
-                        onClick={() => {
-                            const newPageBreadcrumbs: PageBreadcrumb[] = pageBreadcrumbs.slice(0, idx + 1);
-                            setPageBreadcrumbs(newPageBreadcrumbs);
-                        }}
-                    >
-                        {('schema' in breadcrumb ? breadcrumb.schema.name : breadcrumb.object.name)}
-                    </a>);
+                    return (<>
+                        {idx > 0 && (<Breadcrumb.Separator />)}
+                        <Breadcrumb.Link
+                            onClick={() => {
+                                const newPageBreadcrumbs: PageBreadcrumb[] = pageBreadcrumbs.slice(0, idx + 1);
+                                setPageBreadcrumbs(newPageBreadcrumbs);
+                            }}
+                        >
+                            {('schema' in breadcrumb ? breadcrumb.schema.name : breadcrumb.object.name)}
+                        </Breadcrumb.Link>
+                    </>);
                 })}
-            </Breadcrumbs>
+            </Breadcrumb>
             {'schema' in lastPageBreadcrumb ?
                 <Schema 
                     {...lastPageBreadcrumb.schema}

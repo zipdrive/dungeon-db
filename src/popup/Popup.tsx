@@ -36,16 +36,16 @@ export function Popup(props: PopupProps): React.JSX.Element {
     }, [props.popup]);
 
     return (<>
-        {lastKnownCreateSchemaPopupProps && <Dialog open={props.popup === 'createSchema'} handler={lastKnownCreateSchemaPopupProps.onClosePopup}>
+        {lastKnownCreateSchemaPopupProps && <Dialog open={props.popup === 'createSchema'}>
             <CreateSchemaPopup {...lastKnownCreateSchemaPopupProps} isOpen={props.popup === 'createSchema'} />
         </Dialog>}
-        {lastKnownEditSchemaPopupProps && <Dialog open={props.popup === 'editSchema'} handler={lastKnownEditSchemaPopupProps.onClosePopup}>
+        {lastKnownEditSchemaPopupProps && <Dialog open={props.popup === 'editSchema'}>
             <EditSchemaPopup {...lastKnownEditSchemaPopupProps} />
         </Dialog>}
-        {lastKnownCreateColumnPopupProps && <Dialog open={props.popup === 'createColumn'} handler={lastKnownCreateColumnPopupProps.onClosePopup}>
+        {lastKnownCreateColumnPopupProps && <Dialog open={props.popup === 'createColumn'}>
             <CreateColumnPopup {...lastKnownCreateColumnPopupProps} isOpen={props.popup === 'createColumn'} />    
         </Dialog>}
-        {lastKnownEditColumnPopupProps && <Dialog open={props.popup === 'editColumn'} handler={lastKnownEditColumnPopupProps.onClosePopup}>
+        {lastKnownEditColumnPopupProps && <Dialog open={props.popup === 'editColumn'}>
             <EditColumnPopup {...lastKnownEditColumnPopupProps} />   
         </Dialog>}
     </>);
