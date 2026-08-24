@@ -470,7 +470,7 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), Error> {
     return Ok(());
 }
 
-/// Closes any previous database connection, and opens
+/// Closes any previous database connection, and opens a new temporary file.
 pub fn init_new() -> Result<(), Error> {
     // Reset static variables
     let mut database_path = DATABASE_PATH.lock().unwrap();

@@ -151,7 +151,8 @@ pub enum QueryStream {
     },
     Cells {
         schema_oid: i64,
-        filters: Vec<(String, i64)>,
+        oid_filters: Vec<(String, i64)>,
+        custom_filters: Vec<String>,
         limit: cell::RetrievalLimit,
         column_channel: JavaScriptChannelId,
         cell_channel: JavaScriptChannelId,
@@ -227,7 +228,8 @@ impl QueryStream {
 
             Self::Cells {
                 schema_oid,
-                filters,
+                oid_filters,
+                custom_filters,
                 limit,
                 column_channel,
                 cell_channel,
@@ -235,7 +237,8 @@ impl QueryStream {
                 Sender::Channel(column_channel.channel_on(webview.clone())),
                 Sender::Channel(cell_channel.channel_on(webview)),
                 schema_oid,
-                filters,
+                oid_filters,
+                custom_filters,
                 limit,
             ),
 
@@ -413,16 +416,6 @@ impl Action {
 
                 // Send signal to update table
                 schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
-
-                // Open new window to view the table
-                dialog::dialog_open(
-                    app.clone(),
-                    dialog::Dialog::Schema {
-                        title: metadata.schema.name,
-                        query_string: format!("schema_oid={}", metadata.schema.oid),
-                    },
-                )
-                .await?;
             }
             Self::EditTable(metadata) => {
                 // Update the table
@@ -441,16 +434,6 @@ impl Action {
 
                 // Send signal to update report
                 schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
-
-                // Open new window to view the report
-                dialog::dialog_open(
-                    app.clone(),
-                    dialog::Dialog::Schema {
-                        title: metadata.schema.name,
-                        query_string: format!("schema_oid={}", metadata.schema.oid),
-                    },
-                )
-                .await?;
             }
             Self::EditReport(metadata) => {
                 // Update the report

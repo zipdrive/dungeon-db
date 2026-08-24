@@ -1,49 +1,86 @@
 import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
+import { Sidebar } from './Sidebar';
+import { Page } from './Page';
+import { Popup, PopupProps } from "./popup/Popup";
+import { Dialog, DialogBody, DialogHeader, Typography } from "@material-tailwind/react";
+
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const [selectedSchema, setSelectedSchema] = useState<{ oid: number, name: string } | null>(null);
+  const [popup, setPopup] = useState<PopupProps>({ popup: 'none' });
+  const [err, setErr] = useState<{ message: string, stack: string | undefined } | null>(null);
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
+  /**
+   * Closes the current popup.
+   */
+  function onClosePopup() {
+    setPopup({ popup: 'none' });
+  }
+
+  /**
+   * Displays a popup for an error.
+   */
+  function onError(e: unknown) {
+    if (e instanceof Error) {
+      setErr({ message: e.message, stack: e.stack });
+    } else {
+      const str: string = `${e}`;
+      let components: string[] = str.split('===== STACK =====', 2);
+      if (components.length > 1) {
+        setErr({ message: components[0], stack: components[1] });
+      } else if (components.length > 0) {
+        setErr({ message: components[0], stack: undefined });
+      }
+    }
   }
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
+    <main>
+      <div className="fixed left-0 right-0 top-0 bottom-0 flex flex-row">
+        <Sidebar 
+          selectedSchemaOid={selectedSchema?.oid ?? null} 
+          onSelectSchema={(schemaOid, schemaName) => { setSelectedSchema({ oid: schemaOid, name: schemaName }); }}
+          onRequestCreateSchema={(defaultSchemaType) => { 
+            setPopup({ 
+              popup: 'createSchema', 
+              defaultSchemaType,
+              onClosePopup,
+              onError,
+            }); 
+          }} 
         />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
+        <Page
+          schema={selectedSchema}
+          onRequestCreateColumn={(schema, isTableColumn, ordering) => { 
+            setPopup({ 
+              popup: 'createColumn',
+              schema,
+              isTableColumn, 
+              ordering,
+              onClosePopup,
+              onError,
+            }); 
+          }}
+          onRequestEditColumn={(columnMetadata, isTableColumn) => { 
+            setPopup({ 
+              popup: 'editColumn',
+              columnMetadata,
+              isTableColumn,
+              onClosePopup,
+              onError,
+            });
+          }}
+        />
+      </div>
+      <Popup {...popup} />
+      <Dialog open={err !== null} handler={() => { setErr(null); }}>
+          <DialogHeader>Error</DialogHeader>
+          <DialogBody>
+            <Typography variant="small">{err?.message}</Typography>
+            <Typography variant="small">{err?.stack}</Typography>
+          </DialogBody>
+      </Dialog>
     </main>
   );
 }

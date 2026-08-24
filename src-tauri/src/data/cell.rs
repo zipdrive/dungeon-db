@@ -68,8 +68,8 @@ pub enum CellIdentifier {
         /// The OID used to identify the cell's column.
         column_oid: i64,
 
-        /// The query filter used to identify the cell's row.
-        query_filter: String,
+        /// The OID filters used to identify the cell's row.
+        oid_filters: Vec<(String, i64)>,
     },
 }
 
@@ -519,7 +519,7 @@ impl Cell {
             }
             CellIdentifier::VirtualCell {
                 column_oid,
-                query_filter
+                oid_filters
             } => {
                 // Get the column metadata
                 let column_metadata: column::FullMetadata =
@@ -561,8 +561,8 @@ impl Cell {
                             String::from("")
                         },
                         column_metadata.schema.oid,
-                        if query_filter != "" {
-                            format!("WHERE {}", query_filter.replace("&", " AND "))
+                        if oid_filters.len() > 0 {
+                            format!("WHERE {}", oid_filters.iter().map(|(oid_ord, oid_val)| format!("{oid_ord} = {oid_val}")).reduce(|acc, e| format!("{acc} AND {e}")).unwrap())
                         } else {
                             String::from("")
                         }
@@ -575,7 +575,7 @@ impl Cell {
                                     row, 
                                     CellIdentifier::VirtualCell { 
                                         column_oid: column_oid.clone(), 
-                                        query_filter: query_filter.clone() 
+                                        oid_filters: oid_filters.clone() 
                                     }, 
                                     value_ord, 
                                     label_ord
@@ -585,7 +585,7 @@ impl Cell {
                                 Self::new_subreport(row, 
                                     CellIdentifier::VirtualCell { 
                                         column_oid: column_oid.clone(), 
-                                        query_filter: query_filter.clone() 
+                                        oid_filters: oid_filters.clone() 
                                     }, 
                                     value_ord, 
                                     label_ord, 
@@ -606,7 +606,7 @@ impl Cell {
                                     }],
                                     cell_identifier: CellIdentifier::VirtualCell {
                                         column_oid: column_oid.clone(),
-                                        query_filter: query_filter.clone()
+                                        oid_filters: oid_filters.clone()
                                     },
                                 }
                             }
@@ -1091,7 +1091,7 @@ impl Cell {
 
                 (isolated_cell_dependencies, full_reload_cell_dependencies)
             }
-            CellIdentifier::VirtualCell { column_oid, query_filter } => {
+            CellIdentifier::VirtualCell { column_oid, oid_filters } => {
                 (
                     Vec::new(),
                     Vec::new()
@@ -1363,15 +1363,10 @@ impl Cell {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
-pub enum RowIdentifier {
-    TableRow {
-        table_oid: i64,
-        row_oid: i64
-    },
-    ReportRow {
-        object_filter: String 
-    }
+#[serde(rename_all = "camelCase")]
+pub struct TableRowIdentifier {
+    table_oid: i64,
+    row_oid: i64
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -1383,8 +1378,8 @@ pub enum SchemaCellStream {
     /// Indicates the start of a new row in the schema.
     Row {
         index: i64,
-        row_identifier: RowIdentifier,
-        fixed_parent_datasource: Option<(i64, i64, column::FullMetadata)>,
+        table_row_identifier: Option<TableRowIdentifier>,
+        oid_filters: Vec<(String, i64)>,
         validation_failures: Vec<FailedValidation>,
     },
 
@@ -1414,7 +1409,8 @@ impl SchemaCellStream {
         mut column_sender: Sender<column::FullMetadata>,
         mut cell_sender: Sender<Self>,
         schema_oid: i64,
-        filters: Vec<(String, i64)>,
+        oid_filters: Vec<(String, i64)>,
+        custom_filters: Vec<String>,
         limit: RetrievalLimit,
     ) -> Result<(), Error> {
         let conn: Connection = db::open()?;
@@ -1445,7 +1441,7 @@ impl SchemaCellStream {
 
         // Page-level filter
         let where_expr: String = {
-            let mut where_clauses: Vec<String> = Vec::new();
+            let mut where_clauses: Vec<String> = custom_filters;
             let pragma_sql: String = format!("PRAGMA table_info(SCHEMA{schema_oid}_VIEW)");
             sql_iter(
                 &conn,
@@ -1453,7 +1449,7 @@ impl SchemaCellStream {
                 [],
                 |row| {
                     let column_name: String = row.get::<_, String>("NAME")?;
-                    match filters.iter().find(|(filter_column_name, _)| *filter_column_name == column_name) {
+                    match oid_filters.iter().find(|(filter_column_name, _)| *filter_column_name == column_name) {
                         Some((filter_column_name, filter_value)) => {
                             where_clauses.push(format!("{filter_column_name} = {filter_value}"));
                         }
@@ -1523,18 +1519,46 @@ impl SchemaCellStream {
                 let index: i64 = row.get("QUERY_ROW_INDEX")?;
 
                 // Get the row identifier
-                let row_identifier: RowIdentifier = {
-                    match root_datasource_alias {
-                        Some(_) => RowIdentifier::TableRow { table_oid: schema_oid.clone(), row_oid: row.get::<_, i64>("OID")? },
-                        None => RowIdentifier::ReportRow { object_filter: row.get::<_, String>("OBJECT_FILTER")? }
+                let (table_row_identifier, oid_filters): (Option<TableRowIdentifier>, Vec<(String, i64)>) = {
+                    match &root_datasource_alias {
+                        Some(root_datasource_alias) => {
+                            let root_datasource_oid_ord: String = format!("{root_datasource_alias}_OID");
+                            let oid: i64 = row.get::<_, i64>("OID")?;
+                            (
+                                Some(TableRowIdentifier { table_oid: schema_oid.clone(), row_oid: oid.clone() }),
+                                vec![(root_datasource_oid_ord, oid)]
+                            )
+                        },
+                        None => {
+                            let object_filter_str: String = row.get::<_, String>("OBJECT_FILTER")?;
+                            let oid_filters: Vec<(String, i64)> = object_filter_str 
+                                .split("&")
+                                .filter_map(|oid_filter| {
+                                    if let Some((oid_ord, oid_val_str)) = oid_filter.split_once("=") {
+                                        if let Ok(oid_val) = i64::from_str_radix(oid_val_str, 10) {
+                                            return Some((String::from(oid_ord), oid_val));
+                                        }
+                                    }
+                                    None
+                                })
+                                .collect();
+                            (
+                                if oid_filters.len() == 1 {
+                                    None // Replace?
+                                } else {
+                                    None 
+                                },
+                                oid_filters
+                            )
+                        }
                     }
                 };
 
                 // Send indicator that a new row has started
                 cell_sender.send(Self::Row {
                     index: index.clone(),
-                    row_identifier: row_identifier.clone(),
-                    fixed_parent_datasource: None, // TODO get fixed parent datasources
+                    table_row_identifier: table_row_identifier.clone(),
+                    oid_filters: oid_filters.clone(),
                     validation_failures: Vec::new(),
                 })?;
 
@@ -1621,18 +1645,18 @@ impl SchemaCellStream {
                             Cell::new_multiple_select_dropdown(row, data_table_oid, data_column_oid, data_row_oid, value_ord, label_ord, dropdown_table_oid)
                         }
                         column_type::ColumnType::Formula { .. } => {
-                            let cell_identifier: CellIdentifier = match &row_identifier {
-                                RowIdentifier::TableRow { table_oid, row_oid } => {
+                            let cell_identifier: CellIdentifier = match &table_row_identifier {
+                                Some(TableRowIdentifier { table_oid, row_oid }) => {
                                     CellIdentifier::DataCell { 
                                         table_oid: table_oid.clone(), 
                                         column_oid: c.oid.clone(), 
                                         row_oid: row_oid.clone() 
                                     }
                                 }
-                                RowIdentifier::ReportRow { object_filter } => {
+                                None => {
                                     CellIdentifier::VirtualCell { 
                                         column_oid: c.oid.clone(), 
-                                        query_filter: object_filter.clone()
+                                        oid_filters: oid_filters.clone()
                                     }
                                 }
                             };
@@ -1640,18 +1664,18 @@ impl SchemaCellStream {
                             Cell::new_formula_cell(row, cell_identifier, value_ord, label_ord)
                         }
                         column_type::ColumnType::Subreport { report_oid: link_schema_oid, .. } => {
-                            let cell_identifier: CellIdentifier = match &row_identifier {
-                                RowIdentifier::TableRow { table_oid, row_oid } => {
+                            let cell_identifier: CellIdentifier = match &table_row_identifier {
+                                Some(TableRowIdentifier { table_oid, row_oid }) => {
                                     CellIdentifier::DataCell { 
                                         table_oid: table_oid.clone(), 
                                         column_oid: c.oid.clone(), 
                                         row_oid: row_oid.clone() 
                                     }
                                 }
-                                RowIdentifier::ReportRow { object_filter } => {
+                                None => {
                                     CellIdentifier::VirtualCell { 
                                         column_oid: c.oid.clone(), 
-                                        query_filter: object_filter.clone()
+                                        oid_filters: oid_filters.clone()
                                     }
                                 }
                             };
@@ -1700,7 +1724,7 @@ impl SchemaCellStream {
                 match basis_datasource {
                     Datasource::Column { parent_datasource, column } => {
                         let parent_datasource_row_oid_column_name: String = format!("{}_OID", parent_datasource.get_alias());
-                        if let Some((_, parent_datasource_row_oid)) = filters.iter().find(|(filtered_column_name, _)| *filtered_column_name == parent_datasource_row_oid_column_name) {
+                        if let Some((_, parent_datasource_row_oid)) = oid_filters.iter().find(|(filtered_column_name, _)| *filtered_column_name == parent_datasource_row_oid_column_name) {
                             cell_sender.send(Self::AddNewRowButton {
                                 table_oid,
                                 fixed_parent_datasource: Some((parent_datasource.get_table_oid()?, parent_datasource_row_oid.clone(), column))
@@ -1731,14 +1755,14 @@ impl SchemaCellStream {
                         Datasource::Column { parent_datasource, column } => {
                             let parent_datasource_row_oid_column_name: String = format!("{}_OID", parent_datasource.get_alias());
                             println!("Checking if {parent_datasource_row_oid_column_name} is filtered...");
-                            if let Some((_, parent_datasource_row_oid)) = filters.iter().find(|(filtered_column_name, _)| *filtered_column_name == parent_datasource_row_oid_column_name) {
+                            if let Some((_, parent_datasource_row_oid)) = oid_filters.iter().find(|(filtered_column_name, _)| *filtered_column_name == parent_datasource_row_oid_column_name) {
                                 println!("It is! Sending an AddNewRowButton...");
                                 cell_sender.send(Self::AddNewRowButton {
                                     table_oid,
                                     fixed_parent_datasource: Some((parent_datasource.get_table_oid()?, parent_datasource_row_oid.clone(), column))
                                 })?;
                             } else {
-                                println!("It is not! The filters are: {:?}", filters);
+                                println!("It is not! The filters are: {:?}", oid_filters);
                             }
                         }
                         _ => {

@@ -9,6 +9,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .setup(|_| {
+            let _ = util::db::init_new();
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             data::init_new,
             data::save,
