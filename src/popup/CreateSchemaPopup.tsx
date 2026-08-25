@@ -7,9 +7,6 @@ import {
   Typography,
   Tooltip,
   Dialog,
-  DialogHeader,
-  DialogBody,
-  DialogFooter,
   List,
   ListItem,
   Spinner,
@@ -17,6 +14,7 @@ import {
 import { queryAsync, ToggledHierarchicalListItemMetadata } from "../api/query";
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import Form from "./form/Form";
 
 export type CreateSchemaPopupProps = {
     defaultSchemaType: 'table' | 'report',
@@ -109,83 +107,81 @@ export function CreateSchemaPopup(props: CreateSchemaPopupProps & { isOpen: bool
         }
     }
 
-    return (
-        <>
-            <DialogHeader>Create New Schema</DialogHeader>
-            <DialogBody className="flex flex-col gap-4">
-                <Typography variant="h6">Schema Name:</Typography>
-                <Input value={schemaName} onChange={(e) => { setSchemaName(e.target.value); }} label="Schema Name" />
-                <Typography variant="h6">Schema Type:</Typography>
-                <List className="flex flex-row py-0">
-                    <ListItem>
-                        <Tooltip content="A table is a data schema with columns and rows.">
-                            <Radio name="schemaType" label="Table" value="table" className="py-0" ripple={false} checked={schemaType === 'table'} onChange={(e) => { setSchemaType(e.target.value as 'table' | 'report'); }} />
-                        </Tooltip>
-                    </ListItem>
-                    <ListItem>
-                        <Tooltip content="A report is a virtual schema that references the data from one or more tables.">
-                            <Radio name="schemaType" label="Report" value="report" className="py-0" ripple={false} checked={schemaType === 'report'} onChange={(e) => { setSchemaType(e.target.value as 'table' | 'report'); }} />
-                        </Tooltip>
-                    </ListItem>
-                </List>
-                <Typography variant="h6">Inherit Columns From:</Typography>
-                {
-                    isMasterSchemaListPending ? (<Spinner />) : (masterSchemas.length == 0 ? 
-                        (
-                            <Typography variant="small" className="text-center">
-                                No schemas to inherit columns from.
-                            </Typography>
-                        ) : (
-                            <List className="flex flex-col">
-                                {masterSchemas.map((masterSchema) => {
-                                    return (
-                                        <ListItem 
-                                            selected={selectedMasterSchemas.indexOf(masterSchema.oid) >= 0} 
-                                            disabled={masterSchema.disabled} 
-                                            onClick={() => {
-                                                const newSelectedMasterSchemas = [...selectedMasterSchemas];
-                                                const idx: number = newSelectedMasterSchemas.indexOf(masterSchema.oid);
-                                                if (idx < 0) {
-                                                    newSelectedMasterSchemas.push(masterSchema.oid);
-                                                } else {
-                                                    newSelectedMasterSchemas.splice(idx, 1);
-                                                }
-                                                setSelectedMasterSchemas(newSelectedMasterSchemas);
-                                                console.log(newSelectedMasterSchemas);
-                                            }}
-                                        >
-                                            {'&nbsp;'.repeat(2 * masterSchema.level)}{masterSchema.name}
-                                        </ListItem>
-                                    )
-                                })}
-                            </List>
-                        )
+    return (<Dialog.Overlay>
+        <Form title="Create New Schema">
+            <Form.TextField label="Schema Name" value={schemaName} onSetValue={setSchemaName} />
+            <Typography variant="h6">Schema Name:</Typography>
+            <Input value={schemaName} onChange={(e) => { setSchemaName(e.target.value); }} label="Schema Name" />
+            <Typography variant="h6">Schema Type:</Typography>
+            <List className="flex flex-row py-0">
+                <ListItem>
+                    <Tooltip content="A table is a data schema with columns and rows.">
+                        <Radio name="schemaType" label="Table" value="table" className="py-0" ripple={false} checked={schemaType === 'table'} onChange={(e) => { setSchemaType(e.target.value as 'table' | 'report'); }} />
+                    </Tooltip>
+                </ListItem>
+                <ListItem>
+                    <Tooltip content="A report is a virtual schema that references the data from one or more tables.">
+                        <Radio name="schemaType" label="Report" value="report" className="py-0" ripple={false} checked={schemaType === 'report'} onChange={(e) => { setSchemaType(e.target.value as 'table' | 'report'); }} />
+                    </Tooltip>
+                </ListItem>
+            </List>
+            <Typography variant="h6">Inherit Columns From:</Typography>
+            {
+                isMasterSchemaListPending ? (<Spinner />) : (masterSchemas.length == 0 ? 
+                    (
+                        <Typography variant="small" className="text-center">
+                            No schemas to inherit columns from.
+                        </Typography>
+                    ) : (
+                        <List className="flex flex-col">
+                            {masterSchemas.map((masterSchema) => {
+                                return (
+                                    <ListItem 
+                                        selected={selectedMasterSchemas.indexOf(masterSchema.oid) >= 0} 
+                                        disabled={masterSchema.disabled} 
+                                        onClick={() => {
+                                            const newSelectedMasterSchemas = [...selectedMasterSchemas];
+                                            const idx: number = newSelectedMasterSchemas.indexOf(masterSchema.oid);
+                                            if (idx < 0) {
+                                                newSelectedMasterSchemas.push(masterSchema.oid);
+                                            } else {
+                                                newSelectedMasterSchemas.splice(idx, 1);
+                                            }
+                                            setSelectedMasterSchemas(newSelectedMasterSchemas);
+                                            console.log(newSelectedMasterSchemas);
+                                        }}
+                                    >
+                                        {'&nbsp;'.repeat(2 * masterSchema.level)}{masterSchema.name}
+                                    </ListItem>
+                                )
+                            })}
+                        </List>
                     )
-                }
-            </DialogBody>
-            <DialogFooter>
-                <Button
-                    variant="text"
-                    color="red"
-                    onClick={() => {
+                )
+            }
+        </Form>
+        <div className="flex flex-row gap-y-2">
+            <Dialog.DismissTrigger
+                as={Button}
+                variant="ghost"
+                color="error"
+                onClick={() => {
+                    props.onClosePopup();
+                }}
+                className="mr-1"
+            >
+                <span>Cancel</span>
+            </Dialog.DismissTrigger>
+            <Button
+                variant="gradient" 
+                onClick={async () => {
+                    if (await createSchemaAsync()) {
                         props.onClosePopup();
-                    }}
-                    className="mr-1"
-                >
-                    <span>Cancel</span>
-                </Button>
-                <Button
-                    variant="gradient" 
-                    color="green" 
-                    onClick={async () => {
-                        if (await createSchemaAsync()) {
-                            props.onClosePopup();
-                        }
-                    }}
-                >
-                    <span>Confirm</span>
-                </Button>
-            </DialogFooter>
-        </>
-    );
+                    }
+                }}
+            >
+                <span>Confirm</span>
+            </Button>
+        </div>
+    </Dialog.Overlay>);
 }

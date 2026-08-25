@@ -1,19 +1,14 @@
 import { 
     Dialog,
-    Typography,
-    Input,
     Button,
-    Checkbox,
-    Select,
     Alert,
-    Textarea,
 } from "@material-tailwind/react";
 import { useState, useEffect } from "react";
 import { executeAsync } from "../api/action";
 import { FullMetadata as SchemaFullMetadata } from "../api/model/schema";
 import { ColumnType } from "../api/model/column";
 import { listen } from "@tauri-apps/api/event";
-import { DropdownValue, HierarchicalListItemMetadata, queryAsync } from "../api/query";
+import { DropdownValue, queryAsync } from "../api/query";
 import { Channel } from "@tauri-apps/api/core";
 import Form from "./form/Form";
 
@@ -247,7 +242,7 @@ export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: bool
                 possibleValues={refReportList.map(({ oid, name }) => { return { value: oid.toString(), label: name }; })} 
                 onSetValue={setRefReport} 
             />)}
-            {columnBaseType === 'formula' && (<Form.TextField
+            {columnBaseType === 'formula' && (<Form.FormulaField
                 label="Formula"
                 value={formula}
                 onSetValue={setFormula}

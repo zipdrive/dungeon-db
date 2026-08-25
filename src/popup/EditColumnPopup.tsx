@@ -1,15 +1,7 @@
 import { 
-    DialogBody, 
-    DialogHeader,
-    DialogFooter,
-    Typography,
-    Input,
     Button,
-    Checkbox,
-    Select,
-    Option,
     Alert,
-    Textarea,
+    Dialog,
 } from "@material-tailwind/react";
 import { useEffect, useState } from "react";
 import { FullMetadata as ColumnFullMetadata, ColumnType } from "../api/model/column";
@@ -17,6 +9,7 @@ import { DropdownValue, queryAsync } from "../api/query";
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { executeAsync } from "../api/action";
+import Form from "./form/Form";
 
 export type EditColumnPopupProps = {
     columnMetadata: ColumnFullMetadata,
@@ -231,45 +224,32 @@ export function EditColumnPopup(props: EditColumnPopupProps): React.JSX.Element 
         }
     }
 
-    return (<>
-        <DialogHeader>Edit Column</DialogHeader>
-        <DialogBody className="flex flex-col gap-4">
-            <Typography variant="h6">Column Name:</Typography>
-            <Input value={columnName} onChange={(e) => { setColumnName(e.target.value); }} label="Column Name" />
-            <Typography variant="h6">Column Type:</Typography>
-            {props.isTableColumn ? (<Select
-                label="Column Type" 
-                value={columnBaseType} 
-                onChange={(e) => { if (e) { setColumnBaseType(e as ColumnBaseType); } }}
-            >
-                <Option value="plainText">Plain Text</Option>
-                <Option value="integer">Integer</Option>
-                <Option value="number">Number</Option>
-                <Option value="boolean">Checkbox</Option>
-                <Option value="date">Date</Option>
-                <Option value="datetime">Datetime</Option>
-                <Option value="file">File</Option>
-                <Option value="image">Image</Option>
-                <Option value="object" disabled={refTableList.length == 0}>Object</Option>
-                <Option value="select" disabled={refTableList.length == 0}>Single-Select Dropdown</Option>
-                <Option value="multiselect" disabled={refTableList.length == 0}>Multi-Select Dropdown</Option>
-                <Option value="jsonText">JSON</Option>
-                <Option value="xmlText">XML</Option>
-                <Option value="markdownText">Markdown Text</Option>
-                <Option value="formula">Formula</Option>
-                <Option value="subreport" disabled={refReportList.length == 0}>Drill-Down Report</Option>
-            </Select>) : (<Select
-                label="Column Type" 
-                value={columnBaseType} 
-                onChange={(e) => { if (e) { setColumnBaseType(e as ColumnBaseType); } }}
-            >
-                <Option value="formula">Formula</Option>
-                <Option value="subreport" disabled={refReportList.length == 0}>Drill-Down Report</Option>
-            </Select>)}
-            <Typography variant="h6">Is Primary Key?</Typography>
-            <Checkbox checked={isPrimaryKey} onChange={(e) => { setPrimaryKey(e.target.checked); }} label="Is Primary Key?" />
-            <Typography variant="h6">Is Hidden?</Typography>
-            <Checkbox checked={isHiddenColumn} onChange={(e) => { setHiddenColumn(e.target.checked); }} label="Is Hidden?" />
+    return (<Dialog.Overlay>
+        <Form title="Create New Column">
+            <Form.TextField label="Column Name" value={columnName} onSetValue={setColumnName} />
+            <Form.SelectField 
+                label="Column Type"
+                value={columnBaseType}
+                possibleValues={[
+                    { value: 'plainText', label: "Plain Text", disabled: !props.isTableColumn },
+                    { value: 'integer', label: "Integer", disabled: !props.isTableColumn },
+                    { value: 'number', label: "Number", disabled: !props.isTableColumn },
+                    { value: 'boolean', label: "Checkbox", disabled: !props.isTableColumn },
+                    { value: 'date', label: "Date", disabled: !props.isTableColumn },
+                    { value: 'datetime', label: "Datetime", disabled: !props.isTableColumn },
+                    { value: 'object', label: "Object", disabled: !props.isTableColumn || refTableList.length == 0 },
+                    { value: 'select', label: "Single-Select Dropdown", disabled: !props.isTableColumn || refTableList.length == 0 },
+                    { value: 'multiselect', label: "Multi-Select Dropdown", disabled: !props.isTableColumn || refTableList.length == 0 },
+                    { value: 'file', label: "File", disabled: !props.isTableColumn },
+                    { value: 'image', label: "Image", disabled: !props.isTableColumn },
+                    { value: 'jsonText', label: "JSON", disabled: !props.isTableColumn },
+                    { value: 'formula', label: "Formula" },
+                    { value: 'subreport', label: "Drill-Down Report", disabled: refReportList.length == 0 },
+                ]}
+                onSetValue={setColumnBaseType}
+            />
+            <Form.CheckboxField label="Is Primary Key?" value={isPrimaryKey} onSetValue={setPrimaryKey} />
+            <Form.CheckboxField label="Hidden?" value={isHiddenColumn} onSetValue={setHiddenColumn} />
             {(columnBaseType === 'plainText' 
                 || columnBaseType === 'jsonText' 
                 || columnBaseType === 'xmlText' 
@@ -279,35 +259,37 @@ export function EditColumnPopup(props: EditColumnPopupProps): React.JSX.Element 
                 || columnBaseType === 'date' 
                 || columnBaseType === 'datetime' 
                 || columnBaseType === 'boolean'
-            ) && (<>
-                <Typography variant="h6">Default Value:</Typography>
-                <Input value={defaultValue} onChange={(e) => { setDefaultValue(e.target.value); }} label="Default Value" />
-            </>)}
+            ) && (<Form.TextField 
+                label="Default Value" 
+                value={defaultValue} 
+                onSetValue={setDefaultValue} 
+            />)}
             {(columnBaseType === 'object'
                 || columnBaseType === 'select'
                 || columnBaseType === 'multiselect'
-            ) && (<>
-                <Typography variant="h6">Table:</Typography>
-                <Select label="Table" value={refTable} onChange={(e) => { if (e) { setRefTable(e); }}}>
-                    {refTableList.map(({ oid, name }) => (<Option value={oid.toString()}>{name}</Option>))}
-                </Select>
-            </>)}
-            {columnBaseType === 'subreport' && (<>
-                <Typography variant="h6">Report:</Typography>
-                <Select label="Report" value={refTable} onChange={(e) => { if (e) { setRefReport(e); }}}>
-                    {refReportList.map(({ oid, name }) => (<Option value={oid.toString()}>{name}</Option>))}
-                </Select>
-            </>)}
-            {columnBaseType === 'formula' && (<>
-                <Typography variant="h6">Formula:</Typography>
-                <Textarea label="Formula" value={formula} onChange={(e) => { setFormula(e.target.value); }} />
-            </>)}
-        </DialogBody>
-        <DialogFooter className="gap-y-2">
-            {confirmAlert && (<Alert color="red">{confirmAlert}</Alert>)}
+            ) && (<Form.SelectField 
+                label="Table" 
+                value={refTable} 
+                possibleValues={refTableList.map(({ oid, name }) => { return { value: oid.toString(), label: name }; })} 
+                onSetValue={setRefTable} 
+            />)}
+            {columnBaseType === 'subreport' && (<Form.SelectField 
+                label="Report" 
+                value={refReport} 
+                possibleValues={refReportList.map(({ oid, name }) => { return { value: oid.toString(), label: name }; })} 
+                onSetValue={setRefReport} 
+            />)}
+            {columnBaseType === 'formula' && (<Form.FormulaField
+                label="Formula"
+                value={formula}
+                onSetValue={setFormula}
+            />)}
+        </Form>
+        <div className="gap-y-2">
+            {confirmAlert && (<Alert color="error">{confirmAlert}</Alert>)}
             <Button
-                variant="text"
-                color="red"
+                variant="ghost"
+                color="error"
                 onClick={() => {
                     props.onClosePopup();
                 }}
@@ -317,7 +299,6 @@ export function EditColumnPopup(props: EditColumnPopupProps): React.JSX.Element 
             </Button>
             <Button
                 variant="gradient" 
-                color="green" 
                 onClick={async () => {
                     if (await editColumnAsync()) {
                         props.onClosePopup();
@@ -326,6 +307,6 @@ export function EditColumnPopup(props: EditColumnPopupProps): React.JSX.Element 
             >
                 <span>Confirm</span>
             </Button>
-        </DialogFooter>
-    </>);
+        </div>
+    </Dialog.Overlay>);
 }
