@@ -187,7 +187,7 @@ export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: bool
         }
     }
 
-    return (<Dialog.Overlay>
+    return (<div>
         <Form title="Create New Column">
             <Form.TextField label="Column Name" value={columnName} onSetValue={setColumnName} />
             <Form.SelectField 
@@ -272,5 +272,5 @@ export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: bool
                 <span>Confirm</span>
             </Button>
         </div>
-    </Dialog.Overlay>);
+    </div>);
 }

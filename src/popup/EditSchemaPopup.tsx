@@ -2,25 +2,13 @@ import { useEffect, useState, useTransition } from "react";
 import { executeAsync } from "../api/action";
 import {
   Button,
-  Radio,
-  Input,
   Typography,
-  Tooltip,
   Dialog,
-  DialogHeader,
-  DialogBody,
-  DialogFooter,
-  List,
-  ListItem,
   Spinner,
-  Tabs,
-  TabsHeader,
-  TabsBody,
-  TabPanel,
-  Tab,
 } from "@material-tailwind/react";
 import { queryAsync, ToggledHierarchicalListItemMetadata } from "../api/query";
 import { Channel } from "@tauri-apps/api/core";
+import Form from "./form/Form";
 
 export type EditSchemaPopupProps = {
     schemaOid: number,
@@ -33,162 +21,120 @@ export type EditSchemaPopupProps = {
 
 export function EditSchemaPopup(props: EditSchemaPopupProps): React.JSX.Element {
     const [schemaName, setSchemaName] = useState<string>('');
+    const [schemaType, setSchemaType] = useState<'table' | 'report'>('table');
     const [masterSchemas, setMasterSchemas] = useState<ToggledHierarchicalListItemMetadata[]>([]);
     const [isMasterSchemaListPending, startMasterSchemaListTransition] = useTransition();
-    const [selectedMasterSchemas, setSelectedMasterSchemas] = useState<number[]>([]);
+    const [selectedMasterSchemas, setSelectedMasterSchemas] = useState<string[]>([]);
 
     useEffect(() => {
         setSchemaName(props.schemaName);
-        setSelectedMasterSchemas(props.masterSchemaOids);
+        setSelectedMasterSchemas(props.masterSchemaOids.map((masterSchemaOid) => masterSchemaOid.toString()));
 
-        if (props.isOpen) {
-            startMasterSchemaListTransition(async () => {
-                const temp: ToggledHierarchicalListItemMetadata[] = [];
-                await queryAsync({
-                    masterSchemas: {
-                        schemaOid: props.schemaOid,
-                        isTable: props.schemaType === 'table',
-                        channel: new Channel<ToggledHierarchicalListItemMetadata>((item) => {
-                            temp.push(item);
-                        })
-                    }
-                });
-                startMasterSchemaListTransition(() => {
-                    setMasterSchemas(temp);
-                    setSelectedMasterSchemas(selectedMasterSchemas.filter((masterSchemaOid) => temp.findIndex((masterSchema) => masterSchema.oid == masterSchemaOid) >= 0));
-                });
+        startMasterSchemaListTransition(async () => {
+            const temp: ToggledHierarchicalListItemMetadata[] = [];
+            await queryAsync({
+                masterSchemas: {
+                    schemaOid: props.schemaOid,
+                    isTable: props.schemaType === 'table',
+                    channel: new Channel<ToggledHierarchicalListItemMetadata>((item) => {
+                        temp.push(item);
+                    })
+                }
             });
-        }
-    }, [props.schemaOid, props.schemaName, props.schemaType, props.masterSchemaOids, props.isOpen]);
-
-    /**
-     * Resets the form.
-     */
-    function resetForm() {
-        setSchemaName('');
-        setSelectedMasterSchemas([]);
-    }
+            startMasterSchemaListTransition(() => {
+                setMasterSchemas(temp);
+                setSelectedMasterSchemas(selectedMasterSchemas.filter((selectedMasterSchema) => {
+                    const selectedMasterSchemaOid: number = parseInt(selectedMasterSchema);
+                    return temp.findIndex((masterSchema) => masterSchema.oid == selectedMasterSchemaOid) >= 0;
+                }));
+            });
+        });
+    }, [props.schemaOid, props.schemaName, props.schemaType, props.masterSchemaOids]);
 
     /**
      * Edits the schema from the inputted information.
      */
-    async function editSchemaAsync() {
-        if (props.schemaType === 'table') {
-            await executeAsync({
-                editTable: {
-                    schema: {
-                        oid: 0,
-                        name: schemaName,
-                        masterSchemaOids: selectedMasterSchemas,
-                        orderByColumnOids: [],
+    async function editSchemaAsync(): Promise<boolean> {
+        try {
+            if (props.schemaType === 'table') {
+                await executeAsync({
+                    editTable: {
+                        schema: {
+                            oid: 0,
+                            name: schemaName,
+                            masterSchemaOids: selectedMasterSchemas.map((selectedMasterSchema) => parseInt(selectedMasterSchema)),
+                            orderByColumnOids: [],
+                        }
                     }
-                }
-            });
-        } else {
-            await executeAsync({
-                editReport: {
-                    schema: {
-                        oid: 0,
-                        name: schemaName,
-                        masterSchemaOids: selectedMasterSchemas,
-                        orderByColumnOids: [],
-                    },
-                    filterFormula: null,
-                    groupByColumnOids: []
-                }
-            });
+                });
+            } else {
+                await executeAsync({
+                    editReport: {
+                        schema: {
+                            oid: 0,
+                            name: schemaName,
+                            masterSchemaOids: selectedMasterSchemas.map((selectedMasterSchema) => parseInt(selectedMasterSchema)),
+                            orderByColumnOids: [],
+                        },
+                        filterFormula: null,
+                        groupByColumnOids: []
+                    }
+                });
+            }
+            return true;
+        } catch (e) {
+            props.onError(e);
+            return false;
         }
     }
-
-    return (
-        <Dialog open={props.isOpen} handler={props.onClosePopup}>
-            <DialogHeader>Edit Schema</DialogHeader>
-            <DialogBody>
-                <Tabs value="general">
-                    <TabsHeader>
-                        <Tab key="general" value="general">
-                            General
-                        </Tab>
-                        <Tab key="columns" value="columns">
-                            Columns 
-                        </Tab>
-                    </TabsHeader>
-                    <TabsBody>
-                        <TabPanel key="general" value="general" className="flex flex-col gap-4">
-                            <Typography variant="h6">Schema Name:</Typography>
-                            <Input value={schemaName} onChange={(e) => { setSchemaName(e.target.value); }} label="Schema Name" />
-                            <Typography variant="h6">Schema Type:</Typography>
-                            <List className="flex flex-row py-0">
-                                <ListItem>
-                                    <Tooltip content="A table is a data schema with columns and rows.">
-                                        <Radio name="schemaType" label="Table" value="table" className="py-0" ripple={false} checked={props.schemaType === 'table'} />
-                                    </Tooltip>
-                                </ListItem>
-                                <ListItem>
-                                    <Tooltip content="A report is a virtual schema that references the data from one or more tables.">
-                                        <Radio name="schemaType" label="Report" value="report" className="py-0" ripple={false} checked={props.schemaType === 'report'} />
-                                    </Tooltip>
-                                </ListItem>
-                            </List>
-                            <Typography variant="h6">Inherit Columns From:</Typography>
-                            {
-                                isMasterSchemaListPending ? (<Spinner />) : (
-                                    <List className="flex flex-col">
-                                        {masterSchemas.map((masterSchema) => {
-                                            return (
-                                                <ListItem 
-                                                    selected={selectedMasterSchemas.indexOf(masterSchema.oid) >= 0} 
-                                                    disabled={masterSchema.disabled} 
-                                                    onClick={() => {
-                                                        const newSelectedMasterSchemas = [...selectedMasterSchemas];
-                                                        const idx: number = newSelectedMasterSchemas.indexOf(masterSchema.oid);
-                                                        if (idx < 0) {
-                                                            newSelectedMasterSchemas.push(masterSchema.oid);
-                                                        } else {
-                                                            newSelectedMasterSchemas.splice(idx, 1);
-                                                        }
-                                                        setSelectedMasterSchemas(newSelectedMasterSchemas);
-                                                        console.log(newSelectedMasterSchemas);
-                                                    }}
-                                                >
-                                                    {'&nbsp;'.repeat(2 * masterSchema.level)}{masterSchema.name}
-                                                </ListItem>
-                                            )
-                                        })}
-                                    </List>
-                                ) 
-                            }
-                        </TabPanel>
-                        <TabPanel key="columns" value="columns">
-                            <div />
-                        </TabPanel>
-                    </TabsBody>
-                </Tabs>
-            </DialogBody>
-            <DialogFooter>
-                <Button
-                    variant="text"
-                    color="red"
+    
+        return (<div>
+            <Form title="Create New Schema">
+                <Form.TextField label="Schema Name" value={schemaName} onSetValue={setSchemaName} />
+                <Form.RadioField label="Schema Type" value={props.schemaType} 
+                    possibleValues={[
+                        { value: 'table', label: "Table", tooltip: "A table is a data schema with columns and rows.", disabled: props.schemaType !== 'table' }, 
+                        { value: 'report', label: "Report", tooltip: "A report is a virtual schema that uses formulas to reference the data from one or more tables.", disabled: props.schemaType !== 'report' },
+                    ]} 
+                />
+                {isMasterSchemaListPending ? (
+                    <Form.CustomField label="Inherit Columns From"><Spinner /></Form.CustomField>
+                ) : (masterSchemas.length == 0 ? (
+                    <Form.CustomField label="Inherit Columns From">
+                        <Typography variant="small" className="text-center">
+                            No schemas to inherit columns from.
+                        </Typography>
+                    </Form.CustomField>
+                ) : (<Form.MultiselectField
+                    label="Inherit Columns From"
+                    value={selectedMasterSchemas}
+                    possibleValues={masterSchemas.map((masterSchema) => { return { value: masterSchema.oid.toString(), label: masterSchema.name }; })}
+                    onSetValue={setSelectedMasterSchemas}
+                />))}
+            </Form>
+            <div className="flex flex-row gap-y-2">
+                <Dialog.DismissTrigger
+                    as={Button}
+                    variant="ghost"
+                    color="error"
                     onClick={() => {
                         props.onClosePopup();
-                        resetForm();
                     }}
                     className="mr-1"
                 >
                     <span>Cancel</span>
-                </Button>
+                </Dialog.DismissTrigger>
                 <Button
                     variant="gradient" 
-                    color="green" 
                     onClick={async () => {
-                        await editSchemaAsync();
-                        props.onClosePopup();
-                        resetForm();
+                        if (await editSchemaAsync()) {
+                            props.onClosePopup();
+                        }
                     }}
                 >
                     <span>Confirm</span>
                 </Button>
-            </DialogFooter>
-        </Dialog>
+            </div>
+        </div>
     );
 }

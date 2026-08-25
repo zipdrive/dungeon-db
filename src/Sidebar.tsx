@@ -2,8 +2,6 @@ import { useEffect, useState, useTransition } from "react";
 import {
   Accordion,
   Button,
-  List,
-  ListItem,
   Spinner,
   Typography
 } from '@material-tailwind/react';
@@ -109,21 +107,38 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
         const [schema, inheritorSchemas] = item;
         if (inheritorSchemas.length > 0) {
             const key: string = `${schema.oid}<${schema.masterOid}`;
-            return (<Accordion.Item value={key}>
-                <Accordion.Trigger className="border-b-0 px-0 py-0">
-                    <Typography variant="small" className={`indent-${Math.min(30, 3 * schema.level)}`}>{schema.name}</Typography>
-                    <img src="/src-tauri/icons/expand_down.png" className="mx-5 transition-transform group-data-[open=true]:rotate-180" />
-                </Accordion.Trigger>
-                <Accordion.Content className="px-0 py-0">
-                    <Accordion>
+            const expandedSchemaIndex: number = expandedSchemaHierarchies.indexOf(key);
+            return (<div className="p-0">
+                <div 
+                    className={'grid grid-cols-[1fr_40px] items-center w-full' + (props.selectedSchemaOid == schema.oid ? ' bg-(--color-secondary-dark)' : '')}
+                    onClick={() => { 
+                        if (expandedSchemaIndex >= 0) {
+                            setExpandedSchemaHierarchies(expandedSchemaHierarchies.slice(0, expandedSchemaIndex).concat(expandedSchemaHierarchies.slice(expandedSchemaIndex + 1)));
+                        } else {
+                            setExpandedSchemaHierarchies(expandedSchemaHierarchies.concat([key]));
+                        }
+                    }}
+                >
+                    <Typography 
+                        className={`px-4 pt-1 indent-${Math.min(30, 3 * schema.level)} text-(--color-secondary-foreground)`}
+                        onClick={() => {
+                            props.onSelectSchema(schema.oid, schema.name);
+                        }}
+                    >
+                        {schema.name}
+                    </Typography>
+                    <img src="/src-tauri/icons/expand_down.png" className={"px-2 transition-transform" + (expandedSchemaIndex >= 0 ? ' rotate-180' : '')} />
+                </div>
+                {expandedSchemaIndex >= 0 && (<div className="flex flex-col">
                     {inheritorSchemas.map(createSchemaHierarchyItemNode)}
-                    </Accordion>
-                </Accordion.Content>
-            </Accordion.Item>);
+                </div>)}
+            </div>);
         } else {
             return (<Typography 
-                variant="small" 
-                className={`indent-${Math.min(30, 3 * schema.level)}`}
+                className={`px-4 py-1 indent-${Math.min(30, 3 * schema.level)} ${(props.selectedSchemaOid == schema.oid ? 'bg-(--color-secondary-dark)' : '')} text-(--color-secondary-foreground)`}
+                onClick={() => {
+                    props.onSelectSchema(schema.oid, schema.name);
+                }}
             >
                 {schema.name}
             </Typography>);
@@ -131,45 +146,39 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
     }
 
     return (
-        <div className="w-sm border-r-4 border-r-blue-gray-100">
-            <Accordion 
-                defaultValue="table"
-            >
-                <Accordion.Item className="h-10" value="table">
-                    <Accordion.Trigger>
-                        <Typography variant="h6" className="px-2">Tables</Typography>
-                        <img src="/src-tauri/icons/expand_down.png" className="mx-2 transition-transform group-data-[open=true]:rotate-180" />
-                    </Accordion.Trigger>
-                    <Accordion.Content>
-                    {
-                        isTableListPending ? (<Spinner />) :
-                        (<div className="flex flex-col justify-center gap-2">
-                            {tableList.length > 0 && <Accordion>
+        <div className="w-sm py-4 border-r-4 border-r-[rgb(var(--color-secondary-dark)/1)] bg-[rgb(var(--color-secondary-light)/1)] flex flex-col gap-y-6">
+            <div>
+                <div onClick={() => { setIsTableSidebarOpen(!isTableSidebarOpen); }} className="grid grid-cols-[1fr_40px] items-center w-full h-10 border-b-1 border-b-slate-200">
+                    <Typography type="h6" className="px-2 text-(--color-secondary-foreground)">Tables</Typography>
+                    <img src="/src-tauri/icons/expand_down.png" className={"px-2 transition-transform" + (isTableSidebarOpen ? ' rotate-180' : '')} />
+                </div>
+                {isTableSidebarOpen && <div>
+                    {isTableListPending ? (<Spinner />) :
+                        (<div className="flex flex-col justify-center gap-2 py-2">
+                            {tableList.length > 0 && <div className="flex flex-col py-1">
                             {tableList.map(createSchemaHierarchyItemNode)}
-                            </Accordion>}
+                            </div>}
                             <Button className="text-center w-fit mx-auto" onClick={() => { props.onRequestCreateSchema('table'); }}>New Table</Button>
                         </div>)
                     }
-                    </Accordion.Content>
-                </Accordion.Item>
-                <Accordion.Item className="h-10" value="report">
-                    <Accordion.Trigger>
-                        <Typography variant="h6" className="px-2">Reports</Typography>
-                        <img src="/src-tauri/icons/expand_down.png" className="mx-2 transition-transform group-data-[open=true]:rotate-180" />
-                    </Accordion.Trigger>
-                    <Accordion.Content>
-                    {
-                        isReportListPending ? (<Spinner />) :
-                        (<div className="flex flex-col justify-center gap-2">
-                            {reportList.length > 0 && <List>
-                            {reportList.map(createSchemaHierarchyItemNode)}
-                            </List>}
-                            <Button className="text-center w-fit mx-auto" onClick={() => { props.onRequestCreateSchema('report'); }}>New Report</Button>
+                </div>}
+            </div>
+            <div>
+                <div onClick={() => { setIsReportSidebarOpen(!isReportSidebarOpen); }} className="grid grid-cols-[1fr_40px] items-center w-full h-10 border-b-1 border-b-slate-200">
+                    <Typography type="h6" className="px-2 text-(--color-secondary-foreground)">Reports</Typography>
+                    <img src="/src-tauri/icons/expand_down.png" className={"px-2 transition-transform" + (isReportSidebarOpen ? ' rotate-180' : '')} />
+                </div>
+                {isReportSidebarOpen && <div>
+                    {isReportListPending ? (<Spinner />) :
+                        (<div className="flex flex-col justify-center gap-2 py-2">
+                            {reportList.length > 0 && (<div className="flex flex-col">
+                                {reportList.map(createSchemaHierarchyItemNode)}
+                            </div>)}
+                            <Button className="text-center w-fit mx-auto" onClick={() => { props.onRequestCreateSchema('report'); }}>New Table</Button>
                         </div>)
                     }
-                    </Accordion.Content>
-                </Accordion.Item>
-            </Accordion>
+                </div>}
+            </div>
         </div>
     );
 }

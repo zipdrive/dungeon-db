@@ -52,7 +52,7 @@ export function Page(props: PageProps): React.JSX.Element {
     if (props.schema !== null && pageBreadcrumbs.length > 0) {
         const lastPageBreadcrumb: PageBreadcrumb = pageBreadcrumbs[pageBreadcrumbs.length - 1];
         return (<div className="flex flex-col w-full">
-            <Breadcrumb className="rounded-none h-10 border-b-1 border-b-blue-gray-100" fullWidth>
+            <Breadcrumb className="rounded-none h-10 border-b-1 border-b-slate-200" fullWidth>
                 {pageBreadcrumbs.map((breadcrumb, idx) => {
                     return (<>
                         {idx > 0 && (<Breadcrumb.Separator />)}

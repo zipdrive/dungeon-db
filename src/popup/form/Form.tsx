@@ -1,4 +1,4 @@
-import { Button, Checkbox, Chip, Dialog, Input, Select, Textarea, Typography } from "@material-tailwind/react";
+import { Button, Checkbox, Chip, Dialog, Input, Radio, Select, Textarea, Typography } from "@material-tailwind/react";
 import { useRef, useState } from "react";
 import Multiselect from "../../components/Multiselect";
 
@@ -11,54 +11,103 @@ export interface FormRootProps extends React.PropsWithChildren {
  */
 export function FormRoot(props: FormRootProps): React.JSX.Element {
     if (props.title) {
-        return (<div>
-            <Typography variant="h4">{props.title}</Typography>
-            <div>
+        return (<div className="flex flex-col gap-y-6">
+            <Typography type="h4" className="text-center">{props.title}</Typography>
+            <div className="flex flex-col gap-y-6">
                 {props.children}
             </div>
         </div>)
     } else {
-        return (<div>
+        return (<div className="flex flex-col gap-y-4">
             {props.children}
         </div>);
     }
 }
 
 
-export type FormTextEntryProps = {
+export type FormTextFieldProps = {
     label: string,
     tooltip?: string,
     value: string,
-    onSetValue: (newValue: string) => void,
+    onSetValue?: (newValue: string) => void,
 };
 
 /**
  * A text entry component on a form. 
  */
-export function FormTextField(props: FormTextEntryProps): React.JSX.Element {
-    return (<>
-        <Typography variant="h6">{props.label}</Typography>
-        <Input placeholder={props.label} value={props.value} onChange={(e) => { props.onSetValue(e.target.value); }} />
-    </>);
+export function FormTextField(props: FormTextFieldProps): React.JSX.Element {
+    return (<div className="flex flex-col gap-y-2">
+        <Typography type="h6">{props.label}</Typography>
+        <Input placeholder={props.label} value={props.value} onChange={(e) => { props.onSetValue?.(e.target.value); }} />
+    </div>);
 }
 
 
 
-export type FormSelectEntryProps<S extends string> = {
+export type FormRadioFieldProps<S extends string> = {
+    label: string,
+    name?: string,
+    tooltip?: string,
+    value: S | undefined,
+    possibleValues: { value: S, label: string, tooltip?: string, disabled?: boolean }[],
+    onSetValue?: (newValue: S) => void,
+    orientation?: 'horizontal' | 'vertical',
+};
+
+/**
+ * A set of radio buttons on a form.
+ */
+export function FormRadioField<S extends string>(props: FormRadioFieldProps<S>): React.JSX.Element {
+    let name: string = '';
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const charactersLength = characters.length;
+    for (let i = 0; i < 10; i++) {
+        name += characters.charAt(Math.floor(Math.random() * charactersLength));
+    }
+    name = props.name ?? name;
+
+    return (<div className="flex flex-col gap-y-2">
+        <Typography type="h6">{props.label}</Typography>
+        <Radio 
+            value={props.value} 
+            orientation={props.orientation ?? 'horizontal'} 
+            className="gap-x-6"
+            onValueChange={(s) => { props.onSetValue?.(s as S); }}
+        >
+            {props.possibleValues.map((possibleValue) => {
+                return (<div className="flex flex-row gap-x-2">
+                    <Radio.Item 
+                        id={name + possibleValue.value} 
+                        value={possibleValue.value} 
+                        disabled={possibleValue.disabled}
+                        
+                    >
+                        <Radio.Indicator />
+                    </Radio.Item>
+                    <Typography as="label" htmlFor={name + possibleValue.value}>{possibleValue.label}</Typography>
+                </div>);
+            })}
+        </Radio>
+    </div>);
+}
+
+
+
+export type FormSelectFieldProps<S extends string> = {
     label: string,
     tooltip?: string,
     value: S | undefined,
     possibleValues: { value: S, label: string, disabled?: boolean }[],
-    onSetValue: (newValue: S) => void,
+    onSetValue?: (newValue: S) => void,
 };
 
 /**
- * A dropdown entry component on a form.
+ * A dropdown entry component on a form, where only one value can be selected.
  */
-export function FormSelectField<S extends string>(props: FormSelectEntryProps<S>): React.JSX.Element {
-    return (<>
-        <Typography variant="h6">{props.label}</Typography>
-        <Select onValueChange={(s) => { props.onSetValue(s as S); }}>
+export function FormSelectField<S extends string>(props: FormSelectFieldProps<S>): React.JSX.Element {
+    return (<div className="flex flex-col gap-y-2">
+        <Typography type="h6">{props.label}</Typography>
+        <Select onValueChange={(s) => { props.onSetValue?.(s as S); }}>
             <Select.Trigger placeholder={props.label}></Select.Trigger>
             <Select.List>
                 {props.possibleValues.map(({ value: optionValue, label: optionLabel, disabled: optionDisabled }) => 
@@ -71,26 +120,26 @@ export function FormSelectField<S extends string>(props: FormSelectEntryProps<S>
                 )}
             </Select.List>
         </Select>
-    </>);
+    </div>);
 }
 
 
 
-export type FormMultiselectEntryProps<S extends string> = {
+export type FormMultiselectFieldProps<S extends string> = {
     label: string,
     tooltip?: string,
     value: S[],
     possibleValues: { value: S, label: string, disabled?: boolean }[],
-    onSetValue: (newValue: S) => void,
+    onSetValue?: (newValue: S[]) => void,
 };
 
 /**
- * A dropdown entry component on a form.
+ * A dropdown entry component on a form, where multiple values can be selected.
  */
-export function FormMultiselectField<S extends string>(props: FormMultiselectEntryProps<S>): React.JSX.Element {
-    return (<>
-        <Typography variant="h6">{props.label}</Typography>
-        <Multiselect onValueChange={(s) => { props.onSetValue(s as S); }}>
+export function FormMultiselectField<S extends string>(props: FormMultiselectFieldProps<S>): React.JSX.Element {
+    return (<div className="flex flex-col gap-y-2">
+        <Typography type="h6">{props.label}</Typography>
+        <Multiselect onValueChange={(s) => { props.onSetValue?.(s as S[]); }}>
             <Multiselect.Trigger placeholder={props.label}></Multiselect.Trigger>
             <Multiselect.List>
                 {props.possibleValues.map(({ value: optionValue, label: optionLabel, disabled: optionDisabled }) => 
@@ -103,44 +152,44 @@ export function FormMultiselectField<S extends string>(props: FormMultiselectEnt
                 )}
             </Multiselect.List>
         </Multiselect>
-    </>);
+    </div>);
 }
 
 
 
-export type FormCheckboxEntryProps = {
+export type FormCheckboxFieldProps = {
     label: string,
     tooltip?: string,
     value: boolean,
-    onSetValue: (newValue: boolean) => void,
+    onSetValue?: (newValue: boolean) => void,
 };
 
 /**
  * A checkbox entry component on a form.
  */
-export function FormCheckboxField(props: FormCheckboxEntryProps): React.JSX.Element {
-    return (<>
-        <Typography variant="h6">{props.label}</Typography>
-        <Checkbox checked={props.value} onChange={(e) => { props.onSetValue(e.target.checked); }} />
-    </>);
+export function FormCheckboxField(props: FormCheckboxFieldProps): React.JSX.Element {
+    return (<div className="flex flex-col gap-y-2">
+        <Typography type="h6">{props.label}</Typography>
+        <Checkbox checked={props.value} onChange={(e) => { props.onSetValue?.(e.target.checked); }} />
+    </div>);
 }
 
 
 
-export type FormFormulaEntryProps = {
+export type FormFormulaFieldProps = {
     label: string,
     tooltip?: string,
     value: string,
-    onSetValue: (newValue: string) => void,
+    onSetValue?: (newValue: string) => void,
 };
 
-export function FormFormulaField(props: FormFormulaEntryProps): React.JSX.Element {
+export function FormFormulaField(props: FormFormulaFieldProps): React.JSX.Element {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const [textareaCursor, setTextareaCursor] = useState<{ start: number, end: number }>({ start: 0, end: 0 });
 
-    return (<>
-        <Typography variant="h6">{props.label}</Typography>
-        <Textarea ref={textareaRef} placeholder={props.label} onChange={(e) => { props.onSetValue(e.target.value); }}>
+    return (<div className="flex flex-col gap-y-2">
+        <Typography type="h6">{props.label}</Typography>
+        <Textarea ref={textareaRef} placeholder={props.label} onChange={(e) => { props.onSetValue?.(e.target.value); }}>
             {props.value
                 .split(/(@\{ROOT\d+(?:_INHERITOR\d+|_MASTER\d+|_COLUMN\d+)*_COLUMN\d+\})/gi)
                 .reduce<React.ReactNode[]>((prev, current, i) => {
@@ -178,7 +227,7 @@ export function FormFormulaField(props: FormFormulaEntryProps): React.JSX.Elemen
                             <Button
                                 variant="gradient" 
                                 onClick={() => {
-                                    props.onSetValue(
+                                    props.onSetValue?.(
                                         props.value.slice(0, textareaCursor.start)
                                         + `@{}`
                                         + props.value.slice(textareaCursor.end)
@@ -198,15 +247,34 @@ export function FormFormulaField(props: FormFormulaEntryProps): React.JSX.Elemen
                 </Dialog.Overlay>
             </Dialog>
         </div>
-    </>);
+    </div>);
+}
+
+
+
+export interface FormCustomFieldProps extends React.PropsWithChildren {
+    label: string
+};
+
+/**
+ * A customized field in a form.
+ */
+export function FormCustomField(props: FormCustomFieldProps): React.JSX.Element {
+    return (<div className="flex flex-col gap-y-2">
+        <Typography type="h6">{props.label}</Typography>
+        {props.children}
+    </div>);
 }
 
 
 
 export const Form = Object.assign(FormRoot, {
     TextField: FormTextField,
-    SelectField: FormSelectField,
     CheckboxField: FormCheckboxField,
+    RadioField: FormRadioField,
+    SelectField: FormSelectField,
+    MultiselectField: FormMultiselectField,
     FormulaField: FormFormulaField,
+    CustomField: FormCustomField,
 });
 export default Form;

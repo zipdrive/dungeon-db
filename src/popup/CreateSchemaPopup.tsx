@@ -14,7 +14,7 @@ import {
 import { queryAsync, ToggledHierarchicalListItemMetadata } from "../api/query";
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import Form from "./form/Form";
+import Form, { FormCustomField } from "./form/Form";
 
 export type CreateSchemaPopupProps = {
     defaultSchemaType: 'table' | 'report',
@@ -27,11 +27,9 @@ export function CreateSchemaPopup(props: CreateSchemaPopupProps & { isOpen: bool
     const [schemaType, setSchemaType] = useState<'table' | 'report'>('table');
     const [masterSchemas, setMasterSchemas] = useState<ToggledHierarchicalListItemMetadata[]>([]);
     const [isMasterSchemaListPending, startMasterSchemaListTransition] = useTransition();
-    const [selectedMasterSchemas, setSelectedMasterSchemas] = useState<number[]>([]);
+    const [selectedMasterSchemas, setSelectedMasterSchemas] = useState<string[]>([]);
 
     useEffect(() => {
-        loadMasterSchemas();
-
         const unlistenMasterSchemas = listen<number[]>('schema', (_updatedSchemas) => {
             loadMasterSchemas();
         });
@@ -40,6 +38,10 @@ export function CreateSchemaPopup(props: CreateSchemaPopupProps & { isOpen: bool
             unlistenMasterSchemas.then(f => f());
         };
     }, []);
+
+    useEffect(() => {
+        loadMasterSchemas();
+    }, [schemaType]);
 
     useEffect(() => {
         setSchemaName('');
@@ -65,7 +67,10 @@ export function CreateSchemaPopup(props: CreateSchemaPopupProps & { isOpen: bool
             });
             startMasterSchemaListTransition(() => {
                 setMasterSchemas(temp);
-                setSelectedMasterSchemas(selectedMasterSchemas.filter((masterSchemaOid) => temp.findIndex((masterSchema) => masterSchema.oid == masterSchemaOid) >= 0));
+                setSelectedMasterSchemas(selectedMasterSchemas.filter((selectedMasterSchema) => {
+                    const selectedMasterSchemaOid: number = parseInt(selectedMasterSchema);
+                    return temp.findIndex((masterSchema) => masterSchema.oid == selectedMasterSchemaOid) >= 0;
+                }));
             });
         });
     }
@@ -81,7 +86,7 @@ export function CreateSchemaPopup(props: CreateSchemaPopupProps & { isOpen: bool
                         schema: {
                             oid: 0,
                             name: schemaName,
-                            masterSchemaOids: selectedMasterSchemas,
+                            masterSchemaOids: selectedMasterSchemas.map((selectedMasterSchema) => parseInt(selectedMasterSchema)),
                             orderByColumnOids: [],
                         }
                     }
@@ -92,7 +97,7 @@ export function CreateSchemaPopup(props: CreateSchemaPopupProps & { isOpen: bool
                         schema: {
                             oid: 0,
                             name: schemaName,
-                            masterSchemaOids: selectedMasterSchemas,
+                            masterSchemaOids: selectedMasterSchemas.map((selectedMasterSchema) => parseInt(selectedMasterSchema)),
                             orderByColumnOids: [],
                         },
                         filterFormula: null,
@@ -107,60 +112,32 @@ export function CreateSchemaPopup(props: CreateSchemaPopupProps & { isOpen: bool
         }
     }
 
-    return (<Dialog.Overlay>
+    return (<div className="flex flex-col gap-y-6">
         <Form title="Create New Schema">
             <Form.TextField label="Schema Name" value={schemaName} onSetValue={setSchemaName} />
-            <Typography variant="h6">Schema Name:</Typography>
-            <Input value={schemaName} onChange={(e) => { setSchemaName(e.target.value); }} label="Schema Name" />
-            <Typography variant="h6">Schema Type:</Typography>
-            <List className="flex flex-row py-0">
-                <ListItem>
-                    <Tooltip content="A table is a data schema with columns and rows.">
-                        <Radio name="schemaType" label="Table" value="table" className="py-0" ripple={false} checked={schemaType === 'table'} onChange={(e) => { setSchemaType(e.target.value as 'table' | 'report'); }} />
-                    </Tooltip>
-                </ListItem>
-                <ListItem>
-                    <Tooltip content="A report is a virtual schema that references the data from one or more tables.">
-                        <Radio name="schemaType" label="Report" value="report" className="py-0" ripple={false} checked={schemaType === 'report'} onChange={(e) => { setSchemaType(e.target.value as 'table' | 'report'); }} />
-                    </Tooltip>
-                </ListItem>
-            </List>
-            <Typography variant="h6">Inherit Columns From:</Typography>
-            {
-                isMasterSchemaListPending ? (<Spinner />) : (masterSchemas.length == 0 ? 
-                    (
-                        <Typography variant="small" className="text-center">
-                            No schemas to inherit columns from.
-                        </Typography>
-                    ) : (
-                        <List className="flex flex-col">
-                            {masterSchemas.map((masterSchema) => {
-                                return (
-                                    <ListItem 
-                                        selected={selectedMasterSchemas.indexOf(masterSchema.oid) >= 0} 
-                                        disabled={masterSchema.disabled} 
-                                        onClick={() => {
-                                            const newSelectedMasterSchemas = [...selectedMasterSchemas];
-                                            const idx: number = newSelectedMasterSchemas.indexOf(masterSchema.oid);
-                                            if (idx < 0) {
-                                                newSelectedMasterSchemas.push(masterSchema.oid);
-                                            } else {
-                                                newSelectedMasterSchemas.splice(idx, 1);
-                                            }
-                                            setSelectedMasterSchemas(newSelectedMasterSchemas);
-                                            console.log(newSelectedMasterSchemas);
-                                        }}
-                                    >
-                                        {'&nbsp;'.repeat(2 * masterSchema.level)}{masterSchema.name}
-                                    </ListItem>
-                                )
-                            })}
-                        </List>
-                    )
-                )
-            }
+            <Form.RadioField label="Schema Type" value={schemaType} 
+                possibleValues={[
+                    { value: 'table', label: "Table", tooltip: "A table is a data schema with columns and rows." }, 
+                    { value: 'report', label: "Report", tooltip: "A report is a virtual schema that uses formulas to reference the data from one or more tables." },
+                ]} 
+                onSetValue={setSchemaType} 
+            />
+            {isMasterSchemaListPending ? (
+                <Form.CustomField label="Inherit Columns From"><Spinner /></Form.CustomField>
+            ) : (masterSchemas.length == 0 ? (
+                <Form.CustomField label="Inherit Columns From">
+                    <Typography variant="small" className="text-center">
+                        No schemas to inherit columns from.
+                    </Typography>
+                </Form.CustomField>
+            ) : (<Form.MultiselectField
+                label="Inherit Columns From"
+                value={selectedMasterSchemas}
+                possibleValues={masterSchemas.map((masterSchema) => { return { value: masterSchema.oid.toString(), label: masterSchema.name }; })}
+                onSetValue={setSelectedMasterSchemas}
+            />))}
         </Form>
-        <div className="flex flex-row gap-y-2">
+        <div className="flex flex-row gap-y-2 justify-end">
             <Dialog.DismissTrigger
                 as={Button}
                 variant="ghost"
@@ -183,5 +160,5 @@ export function CreateSchemaPopup(props: CreateSchemaPopupProps & { isOpen: bool
                 <span>Confirm</span>
             </Button>
         </div>
-    </Dialog.Overlay>);
+    </div>);
 }

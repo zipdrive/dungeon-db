@@ -17,7 +17,7 @@ import {
   useListItem,
   useMergeRefs,
 } from "@floating-ui/react";
-import { useTheme } from '@material-tailwind/react/src/context';
+import { useTheme } from '@material-tailwind/react';
 
 // @utils
 import {
@@ -35,7 +35,7 @@ import type {
   UseFloatingReturn,
   FloatingFocusManagerProps,
 } from "@floating-ui/react";
-import type { BaseProps, SharedProps } from "@material-tailwind/react/src/types";
+import type { BaseProps, SharedProps } from "@material-tailwind/react";
 
 // @theme
 import {
@@ -43,10 +43,10 @@ import {
   selectTriggerTheme,
   selectListTheme,
   selectOptionTheme,
-} from "@material-tailwind/react/src/theme";
+} from "@material-tailwind/react";
 
 // select context
-export interface SelectContextProps extends Omit<SharedProps, "variant"> {
+export interface MultiselectContextProps extends Omit<SharedProps, "variant"> {
   isError?: boolean;
   isSuccess?: boolean;
   isPill?: boolean;
@@ -54,17 +54,17 @@ export interface SelectContextProps extends Omit<SharedProps, "variant"> {
   placement?: Placement;
   offset?: OffsetOptions;
   activeIndex?: number | null;
-  selectedIndex?: number | null;
+  selectedIndices?: number[];
   refs?: UseFloatingReturn["refs"];
   selected?: {
     value: string;
     element: React.ReactNode;
-  };
+  }[];
   setSelected?: React.Dispatch<
     React.SetStateAction<{
       value: string;
       element: React.ReactNode;
-    }>
+    }[]>
   >;
   getItemProps?: ReturnType<typeof useInteractions>["getItemProps"];
   getReferenceProps?: ReturnType<typeof useInteractions>["getReferenceProps"];
@@ -80,10 +80,10 @@ export interface SelectContextProps extends Omit<SharedProps, "variant"> {
   >;
   floatingStyles?: UseFloatingReturn["floatingStyles"];
   isOpen?: boolean;
-  controlledValue?: string;
+  controlledValue?: string[];
 }
 
-export const SelectContext = React.createContext<SelectContextProps>({
+export const MultiselectContext = React.createContext<MultiselectContextProps>({
   size: "md",
   color: "primary",
   isError: false,
@@ -91,10 +91,10 @@ export const SelectContext = React.createContext<SelectContextProps>({
   disabled: false,
   placement: "bottom",
   offset: 5,
-} as SelectContextProps);
+} as MultiselectContextProps);
 
 // select root
-export type SelectProps<T extends React.ElementType = any> = BaseProps<
+export type MultiselectProps<T extends React.ElementType = any> = BaseProps<
   T,
   {
     isPill?: boolean;
@@ -103,9 +103,9 @@ export type SelectProps<T extends React.ElementType = any> = BaseProps<
     disabled?: boolean;
     placement?: Placement;
     offset?: OffsetOptions;
-    value?: string;
+    value?: string[];
     name?: string;
-    onValueChange?: (arg: string) => void;
+    onValueChange?: (arg: string[]) => void;
   } & Omit<SharedProps, "variant">
 >;
 
@@ -129,28 +129,26 @@ function SelectRootBase<T extends React.ElementType = any>(
     name,
     onValueChange,
     children,
-  }: SelectProps,
+  }: MultiselectProps,
   ref: React.Ref<HTMLInputElement>,
 ) {
   const contextTheme = useTheme();
   const theme = contextTheme?.select ?? selectTheme;
   const defaultProps = theme?.defaultProps;
   const [isOpen, setIsOpen] = React.useState(false);
-  const [selected, setSelected] = React.useState<any>(() => ({
-    value,
-    element: null,
-  }));
+  const [selected, setSelected] = React.useState<any>(() => []);
   const [activeIndex, setActiveIndex] = React.useState<number | null>(null);
-  const [selectedIndex, setSelectedIndex] = React.useState<number | null>(null);
+  const [selectedIndices, setSelectedIndices] = React.useState<number[]>([]);
 
-  size ??= (defaultProps?.size as SelectProps["size"]) ?? "md";
-  color ??= (defaultProps?.color as SelectProps["color"]) ?? "primary";
-  isPill ??= (defaultProps?.isPill as SelectProps["isPill"]) ?? false;
-  isError ??= (defaultProps?.isError as SelectProps["isError"]) ?? false;
-  isSuccess ??= (defaultProps?.isSuccess as SelectProps["isSuccess"]) ?? false;
+  value ??= [];
+  size ??= (defaultProps?.size as MultiselectProps["size"]) ?? "md";
+  color ??= (defaultProps?.color as MultiselectProps["color"]) ?? "primary";
+  isPill ??= (defaultProps?.isPill as MultiselectProps["isPill"]) ?? false;
+  isError ??= (defaultProps?.isError as MultiselectProps["isError"]) ?? false;
+  isSuccess ??= (defaultProps?.isSuccess as MultiselectProps["isSuccess"]) ?? false;
   placement ??=
-    (defaultProps?.placement as SelectProps["placement"]) ?? "bottom";
-  offset ??= (defaultProps?.offset as SelectProps["offset"]) ?? 5;
+    (defaultProps?.placement as MultiselectProps["placement"]) ?? "bottom";
+  offset ??= (defaultProps?.offset as MultiselectProps["offset"]) ?? 5;
 
   const { refs, floatingStyles, context } = useFloating({
     placement: placement,
@@ -179,12 +177,24 @@ function SelectRootBase<T extends React.ElementType = any>(
   const elementsRef = React.useRef<Array<HTMLElement | null>>([]);
 
   const handleSelect = React.useCallback((index: number | null) => {
-    setSelectedIndex(index);
-    setIsOpen(false);
-
     if (index !== null) {
-      setSelected(labelsRef.current[index]);
-      onValueChange?.(labelsRef.current[index]?.value as any);
+      const i: number = selectedIndices.indexOf(index);
+      let newSelectedIndices: number[];
+      if (i < 0) {
+        newSelectedIndices = selectedIndices.concat([index]);
+      } else {
+        newSelectedIndices =
+          selectedIndices.slice(0, i)
+            .concat(selectedIndices.slice(i + 1));
+      }
+      setSelectedIndices(newSelectedIndices);
+      setSelected(labelsRef.current.filter((_v, j) => newSelectedIndices.indexOf(j) >= 0));
+      onValueChange?.(
+        labelsRef.current
+          .filter((v) => v !== null)
+          .filter((_v, j) => newSelectedIndices.indexOf(j) >= 0)
+          .map((v) => v.value)
+      );
     }
   }, []);
 
@@ -199,7 +209,7 @@ function SelectRootBase<T extends React.ElementType = any>(
   const listNav = useListNavigation(context, {
     listRef: elementsRef,
     activeIndex,
-    selectedIndex,
+    selectedIndex: selectedIndices.length > 0 ? selectedIndices[selectedIndices.length - 1] : null,
     onNavigate: setActiveIndex,
   });
 
@@ -210,7 +220,7 @@ function SelectRootBase<T extends React.ElementType = any>(
   const typeahead = useTypeahead(context, {
     listRef: labelsRefTypehead,
     activeIndex,
-    selectedIndex,
+    selectedIndex: selectedIndices.length > 0 ? selectedIndices[selectedIndices.length - 1] : null,
     onMatch: handleTypeaheadMatch,
   });
 
@@ -232,7 +242,7 @@ function SelectRootBase<T extends React.ElementType = any>(
       disabled,
       selected,
       activeIndex,
-      selectedIndex,
+      selectedIndices,
       context,
       refs,
       floatingStyles,
@@ -255,7 +265,7 @@ function SelectRootBase<T extends React.ElementType = any>(
       disabled,
       selected,
       activeIndex,
-      selectedIndex,
+      selectedIndices,
       context,
       refs,
       floatingStyles,
@@ -271,7 +281,7 @@ function SelectRootBase<T extends React.ElementType = any>(
   );
 
   return (
-    <SelectContext.Provider value={contextValue}>
+    <MultiselectContext.Provider value={contextValue}>
       {children}
       <input
         readOnly
@@ -280,20 +290,20 @@ function SelectRootBase<T extends React.ElementType = any>(
         style={{ display: "none" }}
         value={value || selected?.value || ""}
       />
-    </SelectContext.Provider>
+    </MultiselectContext.Provider>
   );
 }
 
 SelectRootBase.displayName = "MaterialTailwind.Select";
 
-const SelectRoot = React.forwardRef(SelectRootBase) as <
+const MultiselectRoot = React.forwardRef(SelectRootBase) as <
   T extends React.ElementType = any,
 >(
-  props: SelectProps<T> & { ref?: React.Ref<HTMLInputElement> },
+  props: MultiselectProps<T> & { ref?: React.Ref<HTMLInputElement> },
 ) => React.JSX.Element;
 
 // select trigger
-export type SelectTriggerProps<T extends React.ElementType = "button"> =
+export type MultiselectTriggerProps<T extends React.ElementType = "button"> =
   BaseProps<
     T,
     {
@@ -317,7 +327,7 @@ function SelectTriggerRoot<T extends React.ElementType = "button">(
     className,
     children,
     ...props
-  }: SelectTriggerProps,
+  }: MultiselectTriggerProps,
   ref: React.Ref<Element>,
 ) {
   const Component = as || ("button" as any);
@@ -335,15 +345,15 @@ function SelectTriggerRoot<T extends React.ElementType = "button">(
     isError,
     isSuccess,
     disabled,
-  } = React.useContext(SelectContext);
+  } = React.useContext(MultiselectContext);
 
-  const value = selected?.value;
-  const element = selected?.element;
+  const values = selected?.map(({ value }) => value);
+  const elements = selected?.map(({ element }) => element);
 
   const elementRef = useMergeRefs([refs?.setReference, ref]);
 
   indicator ??=
-    (defaultProps?.indicator as SelectTriggerProps["indicator"]) ?? (
+    (defaultProps?.indicator as MultiselectTriggerProps["indicator"]) ?? (
       <svg
         viewBox="0 0 24 24"
         fill="none"
@@ -388,8 +398,8 @@ function SelectTriggerRoot<T extends React.ElementType = "button">(
       {...(getReferenceProps && getReferenceProps())}
     >
       {children
-        ? children({ value, element })
-        : element ?? (
+        ? selected?.map((v) => children(v))
+        : elements ?? (
             <span data-slot="placeholder" className={theme.placeholder}>
               {placeholder}
             </span>
@@ -401,10 +411,10 @@ function SelectTriggerRoot<T extends React.ElementType = "button">(
 
 SelectTriggerRoot.displayName = "MaterialTailwind.SelectTrigger";
 
-export const SelectTrigger = React.forwardRef(SelectTriggerRoot) as <
+export const MultiselectTrigger = React.forwardRef(SelectTriggerRoot) as <
   T extends React.ElementType = "button",
 >(
-  props: SelectTriggerProps<T> & { ref?: React.Ref<Element> },
+  props: MultiselectTriggerProps<T> & { ref?: React.Ref<Element> },
 ) => React.JSX.Element;
 
 // select list
@@ -445,7 +455,7 @@ function SelectListRoot<T extends React.ElementType = "div">(
     selected,
     setSelected,
     controlledValue,
-  } = React.useContext(SelectContext);
+  } = React.useContext(MultiselectContext);
 
   disabled ??= (defaultProps?.disabled as SelectListProps["disabled"]) ?? false;
   initialFocus ??=
@@ -467,15 +477,20 @@ function SelectListRoot<T extends React.ElementType = "div">(
 
   React.useEffect(() => {
     if (controlledValue) {
-      const label = (children as any)?.find(
-        (el: any) => selected?.value === el.props.value,
+      const labels = (children as any)?.filter(
+        (el: any) => {
+          const i = selected?.findIndex(({ value }) => value === el.props.value);
+          return i !== undefined && i >= 0;
+        }
       );
 
-      if (label) {
-        setSelected?.({
-          value: label?.props?.value || "",
-          element: label?.props?.children || "",
-        });
+      if (labels) {
+        setSelected?.(labels.map((label: any) => {
+          return {
+            value: label?.props?.value || "",
+            element: label?.props?.children || "",
+          }
+        }));
       }
     }
   }, []);
@@ -513,14 +528,14 @@ function SelectListRoot<T extends React.ElementType = "div">(
 
 SelectListRoot.displayName = "MaterialTailwind.SelectList";
 
-export const SelectList = React.forwardRef(SelectListRoot) as <
+export const MultiselectList = React.forwardRef(SelectListRoot) as <
   T extends React.ElementType = "div",
 >(
   props: SelectListProps<T> & { ref?: React.Ref<Element> },
 ) => React.JSX.Element;
 
 // select option
-export type SelectOptionProps<T extends React.ElementType = "button"> =
+export type MultiselectOptionProps<T extends React.ElementType = "button"> =
   BaseProps<
     T,
     {
@@ -537,17 +552,17 @@ function SelectOptionRoot<T extends React.ElementType = "button">(
     indicator,
     children,
     ...props
-  }: SelectOptionProps,
+  }: MultiselectOptionProps,
   ref: React.Ref<Element>,
 ) {
   const Component = as || ("button" as any);
   const contextTheme = useTheme();
   const theme = contextTheme?.selectOption ?? selectOptionTheme;
   const defaultProps = theme?.defaultProps;
-  const { getItemProps, handleSelect, activeIndex, selectedIndex, selected } =
-    React.useContext(SelectContext);
+  const { getItemProps, handleSelect, activeIndex, selectedIndices, selected } =
+    React.useContext(MultiselectContext);
 
-  indicator ??= (defaultProps?.indicator as SelectOptionProps["indicator"]) ?? (
+  indicator ??= (defaultProps?.indicator as MultiselectOptionProps["indicator"]) ?? (
     <svg
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
@@ -576,9 +591,9 @@ function SelectOptionRoot<T extends React.ElementType = "button">(
     onClick?.(e);
   };
 
-  const curValue = selected?.value || "";
+  const curValues = selected?.map(({ value }) => value) || "";
   const isActive = activeIndex === index;
-  const isSelected = selectedIndex === index || curValue === value;
+  const isSelected = (selectedIndices && selectedIndices.indexOf(index) >= 0) || (value && curValues.indexOf(value) >= 0);
 
   const styles = twMerge(theme.baseStyle, className);
 
@@ -606,16 +621,16 @@ function SelectOptionRoot<T extends React.ElementType = "button">(
 
 SelectOptionRoot.displayName = "MaterialTailwind.SelectOption";
 
-export const SelectOption = React.forwardRef(SelectOptionRoot) as <
+export const MultiselectOption = React.forwardRef(SelectOptionRoot) as <
   T extends React.ElementType = "button",
 >(
-  props: SelectOptionProps<T> & { ref?: React.Ref<Element> },
+  props: MultiselectOptionProps<T> & { ref?: React.Ref<Element> },
 ) => React.JSX.Element;
 
-export const Select = Object.assign(SelectRoot, {
-  Trigger: SelectTrigger,
-  List: SelectList,
-  Option: SelectOption,
+export const Multiselect = Object.assign(MultiselectRoot, {
+  Trigger: MultiselectTrigger,
+  List: MultiselectList,
+  Option: MultiselectOption,
 });
 
-export default Select;
+export default Multiselect;

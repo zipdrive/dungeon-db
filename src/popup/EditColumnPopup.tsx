@@ -224,8 +224,8 @@ export function EditColumnPopup(props: EditColumnPopupProps): React.JSX.Element 
         }
     }
 
-    return (<Dialog.Overlay>
-        <Form title="Create New Column">
+    return (<div>
+        <Form title="Edit Column">
             <Form.TextField label="Column Name" value={columnName} onSetValue={setColumnName} />
             <Form.SelectField 
                 label="Column Type"
@@ -308,5 +308,5 @@ export function EditColumnPopup(props: EditColumnPopupProps): React.JSX.Element 
                 <span>Confirm</span>
             </Button>
         </div>
-    </Dialog.Overlay>);
+    </div>);
 }
