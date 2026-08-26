@@ -51,12 +51,14 @@ export function Page(props: PageProps): React.JSX.Element {
 
     if (props.schema !== null && pageBreadcrumbs.length > 0) {
         const lastPageBreadcrumb: PageBreadcrumb = pageBreadcrumbs[pageBreadcrumbs.length - 1];
-        return (<div className="flex flex-col w-full">
-            <Breadcrumb className="rounded-none h-10 border-b-1 border-b-slate-200" fullWidth>
+        return (<div className="flex flex-col w-full bg-[rgb(var(--color-surface-light)/1)] text-[rgb(var(--color-surface-foreground)/1)]">
+            <Breadcrumb className="px-4 rounded-none w-full h-10 border-b-1 border-b-[rgb(var(--color-primary-dark)/1)]">
                 {pageBreadcrumbs.map((breadcrumb, idx) => {
                     return (<>
                         {idx > 0 && (<Breadcrumb.Separator />)}
                         <Breadcrumb.Link
+                            as="a"
+                            className="cursor-pointer text-current"
                             onClick={() => {
                                 const newPageBreadcrumbs: PageBreadcrumb[] = pageBreadcrumbs.slice(0, idx + 1);
                                 setPageBreadcrumbs(newPageBreadcrumbs);

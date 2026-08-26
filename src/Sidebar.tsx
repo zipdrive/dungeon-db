@@ -120,7 +120,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                     }}
                 >
                     <Typography 
-                        className={`px-4 pt-1 indent-${Math.min(30, 3 * schema.level)} text-(--color-secondary-foreground)`}
+                        className={`px-4 pt-1 indent-${Math.min(30, 3 * schema.level)} text-[rgb(var(--color-secondary-foreground)/1)]`}
                         onClick={() => {
                             props.onSelectSchema(schema.oid, schema.name);
                         }}
@@ -135,7 +135,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
             </div>);
         } else {
             return (<Typography 
-                className={`px-4 py-1 indent-${Math.min(30, 3 * schema.level)} ${(props.selectedSchemaOid == schema.oid ? 'bg-(--color-secondary-dark)' : '')} text-(--color-secondary-foreground)`}
+                className={`px-4 py-1 indent-${Math.min(30, 3 * schema.level)} ${(props.selectedSchemaOid == schema.oid ? 'bg-[rgb(var(--color-secondary-dark)/1)]' : '')} text-[rgb(var(--color-secondary-foreground)/1)]`}
                 onClick={() => {
                     props.onSelectSchema(schema.oid, schema.name);
                 }}
@@ -146,10 +146,10 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
     }
 
     return (
-        <div className="w-sm py-4 border-r-4 border-r-[rgb(var(--color-secondary-dark)/1)] bg-[rgb(var(--color-secondary-light)/1)] flex flex-col gap-y-6">
+        <div className="w-sm py-4 border-r-4 border-r-[rgb(var(--color-primary)/1)] bg-[rgb(var(--color-secondary-light)/1)] flex flex-col gap-y-6">
             <div>
-                <div onClick={() => { setIsTableSidebarOpen(!isTableSidebarOpen); }} className="grid grid-cols-[1fr_40px] items-center w-full h-10 border-b-1 border-b-slate-200">
-                    <Typography type="h6" className="px-2 text-(--color-secondary-foreground)">Tables</Typography>
+                <div onClick={() => { setIsTableSidebarOpen(!isTableSidebarOpen); }} className="grid grid-cols-[1fr_40px] items-center w-full h-10 border-b-1 border-b-[rgb(var(--color-secondary-dark)/1)]">
+                    <Typography type="h6" className="px-2 text-[rgb(var(--color-secondary-foreground)/1)]">Tables</Typography>
                     <img src="/src-tauri/icons/expand_down.png" className={"px-2 transition-transform" + (isTableSidebarOpen ? ' rotate-180' : '')} />
                 </div>
                 {isTableSidebarOpen && <div>
@@ -164,8 +164,8 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                 </div>}
             </div>
             <div>
-                <div onClick={() => { setIsReportSidebarOpen(!isReportSidebarOpen); }} className="grid grid-cols-[1fr_40px] items-center w-full h-10 border-b-1 border-b-slate-200">
-                    <Typography type="h6" className="px-2 text-(--color-secondary-foreground)">Reports</Typography>
+                <div onClick={() => { setIsReportSidebarOpen(!isReportSidebarOpen); }} className="grid grid-cols-[1fr_40px] items-center w-full h-10 border-b-1 border-b-[rgb(var(--color-secondary-dark)/1)]">
+                    <Typography type="h6" className="px-2 text-[rgb(var(--color-secondary-foreground)/1)]">Reports</Typography>
                     <img src="/src-tauri/icons/expand_down.png" className={"px-2 transition-transform" + (isReportSidebarOpen ? ' rotate-180' : '')} />
                 </div>
                 {isReportSidebarOpen && <div>
