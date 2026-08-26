@@ -135,7 +135,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
             </div>);
         } else {
             return (<Typography 
-                className={`px-4 py-1 indent-${Math.min(30, 3 * schema.level)} ${(props.selectedSchemaOid == schema.oid ? 'bg-[rgb(var(--color-secondary-dark)/1)]' : '')} text-[rgb(var(--color-secondary-foreground)/1)]`}
+                className={`px-4 py-1 indent-${Math.min(30, 3 * schema.level)} ${(props.selectedSchemaOid == schema.oid ? 'bg-[rgb(var(--color-secondary)/1)] border-y-1 border-y-[rgb(var(--color-secondary-dark)/1)]' : '')} text-[rgb(var(--color-secondary-foreground)/1)]`}
                 onClick={() => {
                     props.onSelectSchema(schema.oid, schema.name);
                 }}
@@ -158,7 +158,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                             {tableList.length > 0 && <div className="flex flex-col py-1">
                             {tableList.map(createSchemaHierarchyItemNode)}
                             </div>}
-                            <Button className="text-center w-fit mx-auto" onClick={() => { props.onRequestCreateSchema('table'); }}>New Table</Button>
+                            <Button variant="gradient" className="text-center w-fit mx-auto" onClick={() => { props.onRequestCreateSchema('table'); }}>New Table</Button>
                         </div>)
                     }
                 </div>}
@@ -174,7 +174,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                             {reportList.length > 0 && (<div className="flex flex-col">
                                 {reportList.map(createSchemaHierarchyItemNode)}
                             </div>)}
-                            <Button className="text-center w-fit mx-auto" onClick={() => { props.onRequestCreateSchema('report'); }}>New Table</Button>
+                            <Button variant="gradient" className="text-center w-fit mx-auto" onClick={() => { props.onRequestCreateSchema('report'); }}>New Report</Button>
                         </div>)
                     }
                 </div>}

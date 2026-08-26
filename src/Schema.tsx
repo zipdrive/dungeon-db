@@ -1,15 +1,20 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { queryAsync } from "./api/query";
 import { Channel } from "@tauri-apps/api/core";
 import { FullMetadata as ColumnFullMetadata } from "./api/model/column";
 import { SchemaRow, CellContent, CellStream, AddNewRowButton } from "./api/model/cell";
-import { Cell } from "./Cell";
+import { createCell } from "./Cell";
 import { Menu, MenuItem } from "@tauri-apps/api/menu";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 import { executeAsync } from "./api/action";
 import { ObjectPageBreadcrumb, SchemaPageBreadcrumb } from "./breadcrumb";
 import { Schema as SchemaMetadata, FullMetadata as SchemaFullMetadata } from "./api/model/schema";
 import { listen } from "@tauri-apps/api/event";
+import { Button, ThemeProvider } from "@material-tailwind/react";
+import ReactDOMServer from 'react-dom/server';
+import { createPortal } from "react-dom";
+import { Spreadsheet } from "react-spreadsheet";
+import classNames from "classnames";
 
 type SchemaProps = {
     name: string,
@@ -33,6 +38,8 @@ export function Schema(props: SchemaProps): React.JSX.Element {
     const [addNewRowButton, setAddNewRowButton] = useState<AddNewRowButton | null>(null);
 
     const [focusedCell, setFocusedCell] = useState<{ columnIdx: number, rowIdx: number }>({ columnIdx: 0, rowIdx: 0 });
+
+    const iframeDocRef = useRef<HTMLIFrameElement>(null);
 
     useEffect(() => {
         const unlistenSchema = listen<number[]>('schema', (e) => {
@@ -71,7 +78,7 @@ export function Schema(props: SchemaProps): React.JSX.Element {
                 }),
                 cellChannel: new Channel((cellStream) => {
                     if ('maxIndex' in cellStream) {
-                        setMaxPageNum(1 + Math.ceil(cellStream.maxIndex / pageSize));
+                        setMaxPageNum(1 + Math.floor(cellStream.maxIndex / pageSize));
                     } else if ('addNewRowButton' in cellStream) {
                         queriedAddNewRowButton = cellStream.addNewRowButton;
                     } else if ('row' in cellStream) {
@@ -90,150 +97,235 @@ export function Schema(props: SchemaProps): React.JSX.Element {
         setAddNewRowButton(queriedAddNewRowButton);
     }
 
-    return (<div className="grow flex flex-col">
-        <div className="grow mx-4 my-4">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Index</th>
-                        {columns.map((columnMetadata) => {
-                            return (<th
-                                onContextMenu={async (e) => {
-                                    const menu: Menu = await Menu.new({
-                                        items: [
-                                            await MenuItem.new({
-                                                text: 'Edit',
-                                                action: () => {
-                                                    props.onRequestEditColumn(columnMetadata, 'table' in props.schema);
-                                                }
-                                            }),
-                                            await MenuItem.new({
-                                                text: 'Insert',
-                                                action: () => {
-                                                    props.onRequestCreateColumn('table' in props.schema ? props.schema.table.schema : props.schema.report.schema, 'table' in props.schema, columnMetadata.ordering);
-                                                }
-                                            }),
-                                            await MenuItem.new({
-                                                text: 'Delete',
-                                                action: async () => {
-                                                    await executeAsync({
-                                                        trashColumn: {
-                                                            schemaOid: columnMetadata.schema.oid,
-                                                            columnOid: columnMetadata.oid,
-                                                        }
-                                                    });
-                                                }
-                                            }),
-                                        ]
-                                    });
-                                    await menu.popup(new LogicalPosition({
-                                        x: e.pageX,
-                                        y: e.pageY
-                                    }));
-                                }}
-                            >
-                                {columnMetadata.isPrimaryKey ? '🔑 ' : ''}{columnMetadata.name}
-                            </th>);
-                        })}
-                        <th>
-                            <a href="#"
-                                onClick={() => {
-                                    props.onRequestCreateColumn('table' in props.schema ? props.schema.table.schema : props.schema.report.schema, 'table' in props.schema, null);
-                                }}
-                            >
-                                Add New Column
-                            </a>
-                        </th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {pageNum > 1 && (<tr><th />
-                        <th colSpan={columns.length}>
-                            <a href="#" onClick={() => { setPageNum(pageNum - 1); }} className="text-center">Previous Page</a>
-                        </th>
-                    </tr>)}
-                    {rows.map(([rowMetadata, rowCells], rowIdx) => {
-                        return (<tr>
-                            <th
-                                onContextMenu={async (e) => {
-                                    const menuItems: MenuItem[] = [
-                                        await MenuItem.new({
-                                            text: 'Edit',
-                                            action: () => {
-                                                // Open the row in an Object page
-                                                props.onRequestOpenObject({
-                                                    name: 'Row',
-                                                    schemaOid: 'table' in props.schema ? props.schema.table.schema.oid : props.schema.report.schema.oid,
-                                                    oidFilters: rowMetadata.oidFilters,
-                                                });
-                                            }
-                                        })
-                                    ];
-
-                                    if (rowMetadata.tableRowIdentifier !== null) {
-                                        const { tableOid, rowOid } = rowMetadata.tableRowIdentifier;
-                                        menuItems.push(await MenuItem.new({
-                                            text: 'Delete',
-                                            action: async () => {
-                                                // Delete the row
-                                                await executeAsync({
-                                                    trashRow: {
-                                                        tableOid,
-                                                        rowOid
-                                                    }
-                                                });
-                                            }
-                                        }));
-                                    }
-
-                                    const menu = await Menu.new({
-                                        items: menuItems
-                                    });
-                                    await menu.popup(new LogicalPosition({
-                                        x: e.pageX,
-                                        y: e.pageY
-                                    }));
-                                }}
-                            >
-                                {rowMetadata.index}
-                            </th>
-                            {rowCells.map((content, columnIdx) => {
-                                return (<Cell 
-                                    content={content} 
-                                    isFocused={rowIdx == focusedCell.rowIdx && columnIdx == focusedCell.columnIdx} 
-                                />);
-                            })}
-                        </tr>);
+    return (<div className="grid grid-col grid-rows-[calc(100vh-(var(--spacing)*20))_calc(var(--spacing)*10)]">
+        <iframe ref={iframeDocRef} className="size-full">
+            {iframeDocRef.current?.contentWindow?.document && createPortal(
+                <>
+                    <link rel="stylesheet" href="/react-spreadsheet/assets/css/styles.115ba647.css" />
+                    <link rel="stylesheet" type="text/css" href="/src/Schema.css" />
+                    {columns.map((columnMetadata) => {
+                        return (<style>
+                            {`.column${columnMetadata.oid}`} &#123;
+                                {columnMetadata.style}
+                            &#125;
+                        </style>)
                     })}
-                    {pageNum < maxPageNum && (<tr><th />
-                        <th colSpan={columns.length}>
-                            <a href="#" onClick={() => { setPageNum(pageNum + 1); }} className="text-center">Next Page</a>
-                        </th>
-                    </tr>)}
-                    {addNewRowButton && (<tr><th />
-                        <th colSpan={columns.length}>
-                            <a 
-                                href="#" 
-                                onClick={async () => {
-                                    await executeAsync({
-                                        createRow: {
-                                            tableOid: addNewRowButton.tableOid,
-                                            rowOid: null,
-                                            fixedParentDatasource: addNewRowButton.fixedParentDatasource
-                                        }
-                                    });
-                                }}
-                                className="text-center"
-                            >
-                                Add New Row
-                            </a>
-                        </th>
-                    </tr>)}
-                </tbody>
-            </table>
-        </div>
-        <div className="h-10 border-t-1 border-t-blue-gray-100 bg-blue-gray-50 bg-opacity-60">
+                    <div className="mx-4 my-4 overflow-auto text-sm">
+                        <div className="flex flex-col gap-y-2">
+                            <div className="flex flex-row">
+                                <Spreadsheet
+                                    columnLabels={columns.filter((columnMetadata) => !columnMetadata.hidden).map((columnMetadata) => (columnMetadata.isPrimaryKey ? '🔑 ' : '') + columnMetadata.name)}
+                                    ColumnIndicator={
+                                        ({
+                                            column: columnIndex,
+                                            label,
+                                            selected,
+                                            onSelect,
+                                        }) => {
+                                            const handleClick = useCallback(
+                                                (event: React.MouseEvent) => {
+                                                    onSelect(columnIndex, event.shiftKey);
+                                                },
+                                                [onSelect, columnIndex]
+                                            );
 
+                                            const handleContextMenu = useCallback(
+                                                async (event: React.MouseEvent) => {
+                                                    const columnMetadata: ColumnFullMetadata = columns[columnIndex];
+
+                                                    const menu: Menu = await Menu.new({
+                                                        items: [
+                                                            await MenuItem.new({
+                                                                text: 'Edit',
+                                                                action: () => {
+                                                                    props.onRequestEditColumn(columnMetadata, 'table' in props.schema);
+                                                                }
+                                                            }),
+                                                            await MenuItem.new({
+                                                                text: 'Insert',
+                                                                action: () => {
+                                                                    props.onRequestCreateColumn('table' in props.schema ? props.schema.table.schema : props.schema.report.schema, 'table' in props.schema, columnMetadata.ordering);
+                                                                }
+                                                            }),
+                                                            await MenuItem.new({
+                                                                text: 'Delete',
+                                                                action: async () => {
+                                                                    await executeAsync({
+                                                                        trashColumn: {
+                                                                            schemaOid: columnMetadata.schema.oid,
+                                                                            columnOid: columnMetadata.oid,
+                                                                        }
+                                                                    });
+                                                                }
+                                                            }),
+                                                        ]
+                                                    });
+                                                    await menu.popup(new LogicalPosition({
+                                                        x: event.screenX,
+                                                        y: event.screenY
+                                                    }));
+                                                },
+                                                [columnIndex]
+                                            );
+                                            
+                                            return (
+                                                <th
+                                                    className={classNames("Spreadsheet__header", {
+                                                        "Spreadsheet__header--selected": selected,
+                                                    })}
+                                                    onClick={handleClick}
+                                                    onContextMenu={handleContextMenu}
+                                                    tabIndex={0}
+                                                >
+                                                    {label ?? ''}
+                                                </th>
+                                            );
+                                        }
+                                    }
+                                    rowLabels={rows.map(([rowMetadata, _rowCells]) => rowMetadata.index.toString())}
+                                    RowIndicator={
+                                        ({
+                                            row: rowNum,
+                                            label,
+                                            selected,
+                                            onSelect,
+                                        }) => {
+                                            const handleClick = useCallback(
+                                                (event: React.MouseEvent) => {
+                                                onSelect(rowNum, event.shiftKey);
+                                                },
+                                                [onSelect, rowNum]
+                                            );
+
+                                            const handleContextMenu = useCallback(
+                                                async (event: React.MouseEvent) => {
+                                                    const rowMetadata: SchemaRow = rows[rowNum][0];
+
+                                                    const menuItems: MenuItem[] = [
+                                                        await MenuItem.new({
+                                                            text: 'Edit',
+                                                            action: () => {
+                                                                // Open the row in an Object page
+                                                                props.onRequestOpenObject({
+                                                                    name: 'Row',
+                                                                    schemaOid: 'table' in props.schema ? props.schema.table.schema.oid : props.schema.report.schema.oid,
+                                                                    oidFilters: rowMetadata.oidFilters,
+                                                                });
+                                                            }
+                                                        })
+                                                    ];
+
+                                                    if (rowMetadata.tableRowIdentifier !== null) {
+                                                        const { tableOid, rowOid } = rowMetadata.tableRowIdentifier;
+                                                        menuItems.push(await MenuItem.new({
+                                                            text: 'Delete',
+                                                            action: async () => {
+                                                                // Delete the row
+                                                                await executeAsync({
+                                                                    trashRow: {
+                                                                        tableOid,
+                                                                        rowOid
+                                                                    }
+                                                                });
+                                                            }
+                                                        }));
+                                                    }
+
+                                                    const menu = await Menu.new({
+                                                        items: menuItems
+                                                    });
+                                                    await menu.popup(new LogicalPosition({
+                                                        x: event.screenX,
+                                                        y: event.screenY
+                                                    }));
+                                                },
+                                                [rowNum]
+                                            );
+
+                                            return (
+                                                <th
+                                                    className={classNames("px-2", "Spreadsheet__header", {
+                                                        "Spreadsheet__header--selected": selected,
+                                                    })}
+                                                    onClick={handleClick}
+                                                    onContextMenu={handleContextMenu}
+                                                    tabIndex={0}
+                                                >
+                                                    {label !== undefined ? label : 'N/A'}
+                                                </th>
+                                            );
+                                        }
+                                    }
+                                    data={rows.map(([_rowMetadata, rowCells]) => rowCells.filter((_rowCell, idx) => !columns[idx].hidden).map(createCell))}
+                                />
+                                <div>
+                                    <div 
+                                        className="border-1 border-[rgb(var(--color-surface-dark)/1)] bg-[rgb(var(--color-foreground))] px-2 cursor-pointer"
+                                        style={{borderLeftWidth: 0}}
+                                        onClick={() => { 
+                                            if ('table' in props.schema) {
+                                                props.onRequestCreateColumn(props.schema.table.schema, true, null);
+                                            } else {
+                                                props.onRequestCreateColumn(props.schema.report.schema, false, null);
+                                            }
+                                        }}
+                                    >
+                                        +
+                                    </div>
+                                </div>
+                            </div>
+                            {addNewRowButton && (<div>
+                                <Button
+                                    variant="gradient"
+                                    onClick={async () => {
+                                        await executeAsync({
+                                            createRow: {
+                                                tableOid: addNewRowButton.tableOid,
+                                                rowOid: null,
+                                                fixedParentDatasource: addNewRowButton.fixedParentDatasource
+                                            }
+                                        });
+                                    }}
+                                >
+                                    Add New Row
+                                </Button>
+                            </div>)}
+                        </div>
+                    </div>
+                </>,
+                iframeDocRef.current.contentWindow.document.body
+            )}
+        </iframe>
+        <div className="h-10 border-t-1 border-t-[rgb(var(--color-surface-dark)/1)] bg-[rgb(var(--color-surface)/1)] flex flex-row gap-x-4 justify-center items-center">
+            {pageNum == 1 ? (<div>1</div>) : (<a href="#"
+                className="text-[rgb(var(--color-info)/1)]"
+                onClick={() => { setPageNum(1); }}
+            >
+                1
+            </a>)}
+            {pageNum > 6 && (<div>...</div>)}
+            {[...Array(9).keys()].map((n) => pageNum - 4 + n)
+                .filter((n) => n > 1 && n < maxPageNum)
+                .map((n) => {
+                    if (n == pageNum) {
+                        return (<div>{n}</div>)
+                    } else {
+                        return (<a href="#"
+                            className="text-[rgb(var(--color-info)/1)]"
+                            onClick={() => { setPageNum(n); }}
+                        >
+                            {n}
+                        </a>);
+                    }
+                })
+            }
+            {pageNum < maxPageNum - 5 && (<div>...</div>)}
+            {maxPageNum > 1 && (pageNum == maxPageNum ? (<div>{maxPageNum}</div>) : (<a href="#"
+                className="text-[rgb(var(--color-info)/1)]"
+                onClick={() => { setPageNum(maxPageNum); }}
+            >
+                {maxPageNum}
+            </a>))}
         </div>
     </div>);
 }
