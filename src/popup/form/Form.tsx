@@ -28,6 +28,7 @@ export function FormRoot(props: FormRootProps): React.JSX.Element {
 export type FormTextFieldProps = {
     label: string,
     tooltip?: string,
+    multiline?: boolean,
     value: string,
     onSetValue?: (newValue: string) => void,
 };
@@ -38,7 +39,10 @@ export type FormTextFieldProps = {
 export function FormTextField(props: FormTextFieldProps): React.JSX.Element {
     return (<div className="flex flex-col gap-y-2">
         <Typography type="h6">{props.label}</Typography>
-        <Input placeholder={props.label} value={props.value} onChange={(e) => { props.onSetValue?.(e.target.value); }} />
+        {props.multiline 
+            ? (<Textarea placeholder={props.label} value={props.value} onChange={(e) => { props.onSetValue?.(e.target.value); }} />)
+            : (<Input placeholder={props.label} value={props.value} onChange={(e) => { props.onSetValue?.(e.target.value); }} />)
+        }
     </div>);
 }
 

@@ -88,8 +88,8 @@ export function EditSchemaPopup(props: EditSchemaPopupProps): React.JSX.Element 
         }
     }
     
-        return (<div>
-            <Form title="Create New Schema">
+        return (<div className="flex flex-col gap-y-6">
+            <Form title="Edit Schema">
                 <Form.TextField label="Schema Name" value={schemaName} onSetValue={setSchemaName} />
                 <Form.RadioField label="Schema Type" value={props.schemaType} 
                     possibleValues={[
@@ -112,7 +112,7 @@ export function EditSchemaPopup(props: EditSchemaPopupProps): React.JSX.Element 
                     onSetValue={setSelectedMasterSchemas}
                 />))}
             </Form>
-            <div className="flex flex-row gap-y-2">
+            <div className="flex flex-row justify-end gap-y-2">
                 <Dialog.DismissTrigger
                     as={Button}
                     variant="ghost"

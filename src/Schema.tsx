@@ -259,9 +259,10 @@ export function Schema(props: SchemaProps): React.JSX.Element {
                                     data={rows.map(([_rowMetadata, rowCells]) => rowCells.filter((_rowCell, idx) => !columns[idx].hidden).map(createCell))}
                                 />
                                 <div>
-                                    <div 
-                                        className="border-1 border-[rgb(var(--color-surface-dark)/1)] bg-[rgb(var(--color-foreground))] px-2 cursor-pointer"
-                                        style={{borderLeftWidth: 0}}
+                                    <Button 
+                                        variant="gradient"
+                                        className="rounded-l-none aspect-square px-8 cursor-pointer"
+                                        style={{ lineHeight: 'normal', paddingTop: '4px', paddingBottom: '4px', fontSize: '16px', minHeight: 'calc(1.9em + 1px)', maxHeight: 'calc(1.9em + 1px)', height: 'calc(1.9em + 1px)' }}
                                         onClick={() => { 
                                             if ('table' in props.schema) {
                                                 props.onRequestCreateColumn(props.schema.table.schema, true, null);
@@ -271,12 +272,13 @@ export function Schema(props: SchemaProps): React.JSX.Element {
                                         }}
                                     >
                                         +
-                                    </div>
+                                    </Button>
                                 </div>
                             </div>
                             {addNewRowButton && (<div>
                                 <Button
                                     variant="gradient"
+                                    className="cursor-pointer"
                                     onClick={async () => {
                                         await executeAsync({
                                             createRow: {
@@ -297,18 +299,18 @@ export function Schema(props: SchemaProps): React.JSX.Element {
             )}
         </iframe>
         <div className="h-10 border-t-1 border-t-[rgb(var(--color-surface-dark)/1)] bg-[rgb(var(--color-surface)/1)] flex flex-row gap-x-4 justify-center items-center">
-            {pageNum == 1 ? (<div>1</div>) : (<a href="#"
+            {pageNum == 1 ? (<div className="cursor-default">1</div>) : (<a href="#"
                 className="text-[rgb(var(--color-info)/1)]"
                 onClick={() => { setPageNum(1); }}
             >
                 1
             </a>)}
-            {pageNum > 6 && (<div>...</div>)}
+            {pageNum > 6 && (<div className="cursor-default">...</div>)}
             {[...Array(9).keys()].map((n) => pageNum - 4 + n)
                 .filter((n) => n > 1 && n < maxPageNum)
                 .map((n) => {
                     if (n == pageNum) {
-                        return (<div>{n}</div>)
+                        return (<div className="cursor-default">{n}</div>)
                     } else {
                         return (<a href="#"
                             className="text-[rgb(var(--color-info)/1)]"
@@ -319,8 +321,8 @@ export function Schema(props: SchemaProps): React.JSX.Element {
                     }
                 })
             }
-            {pageNum < maxPageNum - 5 && (<div>...</div>)}
-            {maxPageNum > 1 && (pageNum == maxPageNum ? (<div>{maxPageNum}</div>) : (<a href="#"
+            {pageNum < maxPageNum - 5 && (<div className="cursor-default">...</div>)}
+            {maxPageNum > 1 && (pageNum == maxPageNum ? (<div className="cursor-default">{maxPageNum}</div>) : (<a href="#"
                 className="text-[rgb(var(--color-info)/1)]"
                 onClick={() => { setPageNum(maxPageNum); }}
             >

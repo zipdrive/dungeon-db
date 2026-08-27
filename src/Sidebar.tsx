@@ -146,7 +146,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
     }
 
     return (
-        <div className="w-sm py-4 border-r-4 border-r-[rgb(var(--color-primary)/1)] bg-[rgb(var(--color-secondary-light)/1)] flex flex-col gap-y-6">
+        <div className="w-sm py-4 border-r-2 border-r-[rgb(var(--color-primary)/1)] bg-[rgb(var(--color-secondary-light)/1)] flex flex-col gap-y-6">
             <div>
                 <div onClick={() => { setIsTableSidebarOpen(!isTableSidebarOpen); }} className="grid grid-cols-[1fr_40px] items-center w-full h-10 border-b-1 border-b-[rgb(var(--color-secondary-dark)/1)]">
                     <Typography type="h6" className="px-2 text-[rgb(var(--color-secondary-foreground)/1)]">Tables</Typography>
@@ -158,7 +158,13 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                             {tableList.length > 0 && <div className="flex flex-col py-1">
                             {tableList.map(createSchemaHierarchyItemNode)}
                             </div>}
-                            <Button variant="gradient" className="text-center w-fit mx-auto" onClick={() => { props.onRequestCreateSchema('table'); }}>New Table</Button>
+                            <Button 
+                                variant="gradient" 
+                                className="text-center w-fit mx-auto cursor-pointer" 
+                                onClick={() => { props.onRequestCreateSchema('table'); }}
+                            >
+                                New Table
+                            </Button>
                         </div>)
                     }
                 </div>}
@@ -174,7 +180,13 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                             {reportList.length > 0 && (<div className="flex flex-col">
                                 {reportList.map(createSchemaHierarchyItemNode)}
                             </div>)}
-                            <Button variant="gradient" className="text-center w-fit mx-auto" onClick={() => { props.onRequestCreateSchema('report'); }}>New Report</Button>
+                            <Button 
+                                variant="gradient" 
+                                className="text-center w-fit mx-auto cursor-pointer" 
+                                onClick={() => { props.onRequestCreateSchema('report'); }}
+                            >
+                                New Report
+                            </Button>
                         </div>)
                     }
                 </div>}

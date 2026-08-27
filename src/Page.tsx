@@ -58,7 +58,7 @@ export function Page(props: PageProps): React.JSX.Element {
                         {idx > 0 && (<Breadcrumb.Separator />)}
                         <Breadcrumb.Link
                             as="a"
-                            className="cursor-pointer text-[rgb(var(--color-info)/1)]"
+                            className="cursor-pointer text-[rgb(var(--color-primary)/1)]"
                             onClick={() => {
                                 const newPageBreadcrumbs: PageBreadcrumb[] = pageBreadcrumbs.slice(0, idx + 1);
                                 setPageBreadcrumbs(newPageBreadcrumbs);

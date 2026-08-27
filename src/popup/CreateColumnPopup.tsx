@@ -187,7 +187,7 @@ export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: bool
         }
     }
 
-    return (<div>
+    return (<div className="flex flex-col gap-y-6">
         <Form title="Create New Column">
             <Form.TextField label="Column Name" value={columnName} onSetValue={setColumnName} />
             <Form.SelectField 
@@ -247,8 +247,14 @@ export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: bool
                 value={formula}
                 onSetValue={setFormula}
             />)}
+            <Form.TextField 
+                multiline 
+                label="CSS Style"
+                value={columnStyle}
+                onSetValue={setColumnStyle}
+            />
         </Form>
-        <div className="flex gap-y-2">
+        <div className="flex flex-row justify-end gap-y-2">
             {confirmAlert && (<Alert color="error">{confirmAlert}</Alert>)}
             <Dialog.DismissTrigger
                 as={Button}

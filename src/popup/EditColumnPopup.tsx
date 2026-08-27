@@ -224,7 +224,7 @@ export function EditColumnPopup(props: EditColumnPopupProps): React.JSX.Element 
         }
     }
 
-    return (<div>
+    return (<div className="flex flex-col gap-y-6">
         <Form title="Edit Column">
             <Form.TextField label="Column Name" value={columnName} onSetValue={setColumnName} />
             <Form.SelectField 
@@ -284,8 +284,14 @@ export function EditColumnPopup(props: EditColumnPopupProps): React.JSX.Element 
                 value={formula}
                 onSetValue={setFormula}
             />)}
+            <Form.TextField
+                multiline 
+                label="CSS Style"
+                value={columnStyle}
+                onSetValue={setColumnStyle}
+            />
         </Form>
-        <div className="gap-y-2">
+        <div className="flex flex-row justify-end gap-y-2">
             {confirmAlert && (<Alert color="error">{confirmAlert}</Alert>)}
             <Button
                 variant="ghost"
