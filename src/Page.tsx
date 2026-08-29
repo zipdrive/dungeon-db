@@ -14,6 +14,7 @@ type PageProps = {
     schema: { oid: number, name: string } | null,
     onRequestCreateColumn: (schema: SchemaFullMetadata, isTableColumn: boolean, ordering: number | null) => void,
     onRequestEditColumn: (columnMetadata: ColumnFullMetadata, isTableColumn: boolean) => void,
+    onError: (e: unknown) => void,
 };
 
 export function Page(props: PageProps): React.JSX.Element {
@@ -86,6 +87,7 @@ export function Page(props: PageProps): React.JSX.Element {
                     onRequestEditColumn={props.onRequestEditColumn}
                     onRequestOpenSchema={openSchemaPage}
                     onRequestOpenObject={openObjectPage}
+                    onError={props.onError}
                 /> :
                 <Object 
                     {...lastPageBreadcrumb.object}

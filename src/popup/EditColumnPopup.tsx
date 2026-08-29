@@ -39,7 +39,6 @@ export function EditColumnPopup(props: EditColumnPopupProps): React.JSX.Element 
     const [columnName, setColumnName] = useState<string>('');
     const [columnBaseType, setColumnBaseType] = useState<ColumnBaseType>(props.isTableColumn ? 'plainText' : 'formula');
     const [isPrimaryKey, setPrimaryKey] = useState<boolean>(false);
-    const [isHiddenColumn, setHiddenColumn] = useState<boolean>(false);
     const [defaultValue, setDefaultValue] = useState<string>('');
     const [columnStyle, setColumnStyle] = useState<string>('');
 
@@ -94,7 +93,6 @@ export function EditColumnPopup(props: EditColumnPopupProps): React.JSX.Element 
     useEffect(() => {
         setColumnName(props.columnMetadata.name);
         setPrimaryKey(props.columnMetadata.isPrimaryKey);
-        setHiddenColumn(props.columnMetadata.hidden);
         setDefaultValue(props.columnMetadata.defaultValue ?? '');
         setColumnStyle(props.columnMetadata.style);
 
@@ -191,7 +189,6 @@ export function EditColumnPopup(props: EditColumnPopupProps): React.JSX.Element 
             if (columnName === props.columnMetadata.name 
                 && JSON.stringify(columnType) == JSON.stringify(props.columnMetadata.columnType)
                 && isPrimaryKey === props.columnMetadata.isPrimaryKey
-                && isHiddenColumn === props.columnMetadata.hidden
                 && (defaultValue === '' ? null : defaultValue) === props.columnMetadata.defaultValue
             ) {
                 if (columnStyle !== props.columnMetadata.style) {
@@ -210,7 +207,6 @@ export function EditColumnPopup(props: EditColumnPopupProps): React.JSX.Element 
                         columnType,
                         schema: props.columnMetadata.schema,
                         isPrimaryKey,
-                        hidden: isHiddenColumn,
                         defaultValue: defaultValue === '' ? null : defaultValue,
                         style: columnStyle,
                         ordering: props.columnMetadata.ordering,
@@ -249,7 +245,6 @@ export function EditColumnPopup(props: EditColumnPopupProps): React.JSX.Element 
                 onSetValue={setColumnBaseType}
             />
             <Form.CheckboxField label="Is Primary Key?" value={isPrimaryKey} onSetValue={setPrimaryKey} />
-            <Form.CheckboxField label="Hidden?" value={isHiddenColumn} onSetValue={setHiddenColumn} />
             {(columnBaseType === 'plainText' 
                 || columnBaseType === 'jsonText' 
                 || columnBaseType === 'xmlText' 

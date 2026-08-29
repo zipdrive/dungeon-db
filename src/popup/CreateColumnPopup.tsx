@@ -2,6 +2,7 @@ import {
     Dialog,
     Button,
     Alert,
+    Tabs,
 } from "@material-tailwind/react";
 import { useState, useEffect } from "react";
 import { executeAsync } from "../api/action";
@@ -41,7 +42,6 @@ export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: bool
     const [columnName, setColumnName] = useState<string>('');
     const [columnBaseType, setColumnBaseType] = useState<ColumnBaseType>(props.isTableColumn ? 'plainText' : 'formula');
     const [isPrimaryKey, setPrimaryKey] = useState<boolean>(false);
-    const [isHiddenColumn, setHiddenColumn] = useState<boolean>(false);
     const [defaultValue, setDefaultValue] = useState<string>('');
     const [columnStyle, setColumnStyle] = useState<string>('');
 
@@ -98,7 +98,6 @@ export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: bool
             setColumnName('');
             setColumnBaseType(props.isTableColumn ? 'plainText' : 'formula');
             setPrimaryKey(false);
-            setHiddenColumn(false);
             setDefaultValue('');
             setColumnStyle('');
             setFormula('');
@@ -174,7 +173,6 @@ export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: bool
                     columnType,
                     schema: props.schema,
                     isPrimaryKey,
-                    hidden: isHiddenColumn,
                     defaultValue: defaultValue === '' ? null : defaultValue,
                     style: columnStyle,
                     ordering: props.ordering ?? 0,
@@ -188,72 +186,86 @@ export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: bool
     }
 
     return (<div className="flex flex-col gap-y-6">
-        <Form title="Create New Column">
-            <Form.TextField label="Column Name" value={columnName} onSetValue={setColumnName} />
-            <Form.SelectField 
-                label="Column Type"
-                value={columnBaseType}
-                possibleValues={[
-                    { value: 'plainText', label: "Plain Text", disabled: !props.isTableColumn },
-                    { value: 'integer', label: "Integer", disabled: !props.isTableColumn },
-                    { value: 'number', label: "Number", disabled: !props.isTableColumn },
-                    { value: 'boolean', label: "Checkbox", disabled: !props.isTableColumn },
-                    { value: 'date', label: "Date", disabled: !props.isTableColumn },
-                    { value: 'datetime', label: "Datetime", disabled: !props.isTableColumn },
-                    { value: 'object', label: "Object", disabled: !props.isTableColumn || refTableList.length == 0 },
-                    { value: 'select', label: "Single-Select Dropdown", disabled: !props.isTableColumn || refTableList.length == 0 },
-                    { value: 'multiselect', label: "Multi-Select Dropdown", disabled: !props.isTableColumn || refTableList.length == 0 },
-                    { value: 'file', label: "File", disabled: !props.isTableColumn },
-                    { value: 'image', label: "Image", disabled: !props.isTableColumn },
-                    { value: 'jsonText', label: "JSON", disabled: !props.isTableColumn },
-                    { value: 'formula', label: "Formula" },
-                    { value: 'subreport', label: "Drill-Down Report", disabled: refReportList.length == 0 },
-                ]}
-                onSetValue={setColumnBaseType}
-            />
-            <Form.CheckboxField label="Is Primary Key?" value={isPrimaryKey} onSetValue={setPrimaryKey} />
-            <Form.CheckboxField label="Hidden?" value={isHiddenColumn} onSetValue={setHiddenColumn} />
-            {(columnBaseType === 'plainText' 
-                || columnBaseType === 'jsonText' 
-                || columnBaseType === 'xmlText' 
-                || columnBaseType === 'markdownText' 
-                || columnBaseType === 'integer' 
-                || columnBaseType === 'number' 
-                || columnBaseType === 'date' 
-                || columnBaseType === 'datetime' 
-                || columnBaseType === 'boolean'
-            ) && (<Form.TextField 
-                label="Default Value" 
-                value={defaultValue} 
-                onSetValue={setDefaultValue} 
-            />)}
-            {(columnBaseType === 'object'
-                || columnBaseType === 'select'
-                || columnBaseType === 'multiselect'
-            ) && (<Form.SelectField 
-                label="Table" 
-                value={refTable} 
-                possibleValues={refTableList.map(({ oid, name }) => { return { value: oid.toString(), label: name }; })} 
-                onSetValue={setRefTable} 
-            />)}
-            {columnBaseType === 'subreport' && (<Form.SelectField 
-                label="Report" 
-                value={refReport} 
-                possibleValues={refReportList.map(({ oid, name }) => { return { value: oid.toString(), label: name }; })} 
-                onSetValue={setRefReport} 
-            />)}
-            {columnBaseType === 'formula' && (<Form.FormulaField
-                label="Formula"
-                value={formula}
-                onSetValue={setFormula}
-            />)}
-            <Form.TextField 
-                multiline 
-                label="CSS Style"
-                value={columnStyle}
-                onSetValue={setColumnStyle}
-            />
-        </Form>
+        <Form 
+            title="Create New Column"
+            tabs={[
+                {
+                    value: 'details',
+                    label: "Details",
+                    fields: (<>
+                        <Form.TextField label="Column Name" value={columnName} onSetValue={setColumnName} />
+                        <Form.SelectField 
+                            label="Column Type"
+                            value={columnBaseType}
+                            possibleValues={[
+                                { value: 'plainText', label: "Plain Text", disabled: !props.isTableColumn },
+                                { value: 'integer', label: "Integer", disabled: !props.isTableColumn },
+                                { value: 'number', label: "Number", disabled: !props.isTableColumn },
+                                { value: 'boolean', label: "Checkbox", disabled: !props.isTableColumn },
+                                { value: 'date', label: "Date", disabled: !props.isTableColumn },
+                                { value: 'datetime', label: "Datetime", disabled: !props.isTableColumn },
+                                { value: 'object', label: "Object", disabled: !props.isTableColumn || refTableList.length == 0 },
+                                { value: 'select', label: "Single-Select Dropdown", disabled: !props.isTableColumn || refTableList.length == 0 },
+                                { value: 'multiselect', label: "Multi-Select Dropdown", disabled: !props.isTableColumn || refTableList.length == 0 },
+                                { value: 'file', label: "File", disabled: !props.isTableColumn },
+                                { value: 'image', label: "Image", disabled: !props.isTableColumn },
+                                { value: 'jsonText', label: "JSON", disabled: !props.isTableColumn },
+                                { value: 'formula', label: "Formula" },
+                                { value: 'subreport', label: "Drill-Down Report", disabled: refReportList.length == 0 },
+                            ]}
+                            onSetValue={setColumnBaseType}
+                        />
+                        <Form.CheckboxField label="Is Primary Key?" value={isPrimaryKey} onSetValue={setPrimaryKey} />
+                        {(columnBaseType === 'plainText' 
+                            || columnBaseType === 'jsonText' 
+                            || columnBaseType === 'xmlText' 
+                            || columnBaseType === 'markdownText' 
+                            || columnBaseType === 'integer' 
+                            || columnBaseType === 'number' 
+                            || columnBaseType === 'date' 
+                            || columnBaseType === 'datetime' 
+                            || columnBaseType === 'boolean'
+                        ) && (<Form.TextField 
+                            label="Default Value" 
+                            value={defaultValue} 
+                            onSetValue={setDefaultValue} 
+                        />)}
+                        {(columnBaseType === 'object'
+                            || columnBaseType === 'select'
+                            || columnBaseType === 'multiselect'
+                        ) && (<Form.SelectField 
+                            label="Table" 
+                            value={refTable} 
+                            possibleValues={refTableList.map(({ oid, name }) => { return { value: oid.toString(), label: name }; })} 
+                            onSetValue={setRefTable} 
+                        />)}
+                        {columnBaseType === 'subreport' && (<Form.SelectField 
+                            label="Report" 
+                            value={refReport} 
+                            possibleValues={refReportList.map(({ oid, name }) => { return { value: oid.toString(), label: name }; })} 
+                            onSetValue={setRefReport} 
+                        />)}
+                        {columnBaseType === 'formula' && (<Form.FormulaField
+                            label="Formula"
+                            value={formula}
+                            onSetValue={setFormula}
+                        />)}
+                    </>)
+                },
+                {
+                    value: 'css',
+                    label: 'CSS',
+                    fields: (<>
+                        <Form.TextField 
+                            multiline 
+                            label="CSS Style"
+                            value={columnStyle}
+                            onSetValue={setColumnStyle}
+                        />
+                    </>)
+                }
+            ]}
+        />
         <div className="flex flex-row justify-end gap-y-2">
             {confirmAlert && (<Alert color="error">{confirmAlert}</Alert>)}
             <Dialog.DismissTrigger

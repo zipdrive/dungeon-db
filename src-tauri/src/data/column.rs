@@ -21,7 +21,6 @@ pub struct DropdownValue {
 #[serde(rename_all = "camelCase")]
 pub struct FullMetadata {
     pub oid: i64,
-    pub hidden: bool,
     pub schema: schema::FullMetadata,
     pub name: String,
     pub column_type: column_type::ColumnType,
@@ -41,7 +40,6 @@ impl FullMetadata {
     /// Get the metadata of a column from its OID.
     pub fn get_transact(conn: &Connection, oid: i64) -> Result<FullMetadata, Error> {
         let (
-            hidden,
             schema_oid,
             name,
             column_type_oid,
@@ -53,7 +51,6 @@ impl FullMetadata {
             conn,
             "
             SELECT
-                c.HIDDEN,
                 c.SCHEMA_OID,
                 c.NAME,
                 c.TYPE_OID,
@@ -67,7 +64,6 @@ impl FullMetadata {
             params![oid],
             |row| {
                 Ok((
-                    row.get::<_, bool>("HIDDEN")?,
                     row.get::<_, i64>("SCHEMA_OID")?,
                     row.get::<_, String>("NAME")?,
                     row.get::<_, i64>("TYPE_OID")?,
@@ -84,7 +80,6 @@ impl FullMetadata {
             column_type::ColumnType::get_transact(&conn, column_type_oid)?;
         Ok(Self {
             oid,
-            hidden,
             schema,
             name,
             column_type,
@@ -176,7 +171,6 @@ impl FullMetadata {
             "
             SELECT
                 c.OID,
-                c.HIDDEN,
                 c.SCHEMA_OID,
                 c.NAME,
                 c.TYPE_OID,
@@ -194,7 +188,6 @@ impl FullMetadata {
             |row| {
                 Ok((
                     row.get::<_, i64>("OID")?,
-                    row.get::<_, bool>("HIDDEN")?,
                     row.get::<_, i64>("SCHEMA_OID")?,
                     row.get::<_, String>("NAME")?,
                     row.get::<_, i64>("TYPE_OID")?,
@@ -204,12 +197,11 @@ impl FullMetadata {
                     row.get::<_, bool>("IS_PRIMARY_KEY")?,
                 ))
             }, 
-            |(oid, hidden, schema_oid, name, column_type_oid, style, ordering, default_value, is_primary_key)| {
+            |(oid, schema_oid, name, column_type_oid, style, ordering, default_value, is_primary_key)| {
                 let schema: schema::FullMetadata = schema::FullMetadata::get(&conn, schema_oid)?;
                 let column_type: column_type::ColumnType = column_type::ColumnType::get(column_type_oid)?;
                 sender.send(Self {
                     oid,
-                    hidden,
                     schema,
                     name,
                     column_type,
@@ -351,7 +343,6 @@ impl FullMetadata {
             trans,
             "
             INSERT INTO METADATA_COLUMN (
-                HIDDEN,
                 SCHEMA_OID,
                 NAME,
                 TYPE_OID,
@@ -366,12 +357,10 @@ impl FullMetadata {
                 ?4,
                 ?5,
                 ?6,
-                ?7,
-                ?8
+                ?7
             )
             ",
             params![
-                self.hidden,
                 self.schema.oid,
                 self.name,
                 self.column_type.get_oid(),

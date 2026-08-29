@@ -1,9 +1,39 @@
-import { Button, Checkbox, Chip, Dialog, Input, Radio, Select, Textarea, Typography } from "@material-tailwind/react";
+import { Button, Checkbox, Chip, Dialog, Input, Radio, Select, Tabs, Textarea, Typography } from "@material-tailwind/react";
 import { useRef, useState } from "react";
 import Multiselect from "../../components/Multiselect";
 
-export interface FormRootProps extends React.PropsWithChildren {
-    title?: string
+interface FormRootPropsNoTabs extends React.PropsWithChildren {
+    title?: string,
+}
+interface FormRootPropsTabs {
+    title?: string,
+    tabs: { 
+        value: string, 
+        label: string,
+        fields: (React.ReactNode | Iterable<React.ReactNode>)
+    }[]
+}
+export type FormRootProps = FormRootPropsNoTabs | FormRootPropsTabs;
+
+
+function FormRootWrapChildren(props: FormRootProps): React.JSX.Element {
+    if ('tabs' in props) {
+        return (<Tabs>
+            <Tabs.List>
+                {props.tabs.map(({ value, label }) => (<Tabs.Trigger value={value}>{label}</Tabs.Trigger>))}
+                <Tabs.TriggerIndicator />
+            </Tabs.List>
+            {props.tabs.map(({ value, fields }) => {
+                return (<Tabs.Panel value={value} className="flex flex-col gap-y-6">
+                    {fields}
+                </Tabs.Panel>);
+            })}
+        </Tabs>);
+    } else {
+        return (<div className="flex flex-col gap-y-6">
+            {props.children}
+        </div>);
+    }
 }
 
 /**
@@ -13,14 +43,10 @@ export function FormRoot(props: FormRootProps): React.JSX.Element {
     if (props.title) {
         return (<div className="flex flex-col gap-y-6">
             <Typography type="h4" className="text-center">{props.title}</Typography>
-            <div className="flex flex-col gap-y-6">
-                {props.children}
-            </div>
+            <FormRootWrapChildren {...props} />
         </div>)
     } else {
-        return (<div className="flex flex-col gap-y-4">
-            {props.children}
-        </div>);
+        return (<FormRootWrapChildren {...props} />);
     }
 }
 

@@ -45,7 +45,6 @@ export type ColumnType = {
 
 export type FullMetadata = {
     oid: number,
-    hidden: boolean,
     schema: SchemaFullMetadata,
     name: string,
     columnType: ColumnType,

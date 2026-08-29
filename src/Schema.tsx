@@ -1,20 +1,121 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { queryAsync } from "./api/query";
+import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getCellAsync, queryAsync } from "./api/query";
 import { Channel } from "@tauri-apps/api/core";
 import { FullMetadata as ColumnFullMetadata } from "./api/model/column";
-import { SchemaRow, CellContent, CellStream, AddNewRowButton } from "./api/model/cell";
-import { createCell } from "./Cell";
-import { Menu, MenuItem } from "@tauri-apps/api/menu";
-import { LogicalPosition } from "@tauri-apps/api/dpi";
+import { SchemaRow, CellContent, CellStream, AddNewRowButton, CellIdentifier, CellDependency } from "./api/model/cell";
+import { cellPropertyEntry, baseColumnTypes } from "./cell/Cell";
 import { executeAsync } from "./api/action";
 import { ObjectPageBreadcrumb, SchemaPageBreadcrumb } from "./breadcrumb";
 import { Schema as SchemaMetadata, FullMetadata as SchemaFullMetadata } from "./api/model/schema";
 import { listen } from "@tauri-apps/api/event";
-import { Button, ThemeProvider } from "@material-tailwind/react";
-import ReactDOMServer from 'react-dom/server';
-import { createPortal } from "react-dom";
-import { Spreadsheet } from "react-spreadsheet";
-import classNames from "classnames";
+import { Button } from "@material-tailwind/react";
+import { ColumnGrouping, ColumnProp, ColumnRegular as RevoGridColumn, ColumnType as RevoGridColumnType, DataType, RevoGrid } from "@revolist/react-datagrid";
+
+
+
+
+type SchemaGridProps = {
+    columns: ColumnFullMetadata[],
+    rows: [SchemaRow, CellContent[]][],
+    onSetContent: (rowIndex: number, colIndex: number, newContent: CellContent) => void,
+    onError: (e: unknown) => void,
+};
+
+function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
+    const [dropdownValues, setDropdownValues] = useState<{[key: `table${number}`]: { label: string, value: string }[]}>({});
+
+    useCallback(() => {
+        const tableOids: Set<number> = new Set();
+        for (const columnMetadata of props.columns) {
+            if ('select' in columnMetadata.columnType) {
+                tableOids.add(columnMetadata.columnType.select.tableOid);
+            } else if ('multiselect' in columnMetadata.columnType) {
+                tableOids.add(columnMetadata.columnType.multiselect.tableOid);
+            }
+        }
+        Promise.all([...tableOids].map<Promise<[`table${number}`, { label: string, value: string }[]]>>(async (tableOid) => {
+            const tableDropdownValues: { label: string, value: string }[] = [];
+            await queryAsync({
+                columnValues: {
+                    schemaOid: tableOid,
+                    channel: new Channel((dropdownValue) => {
+                        tableDropdownValues.push({ 
+                            label: dropdownValue.label,
+                            value: dropdownValue.value.toString()
+                        });
+                    })
+                }
+            });
+            return [`table${tableOid}`, tableDropdownValues];
+        }))
+        .then((entries) => {
+            setDropdownValues(Object.fromEntries(entries));
+        })
+        .catch((e) => {
+            props.onError(e);
+        });
+    }, [props.columns]);
+
+    const extraColumnTypes: {[key: string]: RevoGridColumnType} = useMemo(() => {
+        const extras: {[key: string]: any} = {};
+        for (const columnMetadata of props.columns) {
+            if ('select' in columnMetadata.columnType) {
+                const key: string = `singleSelectDropdown${columnMetadata.columnType.select.tableOid}`;
+                if (!(key in extras)) {
+                    extras[key] = {
+
+                    };
+                }
+            } else if ('multiselect' in columnMetadata.columnType) {
+                const key: string = `multiSelectDropdown${columnMetadata.columnType.multiselect.tableOid}`;
+                if (!(key in extras)) {
+                    extras[key] = {
+
+                    };
+                }
+            }
+        }
+        return extras;
+    }, [props.columns, dropdownValues]);
+
+    const columns: RevoGridColumn[] = useMemo(() => {
+        return [{
+            prop: 'index',
+            name: 'Index',
+            columnType: 'index',
+            pin: 'colPinStart',
+        } as RevoGridColumn].concat(props.columns.map((columnMetadata) => {
+            const columnLabel: string = (columnMetadata.isPrimaryKey ? '🔑 ' : '') + columnMetadata.name;
+            let columnType: string;
+            if ('select' in columnMetadata.columnType) {
+                columnType = `singleSelectDropdown${columnMetadata.columnType.select.tableOid}`;
+            } else if ('multiselect' in columnMetadata.columnType) {
+                columnType = `multiSelectDropdown${columnMetadata.columnType.multiselect.tableOid}`;
+            } else {
+                columnType = 'any';
+            }
+            return {
+                prop: `column${columnMetadata.oid}`,
+                name: columnLabel,
+                columnType
+            };
+        }));
+    }, [props.columns]);
+
+    const dataRows = useMemo(() => {
+        return props.rows.map(([rowMetadata, rowCells]) => {
+            return Object.assign({ index: rowMetadata.index },
+                Object.fromEntries(rowCells.map<[string, CellContent]>(cellPropertyEntry))
+            );
+        });
+    }, [props.columns, props.rows]);
+
+    return (<RevoGrid
+        columnTypes={Object.assign(baseColumnTypes, extraColumnTypes)}
+        columns={columns}
+        source={dataRows}
+    />);
+}
 
 type SchemaProps = {
     name: string,
@@ -26,6 +127,7 @@ type SchemaProps = {
     onRequestEditColumn: (columnMetadata: ColumnFullMetadata, isTableColumn: boolean) => void,
     onRequestOpenSchema: (schema: SchemaPageBreadcrumb) => void,
     onRequestOpenObject: (object: ObjectPageBreadcrumb) => void,
+    onError: (e: unknown) => void,
 };
 
 export function Schema(props: SchemaProps): React.JSX.Element {
@@ -36,10 +138,6 @@ export function Schema(props: SchemaProps): React.JSX.Element {
     const [columns, setColumns] = useState<ColumnFullMetadata[]>([]);
     const [rows, setRows] = useState<[SchemaRow, CellContent[]][]>([]);
     const [addNewRowButton, setAddNewRowButton] = useState<AddNewRowButton | null>(null);
-
-    const [focusedCell, setFocusedCell] = useState<{ columnIdx: number, rowIdx: number }>({ columnIdx: 0, rowIdx: 0 });
-
-    const iframeDocRef = useRef<HTMLIFrameElement>(null);
 
     useEffect(() => {
         const unlistenSchema = listen<number[]>('schema', (e) => {
@@ -57,6 +155,100 @@ export function Schema(props: SchemaProps): React.JSX.Element {
     useEffect(() => {
         updateSchemaAsync();
     }, [props.schema, props.oidFilters, props.customFilters, pageNum, pageSize]);
+
+    useEffect(() => {
+        const unlistenCell = listen<CellIdentifier>('cell', async (e) => {
+            const changedCellIdentifier = e.payload;
+
+            function extractIdentifiersAndDependencies(content: CellContent): { cellIdentifier: CellIdentifier, isolatedCellDependencies: CellDependency[], fullReloadCellDependencies: CellDependency[] } {
+                if ('textEntry' in content) {
+                    return content.textEntry;
+                } else if ('integerEntry' in content) {
+                    return content.integerEntry;
+                } else if ('numberEntry' in content) {
+                    return content.numberEntry;
+                } else if ('dateEntry' in content) {
+                    return content.dateEntry;
+                } else if ('datetimeEntry' in content) {
+                    return content.datetimeEntry;
+                } else if ('checkboxEntry' in content) {
+                    return content.checkboxEntry;
+                } else if ('fileEntry' in content) {
+                    return content.fileEntry;
+                } else if ('imageEntry' in content) {
+                    return content.imageEntry;
+                } else if ('objectLink' in content) {
+                    return content.objectLink;
+                } else if ('schemaLink' in content) {
+                    return content.schemaLink;
+                } else if ('singleSelectDropdown' in content) {
+                    return content.singleSelectDropdown;
+                } else if ('multiSelectDropdown' in content) {
+                    return content.multiSelectDropdown;
+                } else {
+                    return content.readonly;
+                }
+            }
+            
+            if ('tableOid' in changedCellIdentifier) {
+                const { tableOid: changedTableOid, columnOid: changedColumnOid, rowOid: changedRowOid } = changedCellIdentifier;
+                function check(cellIdentifier: CellIdentifier, isolatedCellDependencies: CellDependency[], fullReloadCellDependencies: CellDependency[]): 'schema' | 'cell' | null {
+                    if (fullReloadCellDependencies.some(({ tableOid, columnOid, rowOid }) => {
+                        return tableOid == changedTableOid
+                            && columnOid == changedColumnOid
+                            && (rowOid === null || rowOid == changedRowOid)
+                        ;
+                    })) {
+                        return 'schema';
+                    }
+                    if ('tableOid' in cellIdentifier) {
+                        if (cellIdentifier.tableOid == changedTableOid
+                            && cellIdentifier.columnOid == changedColumnOid
+                            && cellIdentifier.rowOid == changedRowOid
+                        ) {
+                            return 'cell';
+                        }
+                    }
+                    if (isolatedCellDependencies.some(({ tableOid, columnOid, rowOid }) => {
+                        return tableOid == changedTableOid
+                            && columnOid == changedColumnOid
+                            && (rowOid === null || rowOid == changedRowOid)
+                        ;
+                    })) {
+                        return 'cell';
+                    }
+                    return null;
+                }
+
+                const newRows: [SchemaRow, CellContent[]][] = [];
+                for (let rowIndex: number = 0; rowIndex < rows.length; ++rowIndex) {
+                    const rowCells = rows[rowIndex][1];
+                    const newRowCells: CellContent[] = [];
+
+                    for (let colIndex: number = 0; colIndex < rowCells.length; ++colIndex) {
+                        const rowCell = rowCells[colIndex];
+
+                        const { cellIdentifier, isolatedCellDependencies, fullReloadCellDependencies } = extractIdentifiersAndDependencies(rowCell);
+                        const result = check(cellIdentifier, isolatedCellDependencies, fullReloadCellDependencies);
+                        if (result === 'schema') {
+                            await updateSchemaAsync();
+                            return;
+                        } else if (result === 'cell') {
+                            newRowCells.push(await getCellAsync(cellIdentifier));
+                        } else {
+                            newRowCells.push(rowCell);
+                        }
+                    }
+                    newRows.push([rows[rowIndex][0], newRowCells]);
+                }
+                setRows(newRows);
+            } // Ignore emitted cells located on a report
+        });
+
+        return () => {
+            unlistenCell.then(f => f());
+        }
+    }, [rows]);
 
     async function updateSchemaAsync() {
         const queriedColumns: ColumnFullMetadata[] = [];
@@ -98,206 +290,45 @@ export function Schema(props: SchemaProps): React.JSX.Element {
     }
 
     return (<div className="grid grid-col grid-rows-[calc(100vh-(var(--spacing)*20))_calc(var(--spacing)*10)]">
-        <iframe ref={iframeDocRef} className="size-full">
-            {iframeDocRef.current?.contentWindow?.document && createPortal(
-                <>
-                    <link rel="stylesheet" href="/react-spreadsheet/assets/css/styles.115ba647.css" />
-                    <link rel="stylesheet" type="text/css" href="/src/Schema.css" />
-                    {columns.map((columnMetadata) => {
-                        return (<style>
-                            {`.column${columnMetadata.oid}`} &#123;
-                                {columnMetadata.style}
-                            &#125;
-                        </style>)
-                    })}
-                    <div className="mx-4 my-4 overflow-auto text-sm">
-                        <div className="flex flex-col gap-y-2">
-                            <div className="flex flex-row">
-                                <Spreadsheet
-                                    columnLabels={columns.filter((columnMetadata) => !columnMetadata.hidden).map((columnMetadata) => (columnMetadata.isPrimaryKey ? '🔑 ' : '') + columnMetadata.name)}
-                                    ColumnIndicator={
-                                        ({
-                                            column: columnIndex,
-                                            label,
-                                            selected,
-                                            onSelect,
-                                        }) => {
-                                            const handleClick = useCallback(
-                                                (event: React.MouseEvent) => {
-                                                    onSelect(columnIndex, event.shiftKey);
-                                                },
-                                                [onSelect, columnIndex]
-                                            );
-
-                                            const handleContextMenu = useCallback(
-                                                async (event: React.MouseEvent) => {
-                                                    const columnMetadata: ColumnFullMetadata = columns[columnIndex];
-
-                                                    const menu: Menu = await Menu.new({
-                                                        items: [
-                                                            await MenuItem.new({
-                                                                text: 'Edit',
-                                                                action: () => {
-                                                                    props.onRequestEditColumn(columnMetadata, 'table' in props.schema);
-                                                                }
-                                                            }),
-                                                            await MenuItem.new({
-                                                                text: 'Insert',
-                                                                action: () => {
-                                                                    props.onRequestCreateColumn('table' in props.schema ? props.schema.table.schema : props.schema.report.schema, 'table' in props.schema, columnMetadata.ordering);
-                                                                }
-                                                            }),
-                                                            await MenuItem.new({
-                                                                text: 'Delete',
-                                                                action: async () => {
-                                                                    await executeAsync({
-                                                                        trashColumn: {
-                                                                            schemaOid: columnMetadata.schema.oid,
-                                                                            columnOid: columnMetadata.oid,
-                                                                        }
-                                                                    });
-                                                                }
-                                                            }),
-                                                        ]
-                                                    });
-                                                    await menu.popup(new LogicalPosition({
-                                                        x: event.screenX,
-                                                        y: event.screenY
-                                                    }));
-                                                },
-                                                [columnIndex]
-                                            );
-                                            
-                                            return (
-                                                <th
-                                                    className={classNames("Spreadsheet__header", {
-                                                        "Spreadsheet__header--selected": selected,
-                                                    })}
-                                                    onClick={handleClick}
-                                                    onContextMenu={handleContextMenu}
-                                                    tabIndex={0}
-                                                >
-                                                    {label ?? ''}
-                                                </th>
-                                            );
-                                        }
-                                    }
-                                    rowLabels={rows.map(([rowMetadata, _rowCells]) => rowMetadata.index.toString())}
-                                    RowIndicator={
-                                        ({
-                                            row: rowNum,
-                                            label,
-                                            selected,
-                                            onSelect,
-                                        }) => {
-                                            const handleClick = useCallback(
-                                                (event: React.MouseEvent) => {
-                                                onSelect(rowNum, event.shiftKey);
-                                                },
-                                                [onSelect, rowNum]
-                                            );
-
-                                            const handleContextMenu = useCallback(
-                                                async (event: React.MouseEvent) => {
-                                                    const rowMetadata: SchemaRow = rows[rowNum][0];
-
-                                                    const menuItems: MenuItem[] = [
-                                                        await MenuItem.new({
-                                                            text: 'Edit',
-                                                            action: () => {
-                                                                // Open the row in an Object page
-                                                                props.onRequestOpenObject({
-                                                                    name: 'Row',
-                                                                    schemaOid: 'table' in props.schema ? props.schema.table.schema.oid : props.schema.report.schema.oid,
-                                                                    oidFilters: rowMetadata.oidFilters,
-                                                                });
-                                                            }
-                                                        })
-                                                    ];
-
-                                                    if (rowMetadata.tableRowIdentifier !== null) {
-                                                        const { tableOid, rowOid } = rowMetadata.tableRowIdentifier;
-                                                        menuItems.push(await MenuItem.new({
-                                                            text: 'Delete',
-                                                            action: async () => {
-                                                                // Delete the row
-                                                                await executeAsync({
-                                                                    trashRow: {
-                                                                        tableOid,
-                                                                        rowOid
-                                                                    }
-                                                                });
-                                                            }
-                                                        }));
-                                                    }
-
-                                                    const menu = await Menu.new({
-                                                        items: menuItems
-                                                    });
-                                                    await menu.popup(new LogicalPosition({
-                                                        x: event.screenX,
-                                                        y: event.screenY
-                                                    }));
-                                                },
-                                                [rowNum]
-                                            );
-
-                                            return (
-                                                <th
-                                                    className={classNames("px-2", "Spreadsheet__header", {
-                                                        "Spreadsheet__header--selected": selected,
-                                                    })}
-                                                    onClick={handleClick}
-                                                    onContextMenu={handleContextMenu}
-                                                    tabIndex={0}
-                                                >
-                                                    {label !== undefined ? label : 'N/A'}
-                                                </th>
-                                            );
-                                        }
-                                    }
-                                    data={rows.map(([_rowMetadata, rowCells]) => rowCells.filter((_rowCell, idx) => !columns[idx].hidden).map(createCell))}
-                                />
-                                <div>
-                                    <Button 
-                                        variant="gradient"
-                                        className="rounded-l-none aspect-square px-8 cursor-pointer"
-                                        style={{ lineHeight: 'normal', paddingTop: '4px', paddingBottom: '4px', fontSize: '16px', minHeight: 'calc(1.9em + 1px)', maxHeight: 'calc(1.9em + 1px)', height: 'calc(1.9em + 1px)' }}
-                                        onClick={() => { 
-                                            if ('table' in props.schema) {
-                                                props.onRequestCreateColumn(props.schema.table.schema, true, null);
-                                            } else {
-                                                props.onRequestCreateColumn(props.schema.report.schema, false, null);
-                                            }
-                                        }}
-                                    >
-                                        +
-                                    </Button>
-                                </div>
-                            </div>
-                            {addNewRowButton && (<div>
-                                <Button
-                                    variant="gradient"
-                                    className="cursor-pointer"
-                                    onClick={async () => {
-                                        await executeAsync({
-                                            createRow: {
-                                                tableOid: addNewRowButton.tableOid,
-                                                rowOid: null,
-                                                fixedParentDatasource: addNewRowButton.fixedParentDatasource
-                                            }
-                                        });
-                                    }}
-                                >
-                                    Add New Row
-                                </Button>
-                            </div>)}
-                        </div>
-                    </div>
-                </>,
-                iframeDocRef.current.contentWindow.document.body
-            )}
-        </iframe>
+        <div className="size-full overflow-auto">
+            {columns.map((columnMetadata) => (<style>{`.column${columnMetadata.oid}`} &#123; {columnMetadata.style} &#125;</style>))}
+            <div className="m-4 flex flex-col gap-y-2">
+                <SchemaGrid 
+                    columns={columns}
+                    rows={rows}
+                    onSetContent={(rowIndex: number, colIndex: number, newContent: CellContent) => {
+                        const [changedRowMetadata, changedRowCells] = rows[rowIndex];
+                        const newRows = rows.slice(0, rowIndex)
+                            .concat([[
+                                changedRowMetadata, 
+                                changedRowCells.slice(0, colIndex)
+                                    .concat([newContent])
+                                    .concat(changedRowCells.slice(colIndex + 1))
+                            ]])
+                            .concat(rows.slice(rowIndex + 1));
+                        setRows(newRows);
+                    }}
+                    onError={props.onError}
+                />
+                {addNewRowButton && (<div>
+                    <Button
+                        variant="gradient"
+                        className="cursor-pointer"
+                        onClick={async () => {
+                            await executeAsync({
+                                createRow: {
+                                    tableOid: addNewRowButton.tableOid,
+                                    rowOid: null,
+                                    fixedParentDatasource: addNewRowButton.fixedParentDatasource
+                                }
+                            });
+                        }}
+                    >
+                        Add New Row
+                    </Button>
+                </div>)}
+            </div>
+        </div>
         <div className="h-10 border-t-1 border-t-[rgb(var(--color-surface-dark)/1)] bg-[rgb(var(--color-surface)/1)] flex flex-row gap-x-4 justify-center items-center">
             {pageNum == 1 ? (<div className="cursor-default">1</div>) : (<a href="#"
                 className="text-[rgb(var(--color-info)/1)]"

@@ -71,6 +71,7 @@ function App() {
               onError,
             });
           }}
+          onError={onError}
         />
       </div>
       <Popup {...popup} />

@@ -19,7 +19,7 @@ type ValidationFailures = {
     message: string
 }[];
 
-type CellDependency = {
+export type CellDependency = {
     tableOid: number,
     columnOid: number,
     rowOid: number | null
@@ -63,7 +63,7 @@ export type AddNewRowButton = {
 
 type CellContentTextFormat = 'plain' | 'jSON';
 
-type ReadonlyCellContent = {
+export type ReadonlyCellContent = {
     cellIdentifier: CellIdentifier,
     label: string | null,
     format: CellContentTextFormat,
@@ -71,7 +71,7 @@ type ReadonlyCellContent = {
     fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures
 };
-type TextEntryCellContent = {
+export type TextEntryCellContent = {
     cellIdentifier: CellIdentifier,
     dataTableOid: number,
     dataColumnOid: number,
@@ -82,7 +82,7 @@ type TextEntryCellContent = {
     fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures 
 };
-type IntegerEntryCellContent = {
+export type IntegerEntryCellContent = {
     cellIdentifier: CellIdentifier,
     dataTableOid: number,
     dataColumnOid: number,
@@ -92,7 +92,7 @@ type IntegerEntryCellContent = {
     fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures 
 };
-type NumberEntryCellContent = {
+export type NumberEntryCellContent = {
     cellIdentifier: CellIdentifier,
     dataTableOid: number,
     dataColumnOid: number,
@@ -102,7 +102,7 @@ type NumberEntryCellContent = {
     fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures 
 };
-type DateEntryCellContent = {
+export type DateEntryCellContent = {
     cellIdentifier: CellIdentifier,
     dataTableOid: number,
     dataColumnOid: number,
@@ -112,7 +112,7 @@ type DateEntryCellContent = {
     fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures 
 };
-type DatetimeEntryCellContent = {
+export type DatetimeEntryCellContent = {
     cellIdentifier: CellIdentifier,
     dataTableOid: number,
     dataColumnOid: number,
@@ -122,7 +122,7 @@ type DatetimeEntryCellContent = {
     fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures 
 };
-type CheckboxEntryCellContent = {
+export type CheckboxEntryCellContent = {
     cellIdentifier: CellIdentifier,
     dataTableOid: number,
     dataColumnOid: number,
@@ -132,7 +132,7 @@ type CheckboxEntryCellContent = {
     fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures 
 };
-type FileEntryCellContent = {
+export type FileEntryCellContent = {
     cellIdentifier: CellIdentifier,
     dataTableOid: number,
     dataColumnOid: number,
@@ -143,7 +143,7 @@ type FileEntryCellContent = {
     fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures
 };
-type ImageEntryCellContent = {
+export type ImageEntryCellContent = {
     cellIdentifier: CellIdentifier,
     dataTableOid: number,
     dataColumnOid: number,
@@ -155,7 +155,7 @@ type ImageEntryCellContent = {
     fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures
 };
-type SchemaLinkCellContent = {
+export type SchemaLinkCellContent = {
     cellIdentifier: CellIdentifier,
     label: string | null,
     linkSchemaOid: number,
@@ -164,7 +164,7 @@ type SchemaLinkCellContent = {
     fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures
 };
-type ObjectLinkCellContent = {
+export type ObjectLinkCellContent = {
     cellIdentifier: CellIdentifier,
     dataTableOid: number,
     dataColumnOid: number,
@@ -178,7 +178,7 @@ type ObjectLinkCellContent = {
     fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures
 };
-type SingleSelectDropdownCellContent = {
+export type SingleSelectDropdownCellContent = {
     cellIdentifier: CellIdentifier,
     dataTableOid: number,
     dataColumnOid: number,
@@ -190,7 +190,7 @@ type SingleSelectDropdownCellContent = {
     fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures
 };
-type MultiSelectDropdownCellContent = {
+export type MultiSelectDropdownCellContent = {
     cellIdentifier: CellIdentifier,
     dataTableOid: number,
     dataColumnOid: number,

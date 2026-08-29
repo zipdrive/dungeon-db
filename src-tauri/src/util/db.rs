@@ -299,7 +299,6 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), Error> {
     CREATE TABLE IF NOT EXISTS METADATA_COLUMN (
         OID INTEGER PRIMARY KEY,
         TRASH BOOLEAN NOT NULL DEFAULT FALSE,
-        HIDDEN BOOLEAN NOT NULL DEFAULT FALSE,
         SCHEMA_OID INTEGER NOT NULL REFERENCES METADATA_SCHEMA (OID)
             ON UPDATE CASCADE
             ON DELETE CASCADE,
@@ -321,7 +320,6 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), Error> {
     CREATE VIEW IF NOT EXISTS METADATA_COLUMN_VIEW AS 
         SELECT 
             c.OID,
-            c.HIDDEN,
             c.SCHEMA_OID,
             c.NAME,
             c.TYPE_OID,
