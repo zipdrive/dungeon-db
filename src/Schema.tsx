@@ -10,6 +10,7 @@ import { Schema as SchemaMetadata, FullMetadata as SchemaFullMetadata } from "./
 import { listen } from "@tauri-apps/api/event";
 import { Button } from "@material-tailwind/react";
 import { ColumnGrouping, ColumnProp, ColumnRegular as RevoGridColumn, ColumnType as RevoGridColumnType, DataType, RevoGrid } from "@revolist/react-datagrid";
+import classNames from "classnames";
 
 
 
@@ -114,6 +115,7 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
         columnTypes={Object.assign(baseColumnTypes, extraColumnTypes)}
         columns={columns}
         source={dataRows}
+        className="grow"
     />);
 }
 
@@ -290,44 +292,42 @@ export function Schema(props: SchemaProps): React.JSX.Element {
     }
 
     return (<div className="grid grid-col grid-rows-[calc(100vh-(var(--spacing)*20))_calc(var(--spacing)*10)]">
-        <div className="size-full overflow-auto">
-            {columns.map((columnMetadata) => (<style>{`.column${columnMetadata.oid}`} &#123; {columnMetadata.style} &#125;</style>))}
-            <div className="m-4 flex flex-col gap-y-2">
-                <SchemaGrid 
-                    columns={columns}
-                    rows={rows}
-                    onSetContent={(rowIndex: number, colIndex: number, newContent: CellContent) => {
-                        const [changedRowMetadata, changedRowCells] = rows[rowIndex];
-                        const newRows = rows.slice(0, rowIndex)
-                            .concat([[
-                                changedRowMetadata, 
-                                changedRowCells.slice(0, colIndex)
-                                    .concat([newContent])
-                                    .concat(changedRowCells.slice(colIndex + 1))
-                            ]])
-                            .concat(rows.slice(rowIndex + 1));
-                        setRows(newRows);
+        {columns.map((columnMetadata) => (<style>{`.column${columnMetadata.oid}`} &#123; {columnMetadata.style} &#125;</style>))}
+        <div className="m-4 flex flex-col gap-y-2">
+            <SchemaGrid 
+                columns={columns}
+                rows={rows}
+                onSetContent={(rowIndex: number, colIndex: number, newContent: CellContent) => {
+                    const [changedRowMetadata, changedRowCells] = rows[rowIndex];
+                    const newRows = rows.slice(0, rowIndex)
+                        .concat([[
+                            changedRowMetadata, 
+                            changedRowCells.slice(0, colIndex)
+                                .concat([newContent])
+                                .concat(changedRowCells.slice(colIndex + 1))
+                        ]])
+                        .concat(rows.slice(rowIndex + 1));
+                    setRows(newRows);
+                }}
+                onError={props.onError}
+            />
+            {addNewRowButton && (<div>
+                <Button
+                    variant="gradient"
+                    className="cursor-pointer"
+                    onClick={async () => {
+                        await executeAsync({
+                            createRow: {
+                                tableOid: addNewRowButton.tableOid,
+                                rowOid: null,
+                                fixedParentDatasource: addNewRowButton.fixedParentDatasource
+                            }
+                        });
                     }}
-                    onError={props.onError}
-                />
-                {addNewRowButton && (<div>
-                    <Button
-                        variant="gradient"
-                        className="cursor-pointer"
-                        onClick={async () => {
-                            await executeAsync({
-                                createRow: {
-                                    tableOid: addNewRowButton.tableOid,
-                                    rowOid: null,
-                                    fixedParentDatasource: addNewRowButton.fixedParentDatasource
-                                }
-                            });
-                        }}
-                    >
-                        Add New Row
-                    </Button>
-                </div>)}
-            </div>
+                >
+                    Add New Row
+                </Button>
+            </div>)}
         </div>
         <div className="h-10 border-t-1 border-t-[rgb(var(--color-surface-dark)/1)] bg-[rgb(var(--color-surface)/1)] flex flex-row gap-x-4 justify-center items-center">
             {pageNum == 1 ? (<div className="cursor-default">1</div>) : (<a href="#"

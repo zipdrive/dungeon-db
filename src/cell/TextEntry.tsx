@@ -2,26 +2,19 @@ import { CellDependency, CellIdentifier, TextEntryCellContent } from "../api/mod
 import { useCallback, useEffect, useRef, useState } from "react";
 import { executeAsync } from "../api/action";
 import classNames from "classnames";
-import { EditorBase, HyperFunc, VNode } from '@revolist/react-datagrid';
+import { EditCell, EditorBase, HyperFunc, isEnterKeyValue, isTab, timeout, VNode } from '@revolist/react-datagrid';
 
 
 export class TextEntryEditor implements EditorBase {
-    #content: TextEntryCellContent;
-    
-
-    constructor(content: TextEntryCellContent) {
-        this.#content = content;
-    }
+    constructor(
+        private content: TextEntryCellContent,
+        private onError: (e: unknown) => void
+    ) {}
     
     editInput: HTMLInputElement | null = null;
 
     element: Element | null = null;
     editCell?: EditCell = undefined;
-
-    constructor(
-        public data: ColumnDataSchemaModel,
-        private saveCallback?: SaveCallback,
-    ) {}
 
     /**
      * Callback triggered on cell editor render
@@ -40,13 +33,24 @@ export class TextEntryEditor implements EditorBase {
         if (
             (isKeyTab || isEnter) &&
             e.target &&
-            this.saveCallback &&
             !e.isComposing
         ) {
             // blur is needed to avoid autoscroll
             this.beforeDisconnect();
             // request callback which will close cell after all
-            this.saveCallback(this.getValue(), isKeyTab);
+            executeAsync({
+                editCellContents: {
+                    tableOid: this.content.dataTableOid,
+                    columnOid: this.content.dataColumnOid,
+                    rowOid: this.content.dataRowOid,
+                    value: {
+                        text: this.getValue() || null
+                    }
+                }
+            })
+            .catch((e) => {
+                this.onError(e);
+            });
         }
     }
 
@@ -88,97 +92,4 @@ export class TextEntryEditor implements EditorBase {
             }
         );
     }
-}
-
-
-
-export type TextEntryCellProps = {
-    content: TextEntryCellContent,
-    isFocused: boolean,
-    onSetFocused: () => void,
-    isSelected: boolean,
-    listener: (CellIdentifier: CellIdentifier, isolatedCellDependencies: CellDependency[]) => (() => void),
-    onError: (e: unknown) => void,
-};
-
-export function TextEntryCell(props: TextEntryCellProps): React.JSX.Element {
-    const [isEditMode, setEditMode] = useState<boolean>(false);
-    const [inputValue, setInputValue] = useState<string>('');
-    const escapePressedRef = useRef<boolean>(false);
-
-    useEffect(() => {
-        setInputValue(props.content.label || '');
-    }, [props.content.label]);
-
-    useEffect(() => {
-        return props.listener(props.content.cellIdentifier, props.content.isolatedCellDependencies);
-    }, [props.listener, props.content.cellIdentifier, props.content.isolatedCellDependencies]);
-
-    const onCommit = useCallback(async (newLabel: string) => {
-        try {
-            await executeAsync({
-                editCellContents: {
-                    tableOid: props.content.dataTableOid,
-                    columnOid: props.content.dataColumnOid,
-                    rowOid: props.content.dataRowOid,
-                    value: {
-                        text: newLabel ? newLabel : null
-                    }
-                }
-            });
-        } catch (e) {
-            props.onError(e);
-        }
-    }, [props.content.dataTableOid, props.content.dataColumnOid, props.content.dataRowOid, props.onError]);
-
-    return (<div
-        className={classNames(
-            `column${props.content.cellIdentifier.columnOid}`
-        )}
-        onKeyDown={(e) => {
-            if (!isEditMode && isValidKey(e, [])) {
-                e.stopPropagation();
-                setInputValue('');
-                setEditMode(true);
-            } else if (!isEditMode && !props.isSelected && (e.key === "Enter" || e.key === "F2")) {
-                e.stopPropagation();
-                setInputValue(props.content.label || '');
-                setEditMode(true);
-            }
-        }}
-        tabIndex={0}
-    >
-        {isEditMode 
-        ? (<input 
-            value={inputValue}
-            onChange={(e) => { setInputValue(e.target.value); }}
-            onBlur={(e) => {
-                if (!escapePressedRef.current) {
-                    onCommit(e.currentTarget.value);
-                }
-                setEditMode(false);
-                if (escapePressedRef.current) {
-                    escapePressedRef.current = false;
-                }
-            }}
-            onCut={(e) => e.stopPropagation()}
-            onCopy={(e) => e.stopPropagation()}
-            onPaste={(e) => e.stopPropagation()}
-            onPointerDown={(e) => e.stopPropagation()}
-            onKeyDown={(e) => {
-                const controlKeys = ["Escape", "Enter", "Tab"];
-                if (!controlKeys.includes(e.key)) {
-                    e.stopPropagation();
-                }
-                if (e.key === "Escape") {
-                    escapePressedRef.current = true;
-                    setEditMode(false);
-                } else if (e.key === "Enter") {
-                    setEditMode(false);
-                }
-            }}
-            autoFocus
-        />)
-        : props.content.label}
-    </div>);
 }
