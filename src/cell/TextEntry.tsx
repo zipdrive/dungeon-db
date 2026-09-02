@@ -1,4 +1,4 @@
-import { CellDependency, CellIdentifier, TextEntryCellContent } from "../api/model/cell";
+import { CellContent, CellDependency, CellIdentifier, TextEntryCellContent } from "../api/model/cell";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { executeAsync } from "../api/action";
 import classNames from "classnames";
@@ -7,8 +7,9 @@ import { EditCell, EditorBase, HyperFunc, isEnterKeyValue, isTab, timeout, VNode
 
 export class TextEntryEditor implements EditorBase {
     constructor(
-        private content: TextEntryCellContent,
-        private onError: (e: unknown) => void
+        private readonly content: TextEntryCellContent,
+        private readonly onClose: (preventFocus?: boolean) => void,
+        private readonly onError: (e: unknown) => void
     ) {}
     
     editInput: HTMLInputElement | null = null;
@@ -50,6 +51,9 @@ export class TextEntryEditor implements EditorBase {
             })
             .catch((e) => {
                 this.onError(e);
+            })
+            .finally(() => {
+                this.onClose();
             });
         }
     }

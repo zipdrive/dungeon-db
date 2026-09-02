@@ -18,7 +18,7 @@ export type FormRootProps = FormRootPropsNoTabs | FormRootPropsTabs;
 
 function FormRootWrapChildren(props: FormRootProps): React.JSX.Element {
     if ('tabs' in props) {
-        return (<Tabs>
+        return (<Tabs defaultValue={props.tabs.length > 0 ? props.tabs[0].value : undefined}>
             <Tabs.List>
                 {props.tabs.map(({ value, label }) => (<Tabs.Trigger value={value}>{label}</Tabs.Trigger>))}
                 <Tabs.TriggerIndicator />

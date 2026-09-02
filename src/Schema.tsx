@@ -3,89 +3,33 @@ import { getCellAsync, queryAsync } from "./api/query";
 import { Channel } from "@tauri-apps/api/core";
 import { FullMetadata as ColumnFullMetadata } from "./api/model/column";
 import { SchemaRow, CellContent, CellStream, AddNewRowButton, CellIdentifier, CellDependency } from "./api/model/cell";
-import { cellPropertyEntry, baseColumnTypes } from "./cell/Cell";
+import { cellPropertyEntry, useExtraColumnTypes, useBaseColumnTypes, cellDataRef, createRowProxy } from "./cell/Cell";
 import { executeAsync } from "./api/action";
 import { ObjectPageBreadcrumb, SchemaPageBreadcrumb } from "./breadcrumb";
 import { Schema as SchemaMetadata, FullMetadata as SchemaFullMetadata } from "./api/model/schema";
 import { listen } from "@tauri-apps/api/event";
 import { Button } from "@material-tailwind/react";
-import { ColumnGrouping, ColumnProp, ColumnRegular as RevoGridColumn, ColumnType as RevoGridColumnType, DataType, RevoGrid } from "@revolist/react-datagrid";
+import { ColumnGrouping, ColumnProp, ColumnRegular as RevoGridColumn, ColumnType as RevoGridColumnType, DataType, RevoGrid, CellProps } from "@revolist/react-datagrid";
 import classNames from "classnames";
-
-
 
 
 type SchemaGridProps = {
     columns: ColumnFullMetadata[],
     rows: [SchemaRow, CellContent[]][],
     onSetContent: (rowIndex: number, colIndex: number, newContent: CellContent) => void,
+    onRequestCreateColumn: (ordering: number | null) => void,
+    onRequestEditColumn: (columnMetadata: ColumnFullMetadata) => void,
+    onRequestOpenSchema: (schema: SchemaPageBreadcrumb) => void,
+    onRequestOpenObject: (object: ObjectPageBreadcrumb) => void,
     onError: (e: unknown) => void,
 };
 
 function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
-    const [dropdownValues, setDropdownValues] = useState<{[key: `table${number}`]: { label: string, value: string }[]}>({});
-
-    useCallback(() => {
-        const tableOids: Set<number> = new Set();
-        for (const columnMetadata of props.columns) {
-            if ('select' in columnMetadata.columnType) {
-                tableOids.add(columnMetadata.columnType.select.tableOid);
-            } else if ('multiselect' in columnMetadata.columnType) {
-                tableOids.add(columnMetadata.columnType.multiselect.tableOid);
-            }
-        }
-        Promise.all([...tableOids].map<Promise<[`table${number}`, { label: string, value: string }[]]>>(async (tableOid) => {
-            const tableDropdownValues: { label: string, value: string }[] = [];
-            await queryAsync({
-                columnValues: {
-                    schemaOid: tableOid,
-                    channel: new Channel((dropdownValue) => {
-                        tableDropdownValues.push({ 
-                            label: dropdownValue.label,
-                            value: dropdownValue.value.toString()
-                        });
-                    })
-                }
-            });
-            return [`table${tableOid}`, tableDropdownValues];
-        }))
-        .then((entries) => {
-            setDropdownValues(Object.fromEntries(entries));
-        })
-        .catch((e) => {
-            props.onError(e);
-        });
-    }, [props.columns]);
-
-    const extraColumnTypes: {[key: string]: RevoGridColumnType} = useMemo(() => {
-        const extras: {[key: string]: any} = {};
-        for (const columnMetadata of props.columns) {
-            if ('select' in columnMetadata.columnType) {
-                const key: string = `singleSelectDropdown${columnMetadata.columnType.select.tableOid}`;
-                if (!(key in extras)) {
-                    extras[key] = {
-
-                    };
-                }
-            } else if ('multiselect' in columnMetadata.columnType) {
-                const key: string = `multiSelectDropdown${columnMetadata.columnType.multiselect.tableOid}`;
-                if (!(key in extras)) {
-                    extras[key] = {
-
-                    };
-                }
-            }
-        }
-        return extras;
-    }, [props.columns, dropdownValues]);
+    const baseColumnTypes = useBaseColumnTypes(props.onError);
+    const extraColumnTypes = useExtraColumnTypes(props.columns, props.onError);
 
     const columns: RevoGridColumn[] = useMemo(() => {
-        return [{
-            prop: 'index',
-            name: 'Index',
-            columnType: 'index',
-            pin: 'colPinStart',
-        } as RevoGridColumn].concat(props.columns.map((columnMetadata) => {
+        return props.columns.map((columnMetadata): RevoGridColumn => {
             const columnLabel: string = (columnMetadata.isPrimaryKey ? '🔑 ' : '') + columnMetadata.name;
             let columnType: string;
             if ('select' in columnMetadata.columnType) {
@@ -97,25 +41,64 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
             }
             return {
                 prop: `column${columnMetadata.oid}`,
-                name: columnLabel,
-                columnType
+                name: columnLabel
             };
-        }));
+        })
+        .concat([{
+            prop: 'blank',
+            name: 'test'
+        }, {
+            prop: 'blank',
+            name: 'Add New Column',
+            readonly: true,
+            size: 200,
+            columnTemplate(createElement, _p) {
+                return createElement(
+                    'button',
+                    {
+                        'class': 'absolute left-4 inline-flex items-center justify-center border align-middle select-none font-sans font-medium text-center transition-all duration-300 ease-in disabled:opacity-50 disabled:shadow-none disabled:cursor-not-allowed data-[shape=pill]:rounded-full data-[width=full]:w-full focus:shadow-none text-sm rounded-md py-2 px-4 shadow-sm hover:shadow-md bg-gradient-to-tr from-primary-dark to-primary-light border-primary text-primary-foreground hover:brightness-105 cursor-pointer',
+                        'data-shape': "default",
+                        'data-width': "default",
+                        'onClick': () => {
+                            props.onRequestCreateColumn(null);
+                        }
+                    },
+                    "Add New Column"
+                );
+            }
+        }]);
     }, [props.columns]);
 
     const dataRows = useMemo(() => {
         return props.rows.map(([rowMetadata, rowCells]) => {
-            return Object.assign({ index: rowMetadata.index },
-                Object.fromEntries(rowCells.map<[string, CellContent]>(cellPropertyEntry))
+            const rowModel = Object.assign({ rowMetadata, blank: null },
+                Object.fromEntries(rowCells.map(cellPropertyEntry))
             );
+            return createRowProxy(rowModel, props.onError);
         });
-    }, [props.columns, props.rows]);
+    }, [props.columns, props.rows, props.onError]);
 
     return (<RevoGrid
         columnTypes={Object.assign(baseColumnTypes, extraColumnTypes)}
         columns={columns}
         source={dataRows}
-        className="grow"
+        rowHeaders={{
+            prop: 'rowMetadata',
+            cellTemplate(createElement, props) {
+                const rowMetadata: SchemaRow = props.model[props.prop];
+                return createElement(
+                    'div',
+                    {
+                        'class': classNames('text-center')
+                    },
+                    rowMetadata.index.toString()
+                )
+            }
+        }}
+        applyOnClose={true}
+        onAfteredit={(event) => {
+            event.detail.data
+        }}
     />);
 }
 
@@ -291,9 +274,9 @@ export function Schema(props: SchemaProps): React.JSX.Element {
         setAddNewRowButton(queriedAddNewRowButton);
     }
 
-    return (<div className="grid grid-col grid-rows-[calc(100vh-(var(--spacing)*20))_calc(var(--spacing)*10)]">
+    return (<div className="grid grid-col grid-rows-[calc(100vh-(var(--spacing)*20))_calc(var(--spacing)*10)] w-full">
         {columns.map((columnMetadata) => (<style>{`.column${columnMetadata.oid}`} &#123; {columnMetadata.style} &#125;</style>))}
-        <div className="m-4 flex flex-col gap-y-2">
+        <div className="m-4 grid grid-col grid-rows-[1fr_auto] gap-y-2">
             <SchemaGrid 
                 columns={columns}
                 rows={rows}
@@ -309,6 +292,10 @@ export function Schema(props: SchemaProps): React.JSX.Element {
                         .concat(rows.slice(rowIndex + 1));
                     setRows(newRows);
                 }}
+                onRequestCreateColumn={(ordering) => props.onRequestCreateColumn('table' in props.schema ? props.schema.table.schema : props.schema.report.schema, 'table' in props.schema, ordering)}
+                onRequestEditColumn={(columnMetadata) => props.onRequestEditColumn(columnMetadata, 'table' in props.schema)}
+                onRequestOpenSchema={props.onRequestOpenSchema}
+                onRequestOpenObject={props.onRequestOpenObject}
                 onError={props.onError}
             />
             {addNewRowButton && (<div>

@@ -62,11 +62,6 @@ pub fn run() {
                                 }
                             }
                         }
-
-                        // Since the user is trying to close the main window, also close every other window
-                        for (_, subwindow) in window.webview_windows().iter() {
-                            let _ = subwindow.close();
-                        }
                     }
                 }
                 _ => {}
