@@ -14,6 +14,8 @@ export type Primitive =
     | 'image'
 ;
 
+
+
 export type ColumnType = {
     primitive: Primitive
 } | {
@@ -43,11 +45,21 @@ export type ColumnType = {
     }
 };
 
+export type ColumnBaseType = Primitive
+    | 'object'
+    | 'select'
+    | 'multiselect'
+    | 'formula'
+    | 'subreport';
+
+
+
 export type FullMetadata = {
     oid: number,
     schema: SchemaFullMetadata,
     name: string,
     columnType: ColumnType,
+    size: number,
     style: string,
     ordering: number,
     defaultValue: string | null,

@@ -73,6 +73,24 @@ export function FormTextField(props: FormTextFieldProps): React.JSX.Element {
 }
 
 
+export type FormIntegerFieldProps = {
+    label: string,
+    tooltip?: string,
+    value: number,
+    onSetValue?: (newValue: number) => void,
+};
+
+/**
+ * A number entry component on a form. 
+ */
+export function FormIntegerField(props: FormIntegerFieldProps): React.JSX.Element {
+    return (<div className="flex flex-col gap-y-2">
+        <Typography type="h6">{props.label}</Typography>
+        <Input placeholder={props.label} type="number" value={props.value} onChange={(e) => { props.onSetValue?.(parseInt(e.target.value)); }} />
+    </div>);
+}
+
+
 
 export type FormRadioFieldProps<S extends string> = {
     label: string,
@@ -137,7 +155,7 @@ export type FormSelectFieldProps<S extends string> = {
 export function FormSelectField<S extends string>(props: FormSelectFieldProps<S>): React.JSX.Element {
     return (<div className="flex flex-col gap-y-2">
         <Typography type="h6">{props.label}</Typography>
-        <Select onValueChange={(s) => { props.onSetValue?.(s as S); }}>
+        <Select value={props.value} onValueChange={(s) => { props.onSetValue?.(s as S); }}>
             <Select.Trigger placeholder={props.label}></Select.Trigger>
             <Select.List>
                 {props.possibleValues.map(({ value: optionValue, label: optionLabel, disabled: optionDisabled }) => 
@@ -300,6 +318,7 @@ export function FormCustomField(props: FormCustomFieldProps): React.JSX.Element 
 
 export const Form = Object.assign(FormRoot, {
     TextField: FormTextField,
+    IntegerField: FormIntegerField,
     CheckboxField: FormCheckboxField,
     RadioField: FormRadioField,
     SelectField: FormSelectField,

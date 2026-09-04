@@ -396,7 +396,11 @@ impl Schema {
     /// Gets the type of schema from the OID.
     pub fn get(oid: i64) -> Result<Self, Error> {
         let conn: Connection = db::open()?;
+        Self::get_transact(&conn, oid) 
+    }
 
+    /// Gets the type of schema from the OID.
+    pub fn get_transact(conn: &Connection, oid: i64) -> Result<Self, Error> {
         let schema_type: String = sql_one(
             &conn,
             "

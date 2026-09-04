@@ -4,19 +4,22 @@ import { CreateSchemaPopup, CreateSchemaPopupProps } from "./CreateSchemaPopup";
 import { EditColumnPopup, EditColumnPopupProps } from "./EditColumnPopup";
 import { EditSchemaPopup, EditSchemaPopupProps } from "./EditSchemaPopup";
 import { useState, useEffect } from "react";
+import { FilePopup, FilePopupProps } from "./FilePopup";
 
 export type PopupProps = 
 { popup: 'none' }
 | { popup: 'createSchema' } & CreateSchemaPopupProps
 | { popup: 'editSchema' } & EditSchemaPopupProps
 | { popup: 'createColumn' } & CreateColumnPopupProps
-| { popup: 'editColumn' } & EditColumnPopupProps;
+| { popup: 'editColumn' } & EditColumnPopupProps
+| { popup: 'uploadFile' } & FilePopupProps;
 
 export function Popup(props: PopupProps): React.JSX.Element {
     const [lastKnownCreateSchemaPopupProps, setCreateSchemaPopupProps] = useState<CreateSchemaPopupProps | null>(null);
     const [lastKnownEditSchemaPopupProps, setEditSchemaPopupProps] = useState<EditSchemaPopupProps | null>(null);
     const [lastKnownCreateColumnPopupProps, setCreateColumnPopupProps] = useState<CreateColumnPopupProps | null>(null);
     const [lastKnownEditColumnPopupProps, setEditColumnPopupProps] = useState<EditColumnPopupProps | null>(null);
+    const [lastKnownFilePopupProps, setFilePopupProps] = useState<FilePopupProps | null>(null);
 
     useEffect(() => {
         switch (props.popup) {
@@ -31,6 +34,9 @@ export function Popup(props: PopupProps): React.JSX.Element {
                 break;
             case 'editColumn':
                 setEditColumnPopupProps(props);
+                break;
+            case 'uploadFile':
+                setFilePopupProps(props);
                 break;
         }
     }, [props.popup]);
@@ -63,6 +69,13 @@ export function Popup(props: PopupProps): React.JSX.Element {
                     <EditColumnPopup {...lastKnownEditColumnPopupProps} />   
                 </Dialog.Content>
             </Dialog.Overlay>
+        </Dialog>}
+        {lastKnownFilePopupProps && <Dialog open={props.popup === 'uploadFile'}>
+            <Dialog.Overlay>
+                <Dialog.Content>
+                    <FilePopup {...lastKnownFilePopupProps} />
+                </Dialog.Content>
+            </Dialog.Overlay>    
         </Dialog>}
     </>);
 }

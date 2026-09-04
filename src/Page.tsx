@@ -4,8 +4,8 @@ import {
     Typography,
     Breadcrumb,
 } from "@material-tailwind/react";
-import { Schema } from "./Schema";
-import { Object } from "./Object";
+import { SchemaPage } from "./Schema";
+import { ObjectPage } from "./Object";
 import { FullMetadata as ColumnFullMetadata } from "./api/model/column";
 import { FullMetadata as SchemaFullMetadata } from "./api/model/schema";
 import { getSchemaMetadataAsync } from "./api/query";
@@ -14,6 +14,7 @@ type PageProps = {
     schema: { oid: number, name: string } | null,
     onRequestCreateColumn: (schema: SchemaFullMetadata, isTableColumn: boolean, ordering: number | null) => void,
     onRequestEditColumn: (columnMetadata: ColumnFullMetadata, isTableColumn: boolean) => void,
+    onRequestUploadFile: (absolutePath: string, relativePath: string, onUploadFile: (fileOid: number) => Promise<any>) => void,
     onError: (e: unknown) => void,
 };
 
@@ -71,7 +72,7 @@ export function Page(props: PageProps): React.JSX.Element {
                 })}
             </Breadcrumb>
             {'schema' in lastPageBreadcrumb ?
-                <Schema 
+                <SchemaPage 
                     {...lastPageBreadcrumb.schema}
                     onChangeCustomFilters={(newCustomFilters) => {
                         setPageBreadcrumbs([...pageBreadcrumbs.slice(0, pageBreadcrumbs.length - 1), {
@@ -85,14 +86,18 @@ export function Page(props: PageProps): React.JSX.Element {
                     }}
                     onRequestCreateColumn={props.onRequestCreateColumn}
                     onRequestEditColumn={props.onRequestEditColumn}
+                    onRequestUploadFile={props.onRequestUploadFile}
                     onRequestOpenSchema={openSchemaPage}
                     onRequestOpenObject={openObjectPage}
                     onError={props.onError}
                 /> :
-                <Object 
+                <ObjectPage 
                     {...lastPageBreadcrumb.object}
+                    onRequestEditColumn={props.onRequestEditColumn}
+                    onRequestUploadFile={props.onRequestUploadFile}
                     onRequestOpenSchema={openSchemaPage}
                     onRequestOpenObject={openObjectPage}
+                    onError={props.onError}
                 />
             }
         </div>);

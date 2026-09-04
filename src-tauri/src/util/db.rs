@@ -306,6 +306,8 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), Error> {
         TYPE_OID INTEGER NOT NULL DEFAULT -1 REFERENCES METADATA_COLUMN_TYPE (OID)
             ON UPDATE CASCADE
             ON DELETE SET DEFAULT,
+        SIZE INTEGER NOT NULL,
+            -- Column pixel width
         STYLE TEXT NOT NULL,
             -- Column CSS style
         ORDERING INTEGER NOT NULL,
@@ -323,6 +325,7 @@ fn setup_db_at_path<P: AsRef<Path>>(path: P) -> Result<(), Error> {
             c.SCHEMA_OID,
             c.NAME,
             c.TYPE_OID,
+            c.SIZE,
             c.STYLE,
             c.ORDERING,
             c.IS_NULLABLE,

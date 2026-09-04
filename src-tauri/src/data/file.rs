@@ -61,10 +61,14 @@ impl File {
     /// Loads the file as a URI (e.g. for an img tag).
     pub fn get_image_src_transact(self, conn: &Connection) -> Result<String, Error> {
         // Load file content into buffer
-        match self {
-            Self::Path { path, .. } => {
-                return Ok(path.clone());
-            }
+        // Load file content into buffer
+        let buf: Vec<u8> = match self {
+            Self::Path { path, .. } => match std::fs::read(path) {
+                Ok(read_buf) => read_buf,
+                Err(_) => {
+                    return Err(Error::adhoc("Unable to open file."));
+                }
+            },
             Self::Blob { oid } => {
                 let blob = conn.blob_open("main", "METADATA_FILE__BLOB", "CONTENT", oid, true)?;
 
@@ -77,19 +81,20 @@ impl File {
                         return Err(Error::adhoc("Unable to read stored file."));
                     }
                 }
-
-                // Read the MIME type to ensure that the file is an image
-                let mime_type = mimetype_detector::detect(&buf);
-                if mimetype_detector::MimeKind::IMAGE == mime_type.kind() {
-                    return Ok(format!(
-                        "data:{};base64,{}",
-                        mime_type.name(),
-                        base64standard.encode(&buf)
-                    ));
-                } else {
-                    return Err(Error::adhoc("File is not an image!"));
-                }
+                buf
             }
+        };
+
+        // Read the MIME type to ensure that the file is an image
+        let mime_type = mimetype_detector::detect(&buf);
+        if mimetype_detector::MimeKind::IMAGE == mime_type.kind() {
+            return Ok(format!(
+                "data:{};base64,{}",
+                mime_type.name(),
+                base64standard.encode(&buf)
+            ));
+        } else {
+            return Err(Error::adhoc("File is not an image!"));
         }
     }
 

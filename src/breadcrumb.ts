@@ -9,7 +9,7 @@ export type SchemaPageBreadcrumb = {
 
 export type ObjectPageBreadcrumb = {
     name: string,
-    schemaOid: number,
+    schema: Schema,
     oidFilters: [string, number][],
 };
 

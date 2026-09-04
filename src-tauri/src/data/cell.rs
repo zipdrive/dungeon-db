@@ -270,7 +270,7 @@ pub enum Cell {
         cell_identifier: CellIdentifier,
         label: Option<String>,
         link_schema_oid: i64,
-        link_query_filter: Option<String>,
+        link_oid_filters: Vec<(String, i64)>,
 
         /// The list of dependencies that always have a 1-to-1 relationship with this cell.
         /// Whenever one of these dependencies is updated, only this cell needs to be updated.
@@ -1111,7 +1111,23 @@ impl Cell {
         Cell::SchemaLink { 
             label, 
             link_schema_oid: link_schema_oid.clone(), 
-            link_query_filter, 
+            link_oid_filters: match link_query_filter {
+                Some(link_query_filter) => link_query_filter
+                    .split('&')
+                    .filter_map(|s| {
+                        if let Some((oid_ord, oid_value)) = s.split_once('=') {
+                            match i64::from_str(oid_value) {
+                                Ok(oid_value) => Some((String::from(oid_ord), oid_value)),
+                                Err(_) => None
+                            }
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+                ,
+                None => Vec::new()
+            }, 
             isolated_cell_dependencies,
             full_reload_cell_dependencies,
             validation_failures: Vec::new(),
@@ -1141,7 +1157,7 @@ impl Cell {
             Ok(isolated_str) => (isolated_str, None),
             Err(e) => (None, Some(e))
         };
-        let (full_reload_str, full_reload_str_e) = match row.get::<&str, Option<String>>(&isolated_ord) {
+        let (full_reload_str, full_reload_str_e) = match row.get::<&str, Option<String>>(&full_reload_ord) {
             Ok(full_reload_str) => (full_reload_str, None),
             Err(e) => (None, Some(e))
         };
@@ -1383,12 +1399,6 @@ pub enum SchemaCellStream {
         validation_failures: Vec<FailedValidation>,
     },
 
-    /// A button to navigate to the previous page.
-    PrevButton,
-
-    /// A button to navigate to the next page.
-    NextButton,
-
     /// A button to add a new row to the schema.
     AddNewRowButton {
         table_oid: i64,
@@ -1404,8 +1414,57 @@ pub enum SchemaCellStream {
 }
 
 impl SchemaCellStream {
+    pub fn query_object(
+        column_sender: Sender<column::FullMetadata>,
+        cell_sender: Sender<Self>,
+        schema_oid: i64,
+        oid_filters: Vec<(String, i64)>
+    ) -> Result<(), Error> {
+        let conn: Connection = db::open()?;
+        match schema::Schema::get_transact(&conn, schema_oid)?
+        {
+            schema::Schema::Table(table_metadata) => {
+                let (table_schema_oid, table_row_oid): (i64, i64) = sql_one(
+                    &conn, 
+                    format!(
+                        "SELECT TABLE_SCHEMA_OID, TABLE_ROW_OID FROM SCHEMA{}_VIEW {}", table_metadata.schema.oid,
+                        match oid_filters.into_iter()
+                            .map(|(oid_ord, oid_value)| format!("{oid_ord} = {oid_value}"))
+                            .reduce(|acc, e| format!("{acc} AND {e}")) {
+                            Some(where_clause) => format!("WHERE {where_clause}"),
+                            None => String::from("")
+                        }
+                    ),
+                    [], 
+                    |row| Ok((
+                        row.get::<_, i64>("TABLE_SCHEMA_OID")?,
+                        row.get::<_, i64>("TABLE_ROW_OID")?
+                    ))
+                )?;
+                Self::query_by_schema_transact(&conn, column_sender, cell_sender, table_schema_oid, vec![(String::from("OID"), table_row_oid)], Vec::new(), RetrievalLimit::SingleRow)
+            },
+            schema::Schema::Report(_) => {
+                Self::query_by_schema_transact(&conn, column_sender, cell_sender, schema_oid, oid_filters, Vec::new(), RetrievalLimit::SingleRow)
+            },
+        }
+    }
+    
     /// Sends all cells on a page in a schema.
     pub fn query_by_schema(
+        column_sender: Sender<column::FullMetadata>,
+        cell_sender: Sender<Self>,
+        schema_oid: i64,
+        oid_filters: Vec<(String, i64)>,
+        custom_filters: Vec<String>,
+        limit: RetrievalLimit,
+    ) -> Result<(), Error> {
+        let conn: Connection = db::open()?;
+        Self::query_by_schema_transact(&conn, column_sender, cell_sender, schema_oid, oid_filters, custom_filters, limit)
+    }
+
+    /// Sends all cells on a page in a schema.
+    fn query_by_schema_transact(
+        conn: &Connection,
         mut column_sender: Sender<column::FullMetadata>,
         mut cell_sender: Sender<Self>,
         schema_oid: i64,
@@ -1413,14 +1472,13 @@ impl SchemaCellStream {
         custom_filters: Vec<String>,
         limit: RetrievalLimit,
     ) -> Result<(), Error> {
-        let conn: Connection = db::open()?;
-
-        // Query the columns of the schema
         let root_datasource_alias: Option<String> = match Datasource::check_default_datasource_transact(&conn, schema_oid)?
         {
             Some(root_datasource) => Some(root_datasource.get_alias()),
             None => None,
         };
+
+        // Query the columns of the schema
         let mut cols: Vec<(column::FullMetadata, String)> = Vec::new();
         sql_map_then_iter(
             &conn,
@@ -1442,10 +1500,9 @@ impl SchemaCellStream {
         // Page-level filter
         let where_expr: String = {
             let mut where_clauses: Vec<String> = custom_filters;
-            let pragma_sql: String = format!("PRAGMA table_info(SCHEMA{schema_oid}_VIEW)");
             sql_iter(
                 &conn,
-                &pragma_sql,
+                format!("PRAGMA table_info(SCHEMA{schema_oid}_VIEW)"),
                 [],
                 |row| {
                     let column_name: String = row.get::<_, String>("NAME")?;
@@ -1840,23 +1897,22 @@ impl DataCellEntry {
         table_oid: i64,
         row_oid: i64,
     ) -> Result<(i64, Vec<Self>), Error> {
-        todo!("Need to redo this to use new SCHEMA view.");
         let (table_oid, row_oid) = sql_one(
             &conn,
             format!(
                 "
                 SELECT 
-                    TABLE_OID, 
-                    ROW_OID 
-                FROM TABLE{table_oid}_POLYMORPHISM 
+                    TABLE_SCHEMA_OID, 
+                    TABLE_ROW_OID 
+                FROM SCHEMA{table_oid}_VIEW
                 WHERE OID = ?1
                 "
             ), 
             params![row_oid], 
             |row| {
                 Ok((
-                    row.get::<_, i64>("TABLE_OID")?,
-                    row.get::<_, i64>("ROW_OID")?,
+                    row.get::<_, i64>("TABLE_SCHEMA_OID")?,
+                    row.get::<_, i64>("TABLE_ROW_OID")?,
                 ))
             }
         )?;

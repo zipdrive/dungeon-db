@@ -159,7 +159,7 @@ export type SchemaLinkCellContent = {
     cellIdentifier: CellIdentifier,
     label: string | null,
     linkSchemaOid: number,
-    linkQueryFilter: string | null,
+    linkOidFilters: [string, number][],
     isolatedCellDependencies: CellDependency[],
     fullReloadCellDependencies: CellDependency[],
     validationFailures: ValidationFailures

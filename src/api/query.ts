@@ -103,6 +103,13 @@ export type Query = {
         cellChannel: Channel<CellStream>
     }
 } | {
+    object: {
+        schemaOid: number,
+        oidFilters: [string, number][],
+        columnChannel: Channel<ColumnFullMetadata>,
+        cellChannel: Channel<CellStream>
+    }
+} | {
     tableRowLabels: {
         tableOid: number,
         processid: number
@@ -147,10 +154,10 @@ export async function getImageSrcAsync(data: { file: File }): Promise<string> {
     return await invoke('get_image_src', data);
 }
 
-export async function downloadFileAsync(data: { fileOid: number, filepath: string }): Promise<void> {
+export async function downloadFileAsync(data: { fileOid: number, downloadToPath: string }): Promise<void> {
     await invoke('download_file', data);
 }
 
-export async function uploadFileAsync(data: { file: File, filepath: string }): Promise<number> {
+export async function uploadFileAsync(data: { file: File, uploadFromPath: string }): Promise<number> {
     return await invoke('upload_file', data);
 }

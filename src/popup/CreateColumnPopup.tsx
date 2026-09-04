@@ -7,7 +7,7 @@ import {
 import { useState, useEffect } from "react";
 import { executeAsync } from "../api/action";
 import { FullMetadata as SchemaFullMetadata } from "../api/model/schema";
-import { ColumnType } from "../api/model/column";
+import { ColumnBaseType, ColumnType } from "../api/model/column";
 import { listen } from "@tauri-apps/api/event";
 import { DropdownValue, queryAsync } from "../api/query";
 import { Channel } from "@tauri-apps/api/core";
@@ -21,28 +21,12 @@ export type CreateColumnPopupProps = {
     onError: (e: unknown) => void,
 };
 
-type ColumnBaseType = 'plainText'
-    | 'jsonText'
-    | 'xmlText'
-    | 'markdownText'
-    | 'integer'
-    | 'number'
-    | 'boolean'
-    | 'date'
-    | 'datetime'
-    | 'file'
-    | 'image'
-    | 'object'
-    | 'select'
-    | 'multiselect'
-    | 'formula'
-    | 'subreport';
-
 export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: boolean }): React.JSX.Element {
     const [columnName, setColumnName] = useState<string>('');
     const [columnBaseType, setColumnBaseType] = useState<ColumnBaseType>(props.isTableColumn ? 'plainText' : 'formula');
     const [isPrimaryKey, setPrimaryKey] = useState<boolean>(false);
     const [defaultValue, setDefaultValue] = useState<string>('');
+    const [columnSize, setColumnSize] = useState<number>(150);
     const [columnStyle, setColumnStyle] = useState<string>('');
 
     const [formula, setFormula] = useState<string>('');
@@ -99,6 +83,7 @@ export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: bool
             setColumnBaseType(props.isTableColumn ? 'plainText' : 'formula');
             setPrimaryKey(false);
             setDefaultValue('');
+            setColumnSize(150);
             setColumnStyle('');
             setFormula('');
             setRefTable(undefined);
@@ -174,6 +159,7 @@ export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: bool
                     schema: props.schema,
                     isPrimaryKey,
                     defaultValue: defaultValue === '' ? null : defaultValue,
+                    size: columnSize,
                     style: columnStyle,
                     ordering: props.ordering ?? 0,
                 }
@@ -256,6 +242,11 @@ export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: bool
                     value: 'css',
                     label: 'CSS',
                     fields: (<>
+                        <Form.IntegerField
+                            label="Size"
+                            value={columnSize}
+                            onSetValue={setColumnSize}
+                        />
                         <Form.TextField 
                             multiline 
                             label="CSS Style"

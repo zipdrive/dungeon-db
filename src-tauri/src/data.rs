@@ -149,11 +149,18 @@ pub enum QueryStream {
     ColumnAssociatedReports {
         channel: JavaScriptChannelId,
     },
+
     Cells {
         schema_oid: i64,
         oid_filters: Vec<(String, i64)>,
         custom_filters: Vec<String>,
         limit: cell::RetrievalLimit,
+        column_channel: JavaScriptChannelId,
+        cell_channel: JavaScriptChannelId,
+    },
+    Object {
+        schema_oid: i64,
+        oid_filters: Vec<(String, i64)>,
         column_channel: JavaScriptChannelId,
         cell_channel: JavaScriptChannelId,
     },
@@ -240,6 +247,17 @@ impl QueryStream {
                 oid_filters,
                 custom_filters,
                 limit,
+            ),
+            Self::Object { 
+                schema_oid, 
+                oid_filters, 
+                column_channel, 
+                cell_channel 
+            } => cell::SchemaCellStream::query_object(
+                Sender::Channel(column_channel.channel_on(webview.clone())),
+                Sender::Channel(cell_channel.channel_on(webview)),
+                schema_oid,
+                oid_filters,
             ),
 
             Self::TableRowLabels { 
@@ -336,10 +354,11 @@ pub enum Action {
     UntrashSchema(i64),
 
     CreateColumn(column::FullMetadata),
-    EditColumn(column::FullMetadata),
-    EditColumnStyle {
+    ReplaceColumn(column::FullMetadata),
+    EditColumn {
         metadata: column::FullMetadata,
-        new_column_style: String,
+        new_column_size: Option<i64>,
+        new_column_style: Option<String>,
     },
     EditColumnOrdering {
         metadata: column::FullMetadata,
@@ -476,7 +495,7 @@ impl Action {
                 // Send signal to update schema
                 schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
-            Self::EditColumn(mut metadata) => {
+            Self::ReplaceColumn(mut metadata) => {
                 // Update the column
                 let old_column_oid: i64 = metadata.oid.clone();
                 metadata.set()?;
@@ -490,25 +509,40 @@ impl Action {
                 );
 
                 // Send signal to update schema
-                app.emit("column", (old_column_oid, metadata))?;
+                schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
-            Self::EditColumnStyle {
+            Self::EditColumn {
                 mut metadata,
+                new_column_size,
                 new_column_style,
             } => {
+                // Update the column size
+                let old_column_size: Option<i64> = if let Some(new_column_size) = new_column_size {
+                    metadata.set_size(new_column_size)?;
+                    Some(metadata.size.clone())
+                } else {
+                    None 
+                };
+
                 // Update the column style
-                let old_column_style: String = metadata.style.clone();
-                metadata.set_style(new_column_style)?;
+                let old_column_style: Option<String> = if let Some(new_column_style) = new_column_style {
+                    metadata.set_style(new_column_style)?;
+                    Some(metadata.style.clone())
+                } else {
+                    None
+                };
+
                 record_action(
-                    Self::EditColumnStyle {
+                    Self::EditColumn {
                         metadata: metadata.clone(),
+                        new_column_size: old_column_size,
                         new_column_style: old_column_style,
                     },
                     is_forward,
                 );
 
                 // Send signal to update schema
-                app.emit("column", (metadata.oid, metadata))?;
+                schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
             Self::EditColumnOrdering {
                 mut metadata,

@@ -71,6 +71,17 @@ function App() {
               onError,
             });
           }}
+          onRequestUploadFile={(absoluteLink, relativeLink, onUploadFileCallback) => {
+            console.log(relativeLink);
+            setPopup({
+              popup: 'uploadFile',
+              absoluteLink,
+              relativeLink,
+              onUploadFileCallback,
+              onClosePopup,
+              onError,
+            });
+          }}
           onError={onError}
         />
       </div>

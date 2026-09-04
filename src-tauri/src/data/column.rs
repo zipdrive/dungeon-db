@@ -24,6 +24,7 @@ pub struct FullMetadata {
     pub schema: schema::FullMetadata,
     pub name: String,
     pub column_type: column_type::ColumnType,
+    pub size: i64,
     pub style: String,
     pub ordering: i64,
     pub default_value: Option<String>,
@@ -43,6 +44,7 @@ impl FullMetadata {
             schema_oid,
             name,
             column_type_oid,
+            size,
             style,
             ordering,
             default_value,
@@ -54,6 +56,7 @@ impl FullMetadata {
                 c.SCHEMA_OID,
                 c.NAME,
                 c.TYPE_OID,
+                c.SIZE,
                 c.STYLE,
                 c.ORDERING,
                 c.DEFAULT_VALUE,
@@ -67,6 +70,7 @@ impl FullMetadata {
                     row.get::<_, i64>("SCHEMA_OID")?,
                     row.get::<_, String>("NAME")?,
                     row.get::<_, i64>("TYPE_OID")?,
+                    row.get::<_, i64>("SIZE")?,
                     row.get::<_, String>("STYLE")?,
                     row.get::<_, i64>("ORDERING")?,
                     row.get::<_, Option<String>>("DEFAULT_VALUE")?,
@@ -83,6 +87,7 @@ impl FullMetadata {
             schema,
             name,
             column_type,
+            size,
             style,
             ordering,
             default_value,
@@ -174,6 +179,7 @@ impl FullMetadata {
                 c.SCHEMA_OID,
                 c.NAME,
                 c.TYPE_OID,
+                c.SIZE,
                 c.STYLE,
                 c.ORDERING,
                 c.DEFAULT_VALUE,
@@ -191,13 +197,14 @@ impl FullMetadata {
                     row.get::<_, i64>("SCHEMA_OID")?,
                     row.get::<_, String>("NAME")?,
                     row.get::<_, i64>("TYPE_OID")?,
+                    row.get::<_, i64>("SIZE")?,
                     row.get::<_, String>("STYLE")?,
                     row.get::<_, i64>("ORDERING")?,
                     row.get::<_, Option<String>>("DEFAULT_VALUE")?,
                     row.get::<_, bool>("IS_PRIMARY_KEY")?,
                 ))
             }, 
-            |(oid, schema_oid, name, column_type_oid, style, ordering, default_value, is_primary_key)| {
+            |(oid, schema_oid, name, column_type_oid, size, style, ordering, default_value, is_primary_key)| {
                 let schema: schema::FullMetadata = schema::FullMetadata::get(&conn, schema_oid)?;
                 let column_type: column_type::ColumnType = column_type::ColumnType::get(column_type_oid)?;
                 sender.send(Self {
@@ -205,6 +212,7 @@ impl FullMetadata {
                     schema,
                     name,
                     column_type,
+                    size,
                     style,
                     ordering,
                     default_value,
@@ -302,7 +310,7 @@ impl FullMetadata {
         let column_type: column_type::ColumnType = self.column_type.clone();
         self.column_type = column_type.find_transact(trans)?;
 
-        if self.ordering < 0 {
+        if self.ordering <= 0 {
             // Set the ordering to the maximum
             self.ordering = sql_zero_or_one(
                 trans,
@@ -346,6 +354,7 @@ impl FullMetadata {
                 SCHEMA_OID,
                 NAME,
                 TYPE_OID,
+                SIZE,
                 STYLE,
                 ORDERING,
                 IS_PRIMARY_KEY,
@@ -357,13 +366,15 @@ impl FullMetadata {
                 ?4,
                 ?5,
                 ?6,
-                ?7
+                ?7,
+                ?8
             )
             ",
             params![
                 self.schema.oid,
                 self.name,
                 self.column_type.get_oid(),
+                self.size,
                 self.style,
                 self.ordering,
                 self.is_primary_key,
@@ -753,6 +764,28 @@ impl FullMetadata {
                 _ => {} // No copy necessary
             }
         }
+
+        // Commit the transaction
+        trans.commit()?;
+        Ok(())
+    }
+
+    /// Sets only the size of the column.
+    pub fn set_size(&mut self, new_size: i64) -> Result<(), Error> {
+        let mut conn = db::open()?;
+        let trans = conn.transaction()?;
+
+        // Update the style in the database
+        self.size = new_size;
+        sql_execute(
+            &trans,
+            "
+            UPDATE METADATA_COLUMN SET 
+                SIZE = ?1 
+            WHERE OID = ?2
+            ",
+            params![self.size, self.oid],
+        )?;
 
         // Commit the transaction
         trans.commit()?;

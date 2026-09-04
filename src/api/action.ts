@@ -17,11 +17,12 @@ export type Action = {
 } | {
     createColumn: ColumnFullMetadata
 } | {
-    editColumn: ColumnFullMetadata
+    replaceColumn: ColumnFullMetadata
 } | {
-    editColumnStyle: {
+    editColumn: {
         metadata: ColumnFullMetadata,
-        newColumnStyle: string
+        newColumnSize: number | null,
+        newColumnStyle: string | null 
     }
 } | {
     editColumnOrdering: {
@@ -66,7 +67,5 @@ export type Action = {
  * @returns May return the OID of the object created. Usually returns void.
  */
 export async function executeAsync(action: Action): Promise<void> {
-    console.debug(action);
-    console.trace();
     return await invoke('execute', { action: action });
 }

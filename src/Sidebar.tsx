@@ -8,6 +8,7 @@ import {
 import { HierarchicalListItemMetadata, queryAsync } from "./api/query";
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import expandImageSrc from './assets/expand_down.png';
 
 type SchemaHierarchyItem = [HierarchicalListItemMetadata, SchemaHierarchyItem[]];
 
@@ -127,7 +128,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                     >
                         {schema.name}
                     </Typography>
-                    <img src="/src-tauri/icons/expand_down.png" className={"px-2 transition-transform" + (expandedSchemaIndex >= 0 ? ' rotate-180' : '')} />
+                    <img src={expandImageSrc} className={"px-2 transition-transform" + (expandedSchemaIndex >= 0 ? ' rotate-180' : '')} />
                 </div>
                 {expandedSchemaIndex >= 0 && (<div className="flex flex-col">
                     {inheritorSchemas.map(createSchemaHierarchyItemNode)}
@@ -150,7 +151,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
             <div>
                 <div onClick={() => { setIsTableSidebarOpen(!isTableSidebarOpen); }} className="grid grid-cols-[1fr_40px] items-center w-full h-10 border-b-1 border-b-[rgb(var(--color-secondary-dark)/1)]">
                     <Typography type="h6" className="px-2 text-[rgb(var(--color-secondary-foreground)/1)]">Tables</Typography>
-                    <img src="/src-tauri/icons/expand_down.png" className={"px-2 transition-transform" + (isTableSidebarOpen ? ' rotate-180' : '')} />
+                    <img src={expandImageSrc} className={"px-2 transition-transform" + (isTableSidebarOpen ? ' rotate-180' : '')} />
                 </div>
                 {isTableSidebarOpen && <div>
                     {isTableListPending ? (<Spinner />) :
@@ -172,7 +173,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
             <div>
                 <div onClick={() => { setIsReportSidebarOpen(!isReportSidebarOpen); }} className="grid grid-cols-[1fr_40px] items-center w-full h-10 border-b-1 border-b-[rgb(var(--color-secondary-dark)/1)]">
                     <Typography type="h6" className="px-2 text-[rgb(var(--color-secondary-foreground)/1)]">Reports</Typography>
-                    <img src="/src-tauri/icons/expand_down.png" className={"px-2 transition-transform" + (isReportSidebarOpen ? ' rotate-180' : '')} />
+                    <img src={expandImageSrc} className={"px-2 transition-transform" + (isReportSidebarOpen ? ' rotate-180' : '')} />
                 </div>
                 {isReportSidebarOpen && <div>
                     {isReportListPending ? (<Spinner />) :
