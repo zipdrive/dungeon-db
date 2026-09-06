@@ -3,7 +3,7 @@ import { getCellAsync, getImageSrcAsync, queryAsync } from "./api/query";
 import { Channel } from "@tauri-apps/api/core";
 import { FullMetadata as ColumnFullMetadata } from "./api/model/column";
 import { SchemaRow, CellContent, CellStream, AddNewRowButton, CellIdentifier, CellDependency, File } from "./api/model/cell";
-import { cellPropertyEntry, useExtraColumnTypes, useBaseColumnTypes, cellDataRef, createRowProxy } from "./cell/Cell";
+import { useExtraColumnTypes, useBaseColumnTypes, cellDataRef, createRowProxy } from "./cell/Cell";
 import { executeAsync } from "./api/action";
 import { ObjectPageBreadcrumb, SchemaPageBreadcrumb } from "./breadcrumb";
 import { Schema as SchemaMetadata, FullMetadata as SchemaFullMetadata } from "./api/model/schema";
@@ -13,6 +13,10 @@ import { ColumnGrouping, ColumnProp, ColumnRegular as RevoGridColumn, ColumnType
 import classNames from "classnames";
 import './Grid.css';
 import { columnContextMenu } from "./cell/grid";
+import { ColDef } from 'ag-grid-community';
+import { AgGridReact } from 'ag-grid-react';
+import { cellPropertyEntry } from "./grid/DataRows";
+import { AddNewColumnButton } from "./grid/ColDef";
 
 
 type SchemaGridProps = {
@@ -27,68 +31,72 @@ type SchemaGridProps = {
     onError: (e: unknown) => void,
 };
 
+type SchemaGridRow = {
+    rowMetadata: SchemaRow,
+    blank: null,
+} & {
+    [key: `column${number}`]: CellContent
+};
+
 function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
+    /*
     const baseColumnTypes = useBaseColumnTypes(props.onRequestOpenSchema, props.onRequestOpenObject, props.onRequestUploadFile, props.onError);
     const extraColumnTypes = useExtraColumnTypes(props.columns, props.onError);
+    */
 
-    const columns: RevoGridColumn[] = useMemo(() => {
-        return props.columns.map((columnMetadata): RevoGridColumn => {
-            let columnType: string;
-            if ('select' in columnMetadata.columnType) {
-                columnType = `singleSelectDropdown${columnMetadata.columnType.select.tableOid}`;
-            } else if ('multiselect' in columnMetadata.columnType) {
-                columnType = `multiSelectDropdown${columnMetadata.columnType.multiselect.tableOid}`;
-            } else {
-                columnType = 'any';
-            }
-            return {
-                prop: `column${columnMetadata.oid}`,
-                name: columnMetadata.name,
-                size: columnMetadata.size,
-                columnType,
-                columnProperties: () => {
-                    return {
-                        'class': classNames(
-                            { "before:content-['🔑']": columnMetadata.isPrimaryKey },
-                            { "before:px-2": columnMetadata.isPrimaryKey }
-                        ),
-                        'onContextMenu': async (e) => {
-                            await columnContextMenu(e, columnMetadata, props.onRequestEditColumn, props.onError);
-                        }
-                    };
-                },
-                readonly(params) {
-                    const content: CellContent | null | undefined = params.model[`${String(params.prop)}content`];
-                    if (content) {
-                        return 'checkboxEntry' in content
-                            || 'objectLink' in content
-                            || 'schemaLink' in content 
-                            || 'readonly' in content;
-                    }
-                    return true;
+    const columnDefs: ColDef<SchemaGridRow>[] = useMemo(() => {
+        const indexColumn: ColDef<SchemaGridRow> = {
+            field: 'rowMetadata.index',
+            headerName: "",
+            
+            editable: false,
+            pinned: 'left',
+            lockPinned: true,
+        };
+        const addNewColumn: ColDef<SchemaGridRow> = {
+            field: 'blank',
+            headerName: "Add New Column",
+            editable: false,
+            width: 200,
+            headerComponent: AddNewColumnButton,
+            headerComponentParams: {
+                onClick: () => {
+                    props.onRequestCreateColumn(null);
                 }
-            };
-        })
-        .concat([{
-            prop: 'blank',
-            name: 'Add New Column',
-            readonly: true,
-            size: 200,
-            columnTemplate(createElement, _p) {
-                return createElement(
-                    'button',
-                    {
-                        'class': 'absolute left-4 inline-flex items-center justify-center border align-middle select-none font-sans font-medium text-center transition-all duration-300 ease-in disabled:opacity-50 disabled:shadow-none disabled:cursor-not-allowed data-[shape=pill]:rounded-full data-[width=full]:w-full focus:shadow-none text-sm rounded-md py-2 px-4 shadow-sm hover:shadow-md bg-gradient-to-tr from-primary-dark to-primary-light border-primary text-primary-foreground hover:brightness-105 cursor-pointer',
-                        'data-shape': "default",
-                        'data-width': "default",
-                        'onClick': () => {
-                            props.onRequestCreateColumn(null);
-                        }
-                    },
-                    "Add New Column"
-                );
             }
-        }]);
+        };
+        return [
+            indexColumn,
+            ...props.columns.map((columnMetadata): ColDef<SchemaGridRow> => {
+                let columnType: string;
+                if ('select' in columnMetadata.columnType) {
+                    columnType = `singleSelectDropdown${columnMetadata.columnType.select.tableOid}`;
+                } else if ('multiselect' in columnMetadata.columnType) {
+                    columnType = `multiSelectDropdown${columnMetadata.columnType.multiselect.tableOid}`;
+                } else {
+                    columnType = 'any';
+                }
+                return {
+                    field: `column${columnMetadata.oid}`,
+                    headerName: columnMetadata.name,
+                    headerClass: classNames(
+                        { "before:content-['🔑']": columnMetadata.isPrimaryKey },
+                        { "before:px-2": columnMetadata.isPrimaryKey }
+                    ),
+                    width: columnMetadata.size,
+                    editable({ data }) {
+                        if (data) {
+                            if (`column${columnMetadata.oid}` in data) {
+                                const content: CellContent = data[`column${columnMetadata.oid}`];
+                                return !('schemaLink' in content || 'readonly' in content);
+                            }
+                        }
+                        return false;
+                    }
+                };
+            }),
+            addNewColumn
+        ];
     }, [props.columns]);
 
 
@@ -145,15 +153,15 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
         })();
     }, [imgFiles]);
 
-    const dataRows = useMemo(() => {
+    const rowData: SchemaGridRow[] = useMemo(() => {
         return props.rows.map(([rowMetadata, rowCells]) => {
-            const rowModel = Object.assign({ rowMetadata, blank: null },
-                Object.fromEntries(rowCells.map((rowCell) => cellPropertyEntry(rowCell)))
+            return Object.assign({ rowMetadata, blank: null },
+                Object.fromEntries(rowCells.map((rowCell) => cellPropertyEntry(rowCell, imgFileSrcs))) as {[key: `column${number}`]: CellContent}
             );
-            return createRowProxy<{ rowMetadata: SchemaRow, blank: null }>(rowModel, imgFileSrcs, props.onError);
         });
-    }, [props.columns, props.rows, props.onError, imgFileSrcs]);
+    }, [props.rows, imgFileSrcs]);
 
+    /*
     const grid = useRef<HTMLRevoGridElement | null>(null);
     useEffect(() => {
         const unlistenCell = listen<CellIdentifier>('cell', async (e) => {
@@ -220,8 +228,8 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
                 }
 
                 const newImgFiles: File[] = [...imgFiles];
-                for (let rowIndex: number = 0; rowIndex < dataRows.length; ++rowIndex) {
-                    const rowProxy = dataRows[rowIndex];
+                for (let rowIndex: number = 0; rowIndex < rowData.length; ++rowIndex) {
+                    const rowProxy = rowData[rowIndex];
                     for (const key in rowProxy) {
                         const typedKey: keyof typeof rowProxy = key as keyof typeof rowProxy;
                         if (typedKey.startsWith('column')) {
@@ -251,51 +259,13 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
         return () => {
             unlistenCell.then(f => f());
         }
-    }, [dataRows, props.onRequestUpdateSchema]);
+    }, [rowData, props.onRequestUpdateSchema]);
+    */
 
 
-    return (<RevoGrid
-        ref={grid}
-        className="schema-grid"
-        columnTypes={Object.assign(baseColumnTypes, extraColumnTypes)}
-        columns={columns}
-        source={dataRows}
-        rowHeaders={{
-            prop: 'rowMetadata',
-            cellTemplate(createElement, props) {
-                const rowMetadata: SchemaRow = props.model[props.prop];
-                return createElement(
-                    'div',
-                    {
-                        'class': classNames('text-center')
-                    },
-                    rowMetadata.index.toString()
-                )
-            }
-        }}
-        stretch={true}
-        resizeRow={true}
-        range={true}
-        applyOnClose={true}
-        onAftercolumnresize={async (event) => {
-            for (const rowIndex in event.detail) {
-                const detail = event.detail[rowIndex];
-                try {
-                    const columnMetadata: ColumnFullMetadata | undefined = props.columns.find((c) => String(detail.prop) === `column${c.oid}`);
-                    if (columnMetadata) {
-                        await executeAsync({
-                            editColumn: {
-                                metadata: columnMetadata,
-                                newColumnSize: detail.size ?? 150,
-                                newColumnStyle: null
-                            }
-                        });
-                    }
-                } catch (e) {
-                    props.onError(e);
-                }
-            }
-        }}
+    return (<AgGridReact
+        columnDefs={columnDefs}
+        rowData={rowData}
     />);
 }
 

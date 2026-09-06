@@ -239,51 +239,7 @@ export function createRowProxy<T extends object>(row: RowModel<T>, imgFileSrcs: 
 }
 
 
-/**
- * Creates an object property entry for a cell.
- */
-export function cellPropertyEntry(content: CellContent, key?: string): [string, CellContent] {
-    if ('textEntry' in content) {
-        // Text cell
-        return [key ?? `column${content.textEntry.cellIdentifier.columnOid}`, content];
-    } else if ('integerEntry' in content) {
-        // Integer cell
-        return [key ?? `column${content.integerEntry.cellIdentifier.columnOid}`, content];
-    } else if ('numberEntry' in content) {
-        // Number cell
-        return [key ?? `column${content.numberEntry.cellIdentifier.columnOid}`, content];
-    } else if ('dateEntry' in content) {
-        // Date cell
-        return [key ?? `column${content.dateEntry.cellIdentifier.columnOid}`, content];
-    } else if ('datetimeEntry' in content) {
-        // Datetime cell
-        return [key ?? `column${content.datetimeEntry.cellIdentifier.columnOid}`, content];
-    } else if ('checkboxEntry' in content) {
-        // Checkbox cell
-        return [key ?? `column${content.checkboxEntry.cellIdentifier.columnOid}`, content];
-    } else if ('fileEntry' in content) {
-        // File cell
-        return [key ?? `column${content.fileEntry.cellIdentifier.columnOid}`, content];
-    } else if ('imageEntry' in content) {
-        // Image cell
-        return [key ?? `column${content.imageEntry.cellIdentifier.columnOid}`, content];
-    } else if ('schemaLink' in content) {
-        // Schema link cell
-        return [key ?? `column${content.schemaLink.cellIdentifier.columnOid}`, content];
-    } else if ('objectLink' in content) {
-        // Object link cell
-        return [key ?? `column${content.objectLink.cellIdentifier.columnOid}`, content];
-    } else if ('singleSelectDropdown' in content) {
-        // Single-Select Dropdown cell
-        return [key ?? `column${content.singleSelectDropdown.cellIdentifier.columnOid}`, content];
-    } else if ('multiSelectDropdown' in content) {
-        // Multi-Select Dropdown cell
-        return [key ?? `column${content.multiSelectDropdown.cellIdentifier.columnOid}`, content];
-    } else {
-        // Readonly cell
-        return [key ?? `column${content.readonly.cellIdentifier.columnOid}`, content];
-    }
-}
+
 
 /**
  * Maps cell content to a reference to the corresponding table cell.

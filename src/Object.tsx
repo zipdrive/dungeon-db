@@ -8,9 +8,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import classNames from "classnames";
 import { RevoGrid, ColumnRegular as RevoGridColumn } from "@revolist/react-datagrid";
-import { cellPropertyEntry, createRowProxy, useBaseColumnTypes, useExtraColumnTypes } from "./cell/Cell";
+import { createRowProxy, useBaseColumnTypes, useExtraColumnTypes } from "./cell/Cell";
 import './Grid.css';
 import { columnContextMenu } from "./cell/grid";
+import { AgGridReact } from "ag-grid-react";
+import { cellPropertyEntry } from "./grid/DataRows";
 
 
 type ObjectGridProps = {
@@ -25,6 +27,7 @@ type ObjectGridProps = {
 };
 
 function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
+    /*
     const baseColumnTypes = useBaseColumnTypes(props.onRequestOpenSchema, props.onRequestOpenObject, props.onRequestUploadFile, props.onError);
     const extraColumnTypes = useExtraColumnTypes(props.columns, props.onError);
 
@@ -43,6 +46,7 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
             return true;
         }
     }];
+    */
 
 
     const [imgFiles, setImgFiles] = useState<File[]>([]);
@@ -97,7 +101,7 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
     }, [imgFiles]);
 
 
-    const dataRows = useMemo(() => {
+    const rowData = useMemo(() => {
         const [rowMetadata, rowCells] = props.row;
         return rowCells.map((rowCell, idx) => {
             if (idx >= props.columns.length) {
@@ -111,6 +115,7 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
         });
     }, [props.columns, props.row, props.onError, imgFileSrcs]);
 
+    /*
     const grid = useRef<HTMLRevoGridElement | null>(null);
     useEffect(() => {
         const unlistenCell = listen<CellIdentifier>('cell', async (e) => {
@@ -177,8 +182,8 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
                 }
 
                 const newImgFiles: File[] = [...imgFiles];
-                for (let rowIndex: number = 0; rowIndex < dataRows.length; ++rowIndex) {
-                    const rowProxy = dataRows[rowIndex];
+                for (let rowIndex: number = 0; rowIndex < rowData.length; ++rowIndex) {
+                    const rowProxy = rowData[rowIndex];
                     for (const key in rowProxy) {
                         const typedKey: keyof typeof rowProxy = key as keyof typeof rowProxy;
                         if (typedKey.startsWith('column')) {
@@ -208,8 +213,8 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
         return () => {
             unlistenCell.then(f => f());
         }
-    }, [dataRows, props.onRequestUpdateSchema]);
-
+    }, [rowData, props.onRequestUpdateSchema]);
+    */
 
     const rowHeaderSize: number = useMemo<number>(() => {
         const maxLength: number = props.columns.reduce((acc, columnMetadata) => acc < columnMetadata.name.length ? columnMetadata.name.length : acc, 0);
@@ -217,41 +222,8 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
     }, [props.columns]);
 
 
-    return (<RevoGrid
-        ref={grid}
-        className="object-grid"
-        columnTypes={Object.assign(baseColumnTypes, extraColumnTypes)}
-        columns={columns}
-        source={dataRows}
-        rowHeaders={{
-            prop: 'cellColumnMetadata',
-            size: rowHeaderSize,
-            cellProperties: (p) => {
-                const columnMetadata: ColumnFullMetadata = p.model[p.prop];
-                return {
-                    'class': classNames(
-                        { "before:content-['🔑']": columnMetadata.isPrimaryKey },
-                        { "before:px-2": columnMetadata.isPrimaryKey }
-                    ),
-                    'onContextMenu': async (e) => {
-                        await columnContextMenu(e, columnMetadata, props.onRequestEditColumn, props.onError);
-                    }
-                };
-            },
-            cellTemplate(createElement, props) {
-                const columnMetadata: ColumnFullMetadata = props.model[props.prop];
-                return createElement(
-                    'span',
-                    {},
-                    columnMetadata.name
-                );
-            }
-        }}
-        resizeRow={true}
-        filter={false}
-        stretch={true}
-        range={true}
-        applyOnClose={true}
+    return (<AgGridReact
+        rowData={rowData}
     />);
 }
 
