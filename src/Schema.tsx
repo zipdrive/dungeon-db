@@ -13,10 +13,13 @@ import { ColumnGrouping, ColumnProp, ColumnRegular as RevoGridColumn, ColumnType
 import classNames from "classnames";
 import './Grid.css';
 import { columnContextMenu } from "./cell/grid";
-import { ColDef } from 'ag-grid-community';
+import { CellEditRequestEvent, ColDef, ColumnResizedEvent, RowDataTransaction, RowResizeEndedEvent } from 'ag-grid-community';
 import { AgGridReact } from 'ag-grid-react';
 import { cellPropertyEntry } from "./grid/DataRows";
 import { AddNewColumnButton } from "./grid/ColDef";
+import { selectEditor } from "./grid/EditorSelector";
+import { getValue } from "./grid/ValueGetter";
+import { editCellContents } from "./grid/CellEditRequest";
 
 
 type SchemaGridProps = {
@@ -48,7 +51,8 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
         const indexColumn: ColDef<SchemaGridRow> = {
             field: 'rowMetadata.index',
             headerName: "",
-            
+            cellClass: classNames('text-center'),
+            width: 55,
             editable: false,
             pinned: 'left',
             lockPinned: true,
@@ -57,6 +61,7 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
             field: 'blank',
             headerName: "Add New Column",
             editable: false,
+            resizable: false,
             width: 200,
             headerComponent: AddNewColumnButton,
             headerComponentParams: {
@@ -68,6 +73,8 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
         return [
             indexColumn,
             ...props.columns.map((columnMetadata): ColDef<SchemaGridRow> => {
+                const key: `column${number}` = `column${columnMetadata.oid}`;
+
                 let columnType: string;
                 if ('select' in columnMetadata.columnType) {
                     columnType = `singleSelectDropdown${columnMetadata.columnType.select.tableOid}`;
@@ -77,21 +84,43 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
                     columnType = 'any';
                 }
                 return {
-                    field: `column${columnMetadata.oid}`,
-                    headerName: columnMetadata.name,
-                    headerClass: classNames(
-                        { "before:content-['🔑']": columnMetadata.isPrimaryKey },
-                        { "before:px-2": columnMetadata.isPrimaryKey }
-                    ),
+                    colId: key,
+                    headerName: `${columnMetadata.isPrimaryKey ? '🔑 ' : ''}${columnMetadata.name}`,
+                    cellClass: classNames(key),
                     width: columnMetadata.size,
+                    resizable: true,
+                    autoHeight: true,
+                    wrapText: true,
                     editable({ data }) {
                         if (data) {
-                            if (`column${columnMetadata.oid}` in data) {
-                                const content: CellContent = data[`column${columnMetadata.oid}`];
+                            if (key in data) {
+                                const content: CellContent = data[key];
                                 return !('schemaLink' in content || 'readonly' in content);
                             }
                         }
                         return false;
+                    },
+                    cellEditorSelector({ data }) {
+                        if (data) {
+                            if (key in data) {
+                                const content: CellContent = data[key];
+                                console.log(key, selectEditor(content));
+                                return selectEditor(content);
+                            }
+                        }
+                        return {
+                            component: 'agTextCellEditor'
+                        };
+                    },
+                    valueGetter({ data }) {
+                        if (data) {
+                            if (key in data) {
+                                const content: CellContent = data[key];
+                                console.log(content, getValue(content));
+                                return getValue(content);
+                            }
+                        }
+                        return null;
                     }
                 };
             }),
@@ -161,8 +190,7 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
         });
     }, [props.rows, imgFileSrcs]);
 
-    /*
-    const grid = useRef<HTMLRevoGridElement | null>(null);
+    const grid = useRef<AgGridReact | null>(null);
     useEffect(() => {
         const unlistenCell = listen<CellIdentifier>('cell', async (e) => {
             const changedCellIdentifier = e.payload;
@@ -227,14 +255,16 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
                     return null;
                 }
 
+                const trans: RowDataTransaction<SchemaGridRow> = {
+                    update: []
+                };
                 const newImgFiles: File[] = [...imgFiles];
                 for (let rowIndex: number = 0; rowIndex < rowData.length; ++rowIndex) {
-                    const rowProxy = rowData[rowIndex];
-                    for (const key in rowProxy) {
-                        const typedKey: keyof typeof rowProxy = key as keyof typeof rowProxy;
-                        if (typedKey.startsWith('column')) {
-                            const contentKey = typedKey.endsWith('content') ? typedKey as `column${number}content` : `${typedKey}content` as `column${number}content`;
-                            const rowCell: CellContent = rowProxy[contentKey];
+                    const row = {...rowData[rowIndex]};
+                    for (const key in row) {
+                        if (key.startsWith('column')) {
+                            const typedKey: `column${number}` = key as `column${number}`;
+                            const rowCell: CellContent = row[typedKey];
 
                             const { cellIdentifier, isolatedCellDependencies, fullReloadCellDependencies } = extractIdentifiersAndDependencies(rowCell);
                             const result = check(cellIdentifier, isolatedCellDependencies, fullReloadCellDependencies);
@@ -246,13 +276,16 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
                                 if ('imageEntry' in updatedCell && updatedCell.imageEntry.file) {
                                     newImgFiles.push(updatedCell.imageEntry.file);
                                 }
-                                rowProxy[contentKey] = updatedCell;
+                                row[typedKey] = updatedCell;
+                                if (trans.update && trans.update[trans.update.length - 1] !== row) {
+                                    trans.update.push(row);
+                                }
                             }
                         }
                     }
                 }
                 setImgFiles(newImgFiles);
-                grid.current?.refresh();
+                grid.current?.api.applyTransaction(trans);
             } // Ignore emitted cells located on a report
         });
 
@@ -260,12 +293,44 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
             unlistenCell.then(f => f());
         }
     }, [rowData, props.onRequestUpdateSchema]);
-    */
 
+    const onCellEditRequest = useCallback((event: CellEditRequestEvent) => {
+        if (event.colDef.colId?.startsWith('column')) {
+            const key: `column${number}` = event.colDef.colId as `column${number}`;
+            const content: CellContent = event.data[key];
+            editCellContents(content, event.newValue, props.onError);
+        }
+    }, [props.onError]);
+
+    const onColumnResized = useCallback((event: ColumnResizedEvent) => {
+        if (event.finished && event.columns) {
+            for (const column of event.columns) {
+                if (column.getColId().startsWith('column')) {
+                    const key: `column${number}` = column.getColId() as `column${number}`;
+                    const metadata = props.columns.find((c) => `column${c.oid}` === key);
+                    if (metadata) {
+                        executeAsync({
+                            editColumn: {
+                                metadata,
+                                newColumnSize: Math.floor(column.getActualWidth()),
+                                newColumnStyle: null
+                            }
+                        })
+                        .catch(props.onError);
+                    }
+                }
+            }
+        }
+    }, [props.columns, props.onError]);
 
     return (<AgGridReact
+        ref={grid}
         columnDefs={columnDefs}
+        onColumnResized={onColumnResized}
         rowData={rowData}
+        getRowId={({ data }) => data.rowMetadata.index.toString()}
+        readOnlyEdit={true}
+        onCellEditRequest={onCellEditRequest}
     />);
 }
 
@@ -285,7 +350,7 @@ type SchemaProps = {
 
 export function SchemaPage(props: SchemaProps): React.JSX.Element {
     const [pageNum, setPageNum] = useState<number>(1);
-    const [pageSize, setPageSize] = useState<number>(2000);
+    const [pageSize, setPageSize] = useState<number>(100);
     const [maxPageNum, setMaxPageNum] = useState<number>(1);
 
     const [columns, setColumns] = useState<ColumnFullMetadata[]>([]);

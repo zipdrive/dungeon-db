@@ -154,7 +154,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                     <img src={expandImageSrc} className={"px-2 transition-transform" + (isTableSidebarOpen ? ' rotate-180' : '')} />
                 </div>
                 {isTableSidebarOpen && <div>
-                    {isTableListPending ? (<Spinner />) :
+                    {isTableListPending ? (<div className="flex flex-row justify-center py-2"><Spinner /></div>) :
                         (<div className="flex flex-col justify-center gap-2 py-2">
                             {tableList.length > 0 && <div className="flex flex-col py-1">
                             {tableList.map(createSchemaHierarchyItemNode)}
@@ -176,7 +176,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                     <img src={expandImageSrc} className={"px-2 transition-transform" + (isReportSidebarOpen ? ' rotate-180' : '')} />
                 </div>
                 {isReportSidebarOpen && <div>
-                    {isReportListPending ? (<Spinner />) :
+                    {isReportListPending ? (<div className="flex flex-row justify-center py-2"><Spinner /></div>) :
                         (<div className="flex flex-col justify-center gap-2 py-2">
                             {reportList.length > 0 && (<div className="flex flex-col">
                                 {reportList.map(createSchemaHierarchyItemNode)}
