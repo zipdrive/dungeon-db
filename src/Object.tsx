@@ -4,7 +4,7 @@ import { SchemaPageBreadcrumb, ObjectPageBreadcrumb } from "./breadcrumb";
 import { CellContent, CellDependency, CellIdentifier, File, SchemaRow } from "./api/model/cell";
 import { FullMetadata as ColumnFullMetadata } from "./api/model/column";
 import { Schema } from "./api/model/schema";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import classNames from "classnames";
 import { RevoGrid, ColumnRegular as RevoGridColumn } from "@revolist/react-datagrid";
@@ -13,6 +13,11 @@ import './Grid.css';
 import { columnContextMenu } from "./cell/grid";
 import { AgGridReact } from "ag-grid-react";
 import { cellPropertyEntry } from "./grid/DataRows";
+import { AutoSizeStrategy, CellEditRequestEvent, ColDef, ColumnResizedEvent, RowDataTransaction, themeBalham } from "ag-grid-community";
+import { selectRenderer } from "./grid/RendererSelector";
+import { selectEditor } from "./grid/EditorSelector";
+import { getValue } from "./grid/ValueGetter";
+import { editCellContents } from "./grid/CellEditRequest";
 
 
 type ObjectGridProps = {
@@ -25,6 +30,27 @@ type ObjectGridProps = {
     onRequestOpenObject: (object: ObjectPageBreadcrumb) => void,
     onError: (e: unknown) => void,
 };
+
+type ObjectGridRow = {
+    rowId: `column${number}`,
+    rowMetadata: SchemaRow,
+    columnMetadata: ColumnFullMetadata,
+    content: CellContent
+} | {
+    rowId: 'subtype'
+};
+
+const objectGridTheme = themeBalham.withParams({
+    backgroundColor: 'rgb(var(--color-surface-light)/1)',
+    oddRowBackgroundColor: 'inherit',
+    textColor: 'rgb(var(--color-surface-foreground)/1)',
+    chromeBackgroundColor: 'rgb(var(--color-surface)/1)',
+    headerTextColor: 'inherit',
+    borderColor: 'rgb(var(--color-surface-dark)/1)',
+    fontFamily: 'inherit',
+    fontSize: 'inherit',
+    rowHoverColor: 'rgb(var(--color-primary)/0.05)',
+});
 
 function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
     /*
@@ -47,6 +73,97 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
         }
     }];
     */
+    
+    const columnDefs: ColDef<ObjectGridRow>[] = useMemo(() => {
+        return [
+            {
+                headerName: "Name",
+                valueGetter({ data }) {
+                    if (data) {
+                        if (data.rowId === 'subtype') {
+
+                        } else {
+                            const columnMetadata = data.columnMetadata;
+                            return `${columnMetadata.isPrimaryKey ? '🔑 ' : ''}${columnMetadata.name}`;
+                        }
+                    } else {
+                        return '';
+                    }
+                },
+                cellClass: classNames('font-bold'),
+                width: 150,
+                resizable: true,
+                suppressSizeToFit: true,
+                editable: false,
+                pinned: 'left',
+                lockPinned: true,
+            },
+            {
+                headerName: "Value",
+                cellClass({ data }) {
+                    if (data) {
+                        if (data.rowId === 'subtype') {
+
+                        } else {
+                            const columnMetadata = data.columnMetadata;
+                            return `column${columnMetadata.oid}`;
+                        }
+                    } else {
+                        return '';
+                    }
+                },
+                flex: 1,
+                resizable: false,
+                wrapText: true,
+                editable({ data }) {
+                    if (data) {
+                        if (data.rowId === 'subtype') {
+
+                        } else {
+                            const content: CellContent = data.content;
+                            return !('schemaLink' in content || 'readonly' in content);
+                        }
+                    }
+                    return false;
+                },
+                cellRendererSelector({ data }) {
+                    if (data) {
+                        if (data.rowId === 'subtype') {
+
+                        } else {
+                            const content: CellContent = data.content;
+                            return selectRenderer(content, props.onRequestOpenSchema, props.onRequestOpenObject);
+                        }
+                    }
+                    return undefined;
+                },
+                cellEditorSelector({ data }) {
+                    if (data) {
+                        if (data.rowId === 'subtype') {
+
+                        } else {
+                            const content: CellContent = data.content;
+                            return selectEditor(content);
+                        }
+                    }
+                    return {
+                        component: 'agTextCellEditor'
+                    };
+                },
+                valueGetter({ data }) {
+                    if (data) {
+                        if (data.rowId === 'subtype') {
+
+                        } else {
+                            const content: CellContent = data.content;
+                            return getValue(content);
+                        }
+                    }
+                    return null;
+                }
+            }
+        ];
+    }, [props.columns]);
 
 
     const [imgFiles, setImgFiles] = useState<File[]>([]);
@@ -101,22 +218,24 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
     }, [imgFiles]);
 
 
-    const rowData = useMemo(() => {
+    const rowData: ObjectGridRow[] = useMemo(() => {
         const [rowMetadata, rowCells] = props.row;
         return rowCells.map((rowCell, idx) => {
             if (idx >= props.columns.length) {
                 throw new Error(`Was streamed less columns than cells.`);
             }
             const columnMetadata = props.columns[idx];
-            const rowModel = Object.assign({ cellColumnMetadata: columnMetadata, cellRowMetadata: rowMetadata },
-                Object.fromEntries([cellPropertyEntry(rowCell, 'column0')])
-            );
-            return createRowProxy<{ cellColumnMetadata: ColumnFullMetadata, cellRowMetadata: SchemaRow }>(rowModel, imgFileSrcs, props.onError);
+            const [key, content] = cellPropertyEntry(rowCell, imgFileSrcs);
+            return {
+                rowId: key,
+                columnMetadata,
+                rowMetadata,
+                content
+            };
         });
     }, [props.columns, props.row, props.onError, imgFileSrcs]);
 
-    /*
-    const grid = useRef<HTMLRevoGridElement | null>(null);
+    const grid = useRef<AgGridReact | null>(null);
     useEffect(() => {
         const unlistenCell = listen<CellIdentifier>('cell', async (e) => {
             const changedCellIdentifier = e.payload;
@@ -181,32 +300,35 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
                     return null;
                 }
 
+                const trans: RowDataTransaction<ObjectGridRow> = {
+                    update: []
+                };
                 const newImgFiles: File[] = [...imgFiles];
                 for (let rowIndex: number = 0; rowIndex < rowData.length; ++rowIndex) {
-                    const rowProxy = rowData[rowIndex];
-                    for (const key in rowProxy) {
-                        const typedKey: keyof typeof rowProxy = key as keyof typeof rowProxy;
-                        if (typedKey.startsWith('column')) {
-                            const contentKey = typedKey.endsWith('content') ? typedKey as `column${number}content` : `${typedKey}content` as `column${number}content`;
-                            const rowCell: CellContent = rowProxy[contentKey];
+                    const row = rowData[rowIndex];
+                    if (row.rowId !== 'subtype') {
+                        const rowCell: CellContent = row.content;
 
-                            const { cellIdentifier, isolatedCellDependencies, fullReloadCellDependencies } = extractIdentifiersAndDependencies(rowCell);
-                            const result = check(cellIdentifier, isolatedCellDependencies, fullReloadCellDependencies);
-                            if (result === 'schema') {
-                                await props.onRequestUpdateSchema();
-                                return;
-                            } else if (result === 'cell') {
-                                const updatedCell = await getCellAsync(cellIdentifier);
-                                if ('imageEntry' in updatedCell && updatedCell.imageEntry.file) {
-                                    newImgFiles.push(updatedCell.imageEntry.file);
-                                }
-                                rowProxy[contentKey] = updatedCell;
+                        const { cellIdentifier, isolatedCellDependencies, fullReloadCellDependencies } = extractIdentifiersAndDependencies(rowCell);
+                        const result = check(cellIdentifier, isolatedCellDependencies, fullReloadCellDependencies);
+                        if (result === 'schema') {
+                            await props.onRequestUpdateSchema();
+                            return;
+                        } else if (result === 'cell') {
+                            const updatedCell = await getCellAsync(cellIdentifier);
+                            if ('imageEntry' in updatedCell && updatedCell.imageEntry.file) {
+                                newImgFiles.push(updatedCell.imageEntry.file);
+                            }
+                            row.content = updatedCell;
+                            if (trans.update) {
+                                trans.update.push(row);
                             }
                         }
                     }
                 }
                 setImgFiles(newImgFiles);
-                grid.current?.refresh();
+                console.log(trans);
+                grid.current?.api.applyTransaction(trans);
             } // Ignore emitted cells located on a report
         });
 
@@ -214,16 +336,40 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
             unlistenCell.then(f => f());
         }
     }, [rowData, props.onRequestUpdateSchema]);
-    */
 
-    const rowHeaderSize: number = useMemo<number>(() => {
-        const maxLength: number = props.columns.reduce((acc, columnMetadata) => acc < columnMetadata.name.length ? columnMetadata.name.length : acc, 0);
-        return 50 + (12 * maxLength);
-    }, [props.columns]);
+    const autoSizeStrategy = useMemo<AutoSizeStrategy>(() => {
+        return {
+            type: 'fitGridWidth'
+        }
+    }, []);
+    
+    const onCellEditRequest = useCallback((event: CellEditRequestEvent<ObjectGridRow>) => {
+        if (event.data.rowId === 'subtype') {
+            // TODO
+        } else {
+            const content: CellContent = event.data.content;
+            editCellContents(content, event.newValue, props.onError);
+        }
+    }, [props.onError]);
+    
+    const onColumnResized = useCallback((event: ColumnResizedEvent) => {
+        //if (event.finished) {
+            event.api.sizeColumnsToFit();
+        //}
+    }, []);
 
 
     return (<AgGridReact
+        ref={grid}
+        columnDefs={columnDefs}
         rowData={rowData}
+        getRowId={({ data }) => data.rowId}
+        autoSizeStrategy={autoSizeStrategy}
+        onColumnResized={onColumnResized}
+        readOnlyEdit={true}
+        onCellEditRequest={onCellEditRequest}
+        theme={objectGridTheme}
+        animateRows={false}
     />);
 }
 

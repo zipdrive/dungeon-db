@@ -117,7 +117,7 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
                         if (data) {
                             if (key in data) {
                                 const content: CellContent = data[key];
-                                return selectRenderer(content);
+                                return selectRenderer(content, props.onRequestOpenSchema, props.onRequestOpenObject);
                             }
                         }
                         return undefined;
