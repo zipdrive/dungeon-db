@@ -45,7 +45,7 @@ export function editCellContents(content: CellContent, value: any, onError: (e: 
         cellIdentifier = content.numberEntry.cellIdentifier;
     } else if ('dateEntry' in content) {
         // Date cell
-        const date: Date | null = typeof value === 'string' ? (new Date(value) ?? null) : null;
+        const date: Date | null = typeof value === 'string' ? (new Date(value) ?? null) : (value instanceof Date ? value : null);
         promise = executeAsync({
             editCellContents: {
                 tableOid: content.dateEntry.dataTableOid,
@@ -61,7 +61,7 @@ export function editCellContents(content: CellContent, value: any, onError: (e: 
         cellIdentifier = content.dateEntry.cellIdentifier;
     } else if ('datetimeEntry' in content) {
         // Datetime cell
-        const datetime: Date | null = typeof value === 'string' ? (new Date(value) ?? null) : null;
+        const datetime: Date | null = typeof value === 'string' ? (new Date(value) ?? null) : (value instanceof Date ? value : null);
         promise = executeAsync({
             editCellContents: {
                 tableOid: content.datetimeEntry.dataTableOid,

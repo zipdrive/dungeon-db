@@ -8,18 +8,20 @@ import { executeAsync } from "./api/action";
 import { ObjectPageBreadcrumb, SchemaPageBreadcrumb } from "./breadcrumb";
 import { Schema as SchemaMetadata, FullMetadata as SchemaFullMetadata } from "./api/model/schema";
 import { listen } from "@tauri-apps/api/event";
-import { Button } from "@material-tailwind/react";
+import { Button, Spinner } from "@material-tailwind/react";
 import { ColumnGrouping, ColumnProp, ColumnRegular as RevoGridColumn, ColumnType as RevoGridColumnType, DataType, RevoGrid, CellProps, RowDefinition } from "@revolist/react-datagrid";
 import classNames from "classnames";
 import './Grid.css';
 import { columnContextMenu } from "./cell/grid";
-import { CellEditRequestEvent, ColDef, ColumnResizedEvent, RowDataTransaction, RowResizeEndedEvent } from 'ag-grid-community';
+import { CellEditRequestEvent, CheckboxCellRenderer, ColDef, ColumnResizedEvent, RowDataTransaction, RowResizeEndedEvent, themeBalham } from 'ag-grid-community';
 import { AgGridReact } from 'ag-grid-react';
 import { cellPropertyEntry } from "./grid/DataRows";
 import { AddNewColumnButton } from "./grid/ColDef";
 import { selectEditor } from "./grid/EditorSelector";
 import { getValue } from "./grid/ValueGetter";
 import { editCellContents } from "./grid/CellEditRequest";
+import { PlainTextCellRenderer } from "./grid/renderer/PlainTextCellRenderer";
+import { selectRenderer } from "./grid/RendererSelector";
 
 
 type SchemaGridProps = {
@@ -41,6 +43,18 @@ type SchemaGridRow = {
     [key: `column${number}`]: CellContent
 };
 
+const schemaGridTheme = themeBalham.withParams({
+    backgroundColor: 'rgb(var(--color-surface-light)/1)',
+    oddRowBackgroundColor: 'inherit',
+    textColor: 'rgb(var(--color-surface-foreground)/1)',
+    chromeBackgroundColor: 'rgb(var(--color-surface)/1)',
+    headerTextColor: 'inherit',
+    borderColor: 'rgb(var(--color-surface-dark)/1)',
+    fontFamily: 'inherit',
+    fontSize: 'inherit',
+    rowHoverColor: 'rgb(var(--color-primary)/0.05)',
+});
+
 function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
     /*
     const baseColumnTypes = useBaseColumnTypes(props.onRequestOpenSchema, props.onRequestOpenObject, props.onRequestUploadFile, props.onError);
@@ -51,7 +65,7 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
         const indexColumn: ColDef<SchemaGridRow> = {
             field: 'rowMetadata.index',
             headerName: "",
-            cellClass: classNames('text-center'),
+            cellClass: classNames('text-center', 'opacity-30'),
             width: 55,
             editable: false,
             pinned: 'left',
@@ -89,7 +103,6 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
                     cellClass: classNames(key),
                     width: columnMetadata.size,
                     resizable: true,
-                    autoHeight: true,
                     wrapText: true,
                     editable({ data }) {
                         if (data) {
@@ -100,11 +113,19 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
                         }
                         return false;
                     },
+                    cellRendererSelector({ data }) {
+                        if (data) {
+                            if (key in data) {
+                                const content: CellContent = data[key];
+                                return selectRenderer(content);
+                            }
+                        }
+                        return undefined;
+                    },
                     cellEditorSelector({ data }) {
                         if (data) {
                             if (key in data) {
                                 const content: CellContent = data[key];
-                                console.log(key, selectEditor(content));
                                 return selectEditor(content);
                             }
                         }
@@ -116,7 +137,6 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
                         if (data) {
                             if (key in data) {
                                 const content: CellContent = data[key];
-                                console.log(content, getValue(content));
                                 return getValue(content);
                             }
                         }
@@ -260,7 +280,7 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
                 };
                 const newImgFiles: File[] = [...imgFiles];
                 for (let rowIndex: number = 0; rowIndex < rowData.length; ++rowIndex) {
-                    const row = {...rowData[rowIndex]};
+                    const row = rowData[rowIndex];
                     for (const key in row) {
                         if (key.startsWith('column')) {
                             const typedKey: `column${number}` = key as `column${number}`;
@@ -331,6 +351,8 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
         getRowId={({ data }) => data.rowMetadata.index.toString()}
         readOnlyEdit={true}
         onCellEditRequest={onCellEditRequest}
+        theme={schemaGridTheme}
+        animateRows={false}
     />);
 }
 
@@ -427,7 +449,7 @@ export function SchemaPage(props: SchemaProps): React.JSX.Element {
         {columns.map((columnMetadata) => (<style>{`.column${columnMetadata.oid}`} &#123; {columnMetadata.style} &#125;</style>))}
         <div 
             ref={subPixelCorrectionDiv}
-            className="m-4 mr-8 grid grid-col grid-rows-[1fr_auto] gap-y-10"
+            className="relative m-4 mr-8 grid grid-col grid-rows-[1fr_auto] gap-y-2"
         >
             <SchemaGrid 
                 columns={columns}

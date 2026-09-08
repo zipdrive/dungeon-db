@@ -20,7 +20,10 @@ export function selectEditor(content: CellContent): CellEditorSelectorResult {
         };
     } else if ('dateEntry' in content || 'datetimeEntry' in content) {
         return {
-            component: 'agDateCellEditor'
+            component: 'agDateCellEditor',
+            params: {
+                includeTime: 'datetimeEntry' in content
+            }
         };
     } else {
         return {

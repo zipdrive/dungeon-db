@@ -1,4 +1,5 @@
-import { CellContent } from "../api/model/cell";
+import { CellContent, FileEntryCellContent, ImageEntryCellContent, ObjectLinkCellContent, SchemaLinkCellContent } from "../api/model/cell";
+import { getColumnAsync, getSchemaMetadataAsync } from "../api/query";
 import { PageBreadcrumb } from "../breadcrumb";
 
 export type FileData = {
@@ -7,10 +8,10 @@ export type FileData = {
 
 export type BreadcrumbData = {
     label: string,
-    breadcrumb: PageBreadcrumb | null
+    breadcrumb: PageBreadcrumb
 };
 
-export function getValue(content: CellContent): string | number | boolean | Date | FileData | BreadcrumbData | null {
+export function getValue(content: CellContent): string | number | boolean | Date | FileEntryCellContent | ImageEntryCellContent | ObjectLinkCellContent | SchemaLinkCellContent | null {
     if ('textEntry' in content) {
         return content.textEntry.label;
     } else if ('integerEntry' in content) {
@@ -24,22 +25,13 @@ export function getValue(content: CellContent): string | number | boolean | Date
     } else if ('datetimeEntry' in content) {
         return content.datetimeEntry.label ? new Date(content.datetimeEntry.label) : null;
     } else if ('fileEntry' in content) {
-        return {
-            label: content.fileEntry.label ?? ''
-        };
+        return content.fileEntry;
     } else if ('imageEntry' in content) {
-        return {
-            label: content.imageEntry.label ?? ''
-        };
+        return content.imageEntry;
     } else if ('objectLink' in content) {
-        return {
-            label: content.objectLink.label ?? '',
-            breadcrumb: {
-                object: {}
-            }
-        };
+        return content.objectLink;
     } else if ('schemaLink' in content) {
-        
+        return content.schemaLink;
     } else if ('singleSelectDropdown' in content) {
         return content.singleSelectDropdown.dropdownRowOid?.toString() ?? null;
     } else if ('multiSelectDropdown' in content) {
