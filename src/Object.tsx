@@ -20,6 +20,7 @@ import { getValue } from "./grid/ValueGetter";
 import { editCellContents } from "./grid/CellEditRequest";
 import { SubtypeRenderer } from "./grid/renderer/SubtypeRenderer";
 import { SubtypeEditor } from "./grid/editor/SubtypeEditor";
+import { executeAsync } from "./api/action";
 
 
 type ObjectGridProps = {
@@ -27,6 +28,7 @@ type ObjectGridProps = {
     columns: ColumnFullMetadata[],
     row: [SchemaRow, CellContent[]],
     inheritorTables: DropdownValue[],
+    onUpdateTableSubtype: (newSubtypeTableOid: number) => void,
     onRequestUpdateSchema: () => Promise<void>,
     onRequestEditColumn: (columnMetadata: ColumnFullMetadata) => void,
     onRequestUploadFile: (absolutePath: string, relativePath: string, onUploadFile: (fileOid: number) => Promise<any>) => void,
@@ -359,12 +361,13 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
     
     const onCellEditRequest = useCallback((event: CellEditRequestEvent<ObjectGridRow>) => {
         if (event.data.rowId === 'subtype') {
-            // TODO
+            const newSubtypeTableOid: number = typeof event.newValue === 'number' ? event.newValue : (typeof event.newValue === 'string' ? parseInt(event.newValue) : ('table' in props.schema ? props.schema.table.schema.oid : props.schema.report.schema.oid));
+            props.onUpdateTableSubtype(newSubtypeTableOid);
         } else {
             const content: CellContent = event.data.content;
             editCellContents(content, event.newValue, props.onError);
         }
-    }, [props.onError]);
+    }, [props.onUpdateTableSubtype, props.onError]);
     
     const onColumnResized = useCallback((event: ColumnResizedEvent) => {
         event.api.sizeColumnsToFit();
@@ -428,6 +431,21 @@ export function ObjectPage(props: ObjectProps): React.JSX.Element {
         }
     }, [subPixelCorrectionDiv]);
 
+    const onUpdateTableSubtype = useCallback((newSubtypeTableOid: number) => {
+        const oidFilter = props.oidFilters.find(([ord, _value]) => ord.toLocaleUpperCase() === 'OID');
+        if ('table' in props.schema && oidFilter) {
+            executeAsync({
+                editRowSubtype: {
+                    tableOid: props.schema.table.schema.oid,
+                    rowOid: oidFilter[1],
+                    inheritorTableOid: newSubtypeTableOid
+                }
+            })
+            .then(updateSchemaAsync)
+            .catch(props.onError);
+        }
+    }, [props.schema, props.oidFilters, props.onError]);
+
     /**
      * Updates the columns and data of the schema.
      */
@@ -487,6 +505,7 @@ export function ObjectPage(props: ObjectProps): React.JSX.Element {
             columns={columns}
             row={row}
             inheritorTables={inheritorTables}
+            onUpdateTableSubtype={onUpdateTableSubtype}
             onRequestUpdateSchema={updateSchemaAsync}
             onRequestEditColumn={(columnMetadata) => props.onRequestEditColumn(columnMetadata, 'table' in props.schema)}
             onRequestUploadFile={props.onRequestUploadFile}

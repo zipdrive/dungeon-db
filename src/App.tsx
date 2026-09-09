@@ -1,13 +1,54 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
 import { Sidebar } from './Sidebar';
 import { Page } from './Page';
 import { Popup, PopupProps } from "./popup/Popup";
 import { Button, Dialog, Typography } from "@material-tailwind/react";
 import "choices.js/public/assets/styles/choices.css";
+import { Menu, MenuItem, Submenu } from "@tauri-apps/api/menu";
+import { loadAsync, newAsync, saveAsAsync, saveAsync } from "./api/dbfile";
 
 
 function App() {
+  useEffect(() => {
+    (async () => {
+      const menu = await Menu.new({
+        items: [
+          await Submenu.new({
+            text: "File",
+            items: [
+              await MenuItem.new({
+                text: "New",
+                action: async () => {
+                  await newAsync();
+                }
+              }),
+              await MenuItem.new({
+                text: "Open",
+                action: async () => {
+                  await loadAsync();
+                }
+              }),
+              await MenuItem.new({
+                text: "Save",
+                action: async () => {
+                  await saveAsync();
+                }
+              }),
+              await MenuItem.new({
+                text: "Save As...",
+                action: async () => {
+                  await saveAsAsync();
+                }
+              })
+            ]
+          })
+        ]
+      });
+      await menu.setAsAppMenu();
+    })();
+  }, []);
+
   const [selectedSchema, setSelectedSchema] = useState<{ oid: number, name: string } | null>(null);
   const [popup, setPopup] = useState<PopupProps>({ popup: 'none' });
   const [err, setErr] = useState<{ message: string, stack: string | undefined } | null>(null);

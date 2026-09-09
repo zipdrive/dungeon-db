@@ -126,6 +126,8 @@ pub fn insert_transact(
     master_rows: &mut HashMap<i64, i64>,
 ) -> Result<i64, Error> {
     if let Some(row_oid) = master_rows.get(&table_oid) {
+        let mut completed_table_oid: HashSet<i64> = HashSet::new();
+        untrash_transact(trans, table_oid, row_oid.clone(), &mut completed_table_oid)?;
         return Ok(row_oid.clone());
     }
 
