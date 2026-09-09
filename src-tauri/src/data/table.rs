@@ -7,6 +7,7 @@ use crate::util::channel::Sender;
 use crate::util::db;
 use crate::util::db::{sql_execute, sql_iter};
 use crate::util::error::Error;
+use rusqlite::Connection;
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
@@ -123,8 +124,8 @@ impl FullMetadata {
 #[derive(Serialize, Clone)]
 #[serde(rename_all="camelCase")]
 pub struct DropdownValue {
-    id: i64,
-    name: String
+    value: i64,
+    label: String
 }
 
 #[derive(Serialize, Clone)]
@@ -137,6 +138,48 @@ pub struct DropdownValueEmit {
 const PUSH_DROPDOWN_VALUE_SIGNAL: &'static str = "table_row_label";
 
 impl DropdownValue {
+    /// Queries for all tables inheriting from this one.
+    pub fn query_inheritor_tables<'a>(
+        mut sender: Sender<'a, Self>,
+        table_oid: i64
+    ) -> Result<(), Error> {
+        let conn: Connection = db::open()?;
+
+        // Run query for flat table data
+        sql_iter(
+            &conn,
+            "
+            SELECT
+                0 AS LEVEL,
+                OID,
+                NAME
+            FROM METADATA_SCHEMA 
+            WHERE OID = ?1
+
+            UNION ALL 
+
+            SELECT 
+                MAX_DEPTH AS LEVEL,
+                inh.INHERITOR_SCHEMA_OID AS OID,
+                s.NAME
+            FROM METADATA_SCHEMA_INHERITANCE_PATH_VIEW inh 
+            INNER JOIN METADATA_SCHEMA s ON s.OID = inh.INHERITOR_SCHEMA_OID
+            WHERE inh.MASTER_SCHEMA_OID = ?1
+
+            ORDER BY 1, 3
+            ",
+            params![table_oid],
+            |row| {
+                sender.send(Self {
+                    value: row.get("OID")?,
+                    label: row.get("NAME")?
+                })?;
+                Ok(None::<()>)
+            }
+        )?;
+        Ok(())
+    }
+
     pub fn emit_table_row_labels(app: AppHandle, processid: i64, table_oid: i64) -> Result<(), Error> {
         let conn = db::open()?;
         
@@ -156,8 +199,8 @@ impl DropdownValue {
                 app.emit(PUSH_DROPDOWN_VALUE_SIGNAL, DropdownValueEmit {
                     processid: processid.clone(),
                     dropdown_value: Self { 
-                        id: row.get::<_, i64>("OID")?, 
-                        name: row.get::<_, String>("LABEL")? 
+                        value: row.get::<_, i64>("OID")?, 
+                        label: row.get::<_, String>("LABEL")? 
                     }
                 })?;
                 Ok(None::<()>)

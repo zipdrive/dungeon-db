@@ -1,5 +1,5 @@
 import { Channel } from "@tauri-apps/api/core";
-import { getCellAsync, getImageSrcAsync, queryAsync } from "./api/query";
+import { DropdownValue, getCellAsync, getImageSrcAsync, queryAsync, SelectedHierarchicalListItemMetadata } from "./api/query";
 import { SchemaPageBreadcrumb, ObjectPageBreadcrumb } from "./breadcrumb";
 import { CellContent, CellDependency, CellIdentifier, File, SchemaRow } from "./api/model/cell";
 import { FullMetadata as ColumnFullMetadata } from "./api/model/column";
@@ -18,11 +18,15 @@ import { selectRenderer } from "./grid/RendererSelector";
 import { selectEditor } from "./grid/EditorSelector";
 import { getValue } from "./grid/ValueGetter";
 import { editCellContents } from "./grid/CellEditRequest";
+import { SubtypeRenderer } from "./grid/renderer/SubtypeRenderer";
+import { SubtypeEditor } from "./grid/editor/SubtypeEditor";
 
 
 type ObjectGridProps = {
+    schema: Schema,
     columns: ColumnFullMetadata[],
     row: [SchemaRow, CellContent[]],
+    inheritorTables: DropdownValue[],
     onRequestUpdateSchema: () => Promise<void>,
     onRequestEditColumn: (columnMetadata: ColumnFullMetadata) => void,
     onRequestUploadFile: (absolutePath: string, relativePath: string, onUploadFile: (fileOid: number) => Promise<any>) => void,
@@ -37,7 +41,10 @@ type ObjectGridRow = {
     columnMetadata: ColumnFullMetadata,
     content: CellContent
 } | {
-    rowId: 'subtype'
+    rowId: 'subtype',
+    baseTableOid: number,
+    subtypeTableOid: number,
+    inheritorTables: DropdownValue[]
 };
 
 const objectGridTheme = themeBalham.withParams({
@@ -81,7 +88,7 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
                 valueGetter({ data }) {
                     if (data) {
                         if (data.rowId === 'subtype') {
-
+                            return "Subtype";
                         } else {
                             const columnMetadata = data.columnMetadata;
                             return `${columnMetadata.isPrimaryKey ? '🔑 ' : ''}${columnMetadata.name}`;
@@ -90,7 +97,7 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
                         return '';
                     }
                 },
-                cellClass: classNames('font-bold'),
+                cellClass: classNames('font-bold', 'py-2'),
                 width: 150,
                 resizable: true,
                 suppressSizeToFit: true,
@@ -103,22 +110,23 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
                 cellClass({ data }) {
                     if (data) {
                         if (data.rowId === 'subtype') {
-
+                            return classNames('ag-allow-overflow');
                         } else {
                             const columnMetadata = data.columnMetadata;
-                            return `column${columnMetadata.oid}`;
+                            return classNames(
+                                `column${columnMetadata.oid}`
+                            );
                         }
-                    } else {
-                        return '';
                     }
+                    return '';
                 },
-                flex: 1,
+                //flex: 1,
                 resizable: false,
                 wrapText: true,
                 editable({ data }) {
                     if (data) {
                         if (data.rowId === 'subtype') {
-
+                            return true;
                         } else {
                             const content: CellContent = data.content;
                             return !('schemaLink' in content || 'readonly' in content);
@@ -128,9 +136,7 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
                 },
                 cellRendererSelector({ data }) {
                     if (data) {
-                        if (data.rowId === 'subtype') {
-
-                        } else {
+                        if (data.rowId !== 'subtype') {
                             const content: CellContent = data.content;
                             return selectRenderer(content, props.onRequestOpenSchema, props.onRequestOpenObject);
                         }
@@ -140,7 +146,9 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
                 cellEditorSelector({ data }) {
                     if (data) {
                         if (data.rowId === 'subtype') {
-
+                            return {
+                                component: SubtypeEditor
+                            };
                         } else {
                             const content: CellContent = data.content;
                             return selectEditor(content);
@@ -153,7 +161,7 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
                 valueGetter({ data }) {
                     if (data) {
                         if (data.rowId === 'subtype') {
-
+                            return data.inheritorTables.find(({ value }: { value: number }) => value == data.subtypeTableOid)?.label ?? '';
                         } else {
                             const content: CellContent = data.content;
                             return getValue(content);
@@ -163,7 +171,7 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
                 }
             }
         ];
-    }, [props.columns]);
+    }, [props.columns, props.inheritorTables]);
 
 
     const [imgFiles, setImgFiles] = useState<File[]>([]);
@@ -219,8 +227,14 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
 
 
     const rowData: ObjectGridRow[] = useMemo(() => {
+        console.log(`Reloaded.`, props.inheritorTables);
         const [rowMetadata, rowCells] = props.row;
-        return rowCells.map((rowCell, idx) => {
+        return (('table' in props.schema && rowMetadata.tableRowIdentifier ? [{
+            rowId: 'subtype',
+            baseTableOid: props.schema.table.schema.oid,
+            subtypeTableOid: rowMetadata.tableRowIdentifier.tableOid,
+            inheritorTables: props.inheritorTables,
+        }] : []) as ObjectGridRow[]).concat(rowCells.map((rowCell, idx) => {
             if (idx >= props.columns.length) {
                 throw new Error(`Was streamed less columns than cells.`);
             }
@@ -232,8 +246,8 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
                 rowMetadata,
                 content
             };
-        });
-    }, [props.columns, props.row, props.onError, imgFileSrcs]);
+        }));
+    }, [props.schema, props.columns, props.row, props.inheritorTables, props.onError, imgFileSrcs]);
 
     const grid = useRef<AgGridReact | null>(null);
     useEffect(() => {
@@ -353,9 +367,7 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
     }, [props.onError]);
     
     const onColumnResized = useCallback((event: ColumnResizedEvent) => {
-        //if (event.finished) {
-            event.api.sizeColumnsToFit();
-        //}
+        event.api.sizeColumnsToFit();
     }, []);
 
 
@@ -387,6 +399,7 @@ type ObjectProps = {
 export function ObjectPage(props: ObjectProps): React.JSX.Element {
     const [columns, setColumns] = useState<ColumnFullMetadata[]>([]);
     const [row, setRow] = useState<[SchemaRow, CellContent[]] | null>(null);
+    const [inheritorTables, setInheritorTables] = useState<DropdownValue[]>([]);
 
     useEffect(() => {
         const unlistenSchema = listen<number[]>('schema', (e) => {
@@ -404,67 +417,6 @@ export function ObjectPage(props: ObjectProps): React.JSX.Element {
     useEffect(() => {
         updateSchemaAsync();
     }, [props.schema, props.oidFilters]);
-    
-    const [imgFiles, setImgFiles] = useState<File[]>([]);
-    const [imgFileSrcs, setImgFileSrcs] = useState<{[fileOid: number]: string}>({});
-    useEffect(() => {
-        function getFileOid(f: File): number {
-            return 'path' in f ? f.path.oid : f.blob.oid;
-        }
-
-        (async () => {
-            try {
-                const fileSrcLoads: [number, Promise<[File, string]>][] = imgFiles
-                    .filter((file) => {
-                        const fileOid: number = getFileOid(file);
-                        return !Object.keys(imgFileSrcs).some((o) => parseInt(o) == fileOid);
-                    })
-                    .map<[number, Promise<[File, string]>]>((file) => {
-                        return [getFileOid(file), (async () => { return [file, await getImageSrcAsync({ file })]; })()];
-                    });
-                let loadedImgFileSrcs: {[fileOid: number]: string} = {};
-                while (fileSrcLoads.length > 0) {
-                    const [file, fileSrc] = await Promise.race(fileSrcLoads.map(([_o, p]) => p));
-                    const fileOid: number = getFileOid(file);
-                    const idx: number = fileSrcLoads.findIndex(([o, _p]) => o == fileOid);
-                    if (idx >= 0) {
-                        fileSrcLoads.splice(idx, 1);
-                    }
-                    loadedImgFileSrcs = {
-                        ...loadedImgFileSrcs,
-                        [fileOid]: fileSrc
-                    };
-                    setImgFileSrcs({ 
-                        ...imgFileSrcs, 
-                        ...loadedImgFileSrcs
-                    });
-                }
-            } catch (e) {
-                props.onError(e);
-            }
-        })();
-    }, [imgFiles]);
-
-    useEffect(() => {
-        if (row) {
-            const [rowMetadata, [...rowCells]] = row;
-            for (let k = 0; k < rowCells.length; ++k) {
-                const rowCell = rowCells[k];
-                if ('imageEntry' in rowCell && rowCell.imageEntry.file) {
-                    let fileOid: number = 'path' in rowCell.imageEntry.file ? rowCell.imageEntry.file.path.oid : rowCell.imageEntry.file?.blob.oid;
-                    if (fileOid in imgFileSrcs) {
-                        rowCells[k] = {
-                            imageEntry: {
-                                ...rowCell.imageEntry,
-                                fileSrc: imgFileSrcs[fileOid]
-                            }
-                        };
-                    }
-                }
-            }
-            setRow([rowMetadata, rowCells]);
-        }
-    }, [imgFileSrcs]);
 
     const subPixelCorrectionDiv = useRef<HTMLDivElement | null>(null);
     useEffect(() => {
@@ -480,38 +432,49 @@ export function ObjectPage(props: ObjectProps): React.JSX.Element {
      * Updates the columns and data of the schema.
      */
     async function updateSchemaAsync() {
-        const queriedColumns: ColumnFullMetadata[] = [];
-        let queriedRowMetadata: SchemaRow | null = null;
-        const queriedRowCells: CellContent[] = [];
-        const queriedImgFiles: File[] = [];
-        await queryAsync({
-            object: {
-                schemaOid: 'table' in props.schema ? props.schema.table.schema.oid : props.schema.report.schema.oid,
-                oidFilters: props.oidFilters,
-                columnChannel: new Channel((columnMetadata) => {
-                    queriedColumns.push(columnMetadata);
-                }),
-                cellChannel: new Channel((cellStream) => {
-                    if ('row' in cellStream) {
-                        queriedRowMetadata = cellStream.row;
-                    } else if ('cell' in cellStream) {
-                        if ('imageEntry' in cellStream.cell && cellStream.cell.imageEntry.file) {
-                            const fileOid: number = 'path' in cellStream.cell.imageEntry.file ? cellStream.cell.imageEntry.file.path.oid : cellStream.cell.imageEntry.file.blob.oid;
-                            if (fileOid in imgFileSrcs) {
-                                cellStream.cell.imageEntry.fileSrc = imgFileSrcs[fileOid];
-                            } else {
-                                queriedImgFiles.push(cellStream.cell.imageEntry.file);
-                            }
+        try {
+            // Update the object
+            const queriedColumns: ColumnFullMetadata[] = [];
+            let queriedRowMetadata: SchemaRow | null = null;
+            const queriedRowCells: CellContent[] = [];
+            await queryAsync({
+                object: {
+                    schemaOid: 'table' in props.schema ? props.schema.table.schema.oid : props.schema.report.schema.oid,
+                    oidFilters: props.oidFilters,
+                    columnChannel: new Channel((columnMetadata) => {
+                        queriedColumns.push(columnMetadata);
+                    }),
+                    cellChannel: new Channel((cellStream) => {
+                        if ('row' in cellStream) {
+                            queriedRowMetadata = cellStream.row;
+                        } else if ('cell' in cellStream) {
+                            queriedRowCells.push(cellStream.cell);
                         }
-                        queriedRowCells.push(cellStream.cell);
+                    }),
+                }
+            });
+            
+            setColumns(queriedColumns);
+            setRow(queriedRowMetadata ? [queriedRowMetadata, queriedRowCells] : null);
+
+            // Update the list of subtypes
+            if ('table' in props.schema) {
+                const newInheritorTables: DropdownValue[] = [];
+                await queryAsync({
+                    inheritorTables: {
+                        tableOid: props.schema.table.schema.oid,
+                        channel: new Channel<DropdownValue>((item) => {
+                            newInheritorTables.push(item);
+                        })
                     }
-                }),
+                });
+                setInheritorTables(newInheritorTables);
+            } else {
+                setInheritorTables([]);
             }
-        });
-        
-        setColumns(queriedColumns);
-        setRow(queriedRowMetadata ? [queriedRowMetadata, queriedRowCells] : null);
-        setImgFiles(queriedImgFiles);
+        } catch (e) {
+            props.onError(e);
+        }
     }
 
     return (<div 
@@ -520,8 +483,10 @@ export function ObjectPage(props: ObjectProps): React.JSX.Element {
     >
         {columns.map((columnMetadata) => (<style>{`.column${columnMetadata.oid}`} &#123; {columnMetadata.style} &#125;</style>))}
         {row && <ObjectGrid 
+            schema={props.schema}
             columns={columns}
             row={row}
+            inheritorTables={inheritorTables}
             onRequestUpdateSchema={updateSchemaAsync}
             onRequestEditColumn={(columnMetadata) => props.onRequestEditColumn(columnMetadata, 'table' in props.schema)}
             onRequestUploadFile={props.onRequestUploadFile}

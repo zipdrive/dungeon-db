@@ -52,8 +52,7 @@ export type Query = {
 } | {
     inheritorTables: {
         tableOid: number,
-        rowOid: number,
-        channel: Channel<SelectedHierarchicalListItemMetadata>
+        channel: Channel<DropdownValue>
     }
 } | {
     masterSchemas: {

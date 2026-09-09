@@ -4,6 +4,7 @@ import { Sidebar } from './Sidebar';
 import { Page } from './Page';
 import { Popup, PopupProps } from "./popup/Popup";
 import { Button, Dialog, Typography } from "@material-tailwind/react";
+import "choices.js/public/assets/styles/choices.css";
 
 
 function App() {

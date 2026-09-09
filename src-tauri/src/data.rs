@@ -120,7 +120,6 @@ pub enum QueryStream {
     },
     InheritorTables {
         table_oid: i64,
-        row_oid: i64,
         channel: JavaScriptChannelId,
     },
     MasterSchemas {
@@ -185,11 +184,9 @@ impl QueryStream {
             Self::InheritorTables {
                 channel,
                 table_oid,
-                row_oid,
-            } => schema::SelectedHierarchicalListItemMetadata::query_inheritor_tables(
+            } => table::DropdownValue::query_inheritor_tables(
                 Sender::Channel(channel.channel_on(webview)),
                 table_oid,
-                row_oid,
             ),
 
             Self::MasterSchemas {
