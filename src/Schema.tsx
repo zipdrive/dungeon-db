@@ -1,5 +1,5 @@
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getCellAsync, getImageSrcAsync, queryAsync } from "./api/query";
+import { DropdownValue, getCellAsync, getImageSrcAsync, queryAsync } from "./api/query";
 import { Channel } from "@tauri-apps/api/core";
 import { FullMetadata as ColumnFullMetadata } from "./api/model/column";
 import { SchemaRow, CellContent, CellStream, AddNewRowButton, CellIdentifier, CellDependency, File } from "./api/model/cell";
@@ -27,6 +27,7 @@ import { selectRenderer } from "./grid/RendererSelector";
 type SchemaGridProps = {
     columns: ColumnFullMetadata[],
     rows: [SchemaRow, CellContent[]][],
+    dropdownValues: {[tableOid: string]: DropdownValue[]},
     onRequestUpdateSchema: () => Promise<void>,
     onRequestCreateColumn: (ordering: number | null) => void,
     onRequestEditColumn: (columnMetadata: ColumnFullMetadata) => void,
@@ -100,7 +101,16 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
                 return {
                     colId: key,
                     headerName: `${columnMetadata.isPrimaryKey ? '🔑 ' : ''}${columnMetadata.name}`,
-                    cellClass: classNames(key),
+                    cellClass({ data }) {
+                        if (data) {
+                            const content: CellContent = data[key];
+                            return classNames(
+                                key,
+                                { 'ag-allow-overflow': 'singleSelectDropdown' in content || 'multiSelectDropdown' in content }
+                            );
+                        }
+                        return classNames(key);
+                    },
                     width: columnMetadata.size,
                     resizable: true,
                     wrapText: true,
@@ -126,7 +136,7 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
                         if (data) {
                             if (key in data) {
                                 const content: CellContent = data[key];
-                                return selectEditor(content);
+                                return selectEditor(content, props.dropdownValues, props.onError);
                             }
                         }
                         return {
@@ -146,7 +156,7 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
             }),
             addNewColumn
         ];
-    }, [props.columns]);
+    }, [props.columns, props.dropdownValues, props.onRequestOpenSchema, props.onRequestOpenObject, props.onError]);
 
 
 
@@ -385,6 +395,13 @@ export function SchemaPage(props: SchemaProps): React.JSX.Element {
             if (updatedSchemas.indexOf('table' in props.schema ? props.schema.table.schema.oid : props.schema.report.schema.oid) >= 0) {
                 updateSchemaAsync();
             }
+            
+            // Update list of dropdown values for any relevant updated schemas
+            for (const updatedSchemaOid of updatedSchemas) {
+                if (updatedSchemaOid.toString() in dropdownValues) {
+                    updateDropdownValuesAsync(updatedSchemaOid);
+                }
+            }
         });
 
         return () => {
@@ -395,6 +412,23 @@ export function SchemaPage(props: SchemaProps): React.JSX.Element {
     useEffect(() => {
         updateSchemaAsync();
     }, [props.schema, props.oidFilters, props.customFilters, pageNum, pageSize]);
+
+    const [dropdownValues, setDropdownValues] = useState<{[tableOid: string]: DropdownValue[]}>({});
+    useEffect(() => {
+        for (const [_rowMetadata, rowCells] of rows) {
+            for (const rowCell of rowCells) {
+                let tableOid: number;
+                if ('singleSelectDropdown' in rowCell) {
+                    tableOid = rowCell.singleSelectDropdown.dropdownTableOid;
+                } else if ('multiSelectDropdown' in rowCell) {
+                    tableOid = rowCell.multiSelectDropdown.dropdownTableOid;
+                } else {
+                    continue;
+                }
+                updateDropdownValuesAsync(tableOid);
+            }
+        }
+    }, [rows, props.onError]);
 
     const subPixelCorrectionDiv = useRef<HTMLDivElement | null>(null);
     useEffect(() => {
@@ -445,6 +479,28 @@ export function SchemaPage(props: SchemaProps): React.JSX.Element {
         setAddNewRowButton(queriedAddNewRowButton);
     }
 
+    async function updateDropdownValuesAsync(tableOid: number) {
+        const key: string = tableOid.toString();
+        await navigator.locks.request(key, async () => {
+            setDropdownValues((prevValues) => { return { ...prevValues, [key]: [] }});
+            try {
+                await queryAsync({
+                    tableRowLabels: {
+                        tableOid,
+                        channel: new Channel<DropdownValue>((item) => {
+                            setDropdownValues((prevValues) => {
+                                console.log({ ...prevValues, [key]: prevValues[key].concat([item]) });
+                                return { ...prevValues, [key]: prevValues[key].concat([item]) };
+                            });
+                        })
+                    }
+                });
+            } catch (e) {
+                props.onError(e);
+            }
+        });
+    }
+
     return (<div className="grid grid-col grid-rows-[calc(100vh-(var(--spacing)*20))_calc(var(--spacing)*10)] w-full">
         {columns.map((columnMetadata) => (<style>{`.column${columnMetadata.oid}`} &#123; {columnMetadata.style} &#125;</style>))}
         <div 
@@ -454,6 +510,7 @@ export function SchemaPage(props: SchemaProps): React.JSX.Element {
             <SchemaGrid 
                 columns={columns}
                 rows={rows}
+                dropdownValues={dropdownValues}
                 onRequestUpdateSchema={updateSchemaAsync}
                 onRequestCreateColumn={(ordering) => props.onRequestCreateColumn('table' in props.schema ? props.schema.table.schema : props.schema.report.schema, 'table' in props.schema, ordering)}
                 onRequestEditColumn={(columnMetadata) => props.onRequestEditColumn(columnMetadata, 'table' in props.schema)}

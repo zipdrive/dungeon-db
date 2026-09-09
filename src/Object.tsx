@@ -28,6 +28,7 @@ type ObjectGridProps = {
     columns: ColumnFullMetadata[],
     row: [SchemaRow, CellContent[]],
     inheritorTables: DropdownValue[],
+    dropdownValues: {[tableOid: string]: DropdownValue[]},
     onUpdateTableSubtype: (newSubtypeTableOid: number) => void,
     onRequestUpdateSchema: () => Promise<void>,
     onRequestEditColumn: (columnMetadata: ColumnFullMetadata) => void,
@@ -153,7 +154,7 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
                             };
                         } else {
                             const content: CellContent = data.content;
-                            return selectEditor(content);
+                            return selectEditor(content, props.dropdownValues, props.onError);
                         }
                     }
                     return {
@@ -173,7 +174,7 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
                 }
             }
         ];
-    }, [props.columns, props.inheritorTables]);
+    }, [props.columns, props.inheritorTables, props.dropdownValues, props.onError]);
 
 
     const [imgFiles, setImgFiles] = useState<File[]>([]);
@@ -410,6 +411,13 @@ export function ObjectPage(props: ObjectProps): React.JSX.Element {
             if (updatedSchemas.indexOf('table' in props.schema ? props.schema.table.schema.oid : props.schema.report.schema.oid) >= 0) {
                 updateSchemaAsync();
             }
+            
+            // Update list of dropdown values for any relevant updated schemas
+            for (const updatedSchemaOid of updatedSchemas) {
+                if (updatedSchemaOid.toString() in dropdownValues) {
+                    updateDropdownValuesAsync(updatedSchemaOid);
+                }
+            }
         });
 
         return () => {
@@ -420,6 +428,24 @@ export function ObjectPage(props: ObjectProps): React.JSX.Element {
     useEffect(() => {
         updateSchemaAsync();
     }, [props.schema, props.oidFilters]);
+
+    const [dropdownValues, setDropdownValues] = useState<{[tableOid: string]: DropdownValue[]}>({});
+    useEffect(() => {
+        if (row) {
+            const [_rowMetadata, rowCells] = row;
+            for (const rowCell of rowCells) {
+                let tableOid: number;
+                if ('singleSelectDropdown' in rowCell) {
+                    tableOid = rowCell.singleSelectDropdown.dropdownTableOid;
+                } else if ('multiSelectDropdown' in rowCell) {
+                    tableOid = rowCell.multiSelectDropdown.dropdownTableOid;
+                } else {
+                    continue;
+                }
+                updateDropdownValuesAsync(tableOid);
+            }
+        }
+    }, [row, props.onError]);
 
     const subPixelCorrectionDiv = useRef<HTMLDivElement | null>(null);
     useEffect(() => {
@@ -495,6 +521,27 @@ export function ObjectPage(props: ObjectProps): React.JSX.Element {
         }
     }
 
+    async function updateDropdownValuesAsync(tableOid: number) {
+        const key: string = tableOid.toString();
+        await navigator.locks.request(key, async () => {
+            setDropdownValues((prevValues) => { return { ...prevValues, [key]: [] }});
+            try {
+                await queryAsync({
+                    tableRowLabels: {
+                        tableOid,
+                        channel: new Channel<DropdownValue>((item) => {
+                            setDropdownValues((prevValues) => {
+                                return { ...prevValues, [key]: prevValues[key].concat([item]) };
+                            });
+                        })
+                    }
+                });
+            } catch (e) {
+                props.onError(e);
+            }
+        });
+    }
+
     return (<div 
         ref={subPixelCorrectionDiv}
         className="grid grid-col w-[calc(100%-(var(--spacing)*12))] ml-4 mr-8 mt-4 mb-5"
@@ -505,6 +552,7 @@ export function ObjectPage(props: ObjectProps): React.JSX.Element {
             columns={columns}
             row={row}
             inheritorTables={inheritorTables}
+            dropdownValues={dropdownValues}
             onUpdateTableSubtype={onUpdateTableSubtype}
             onRequestUpdateSchema={updateSchemaAsync}
             onRequestEditColumn={(columnMetadata) => props.onRequestEditColumn(columnMetadata, 'table' in props.schema)}

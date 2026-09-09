@@ -788,8 +788,8 @@ export function useExtraColumnTypes(columns: ColumnFullMetadata[], onError: (e: 
         Promise.all([...tableOids].map<Promise<[`table${number}`, { label: string, value: string }[]]>>(async (tableOid) => {
             const tableDropdownValues: { label: string, value: string }[] = [];
             await queryAsync({
-                columnValues: {
-                    schemaOid: tableOid,
+                tableRowLabels: {
+                    tableOid: tableOid,
                     channel: new Channel((dropdownValue) => {
                         tableDropdownValues.push({ 
                             label: dropdownValue.label,

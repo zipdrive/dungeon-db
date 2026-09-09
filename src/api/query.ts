@@ -88,8 +88,8 @@ export type Query = {
         channel: Channel<DropdownValue>
     }
 } | {
-    columnValues: {
-        schemaOid: number,
+    tableRowLabels: {
+        tableOid: number,
         channel: Channel<DropdownValue>
     }
 } | {
@@ -107,11 +107,6 @@ export type Query = {
         oidFilters: [string, number][],
         columnChannel: Channel<ColumnFullMetadata>,
         cellChannel: Channel<CellStream>
-    }
-} | {
-    tableRowLabels: {
-        tableOid: number,
-        processid: number
     }
 };
 

@@ -33,9 +33,9 @@ export function getValue(content: CellContent): string | number | boolean | Date
     } else if ('schemaLink' in content) {
         return content.schemaLink;
     } else if ('singleSelectDropdown' in content) {
-        return content.singleSelectDropdown.dropdownRowOid?.toString() ?? null;
+        return content.singleSelectDropdown.label;
     } else if ('multiSelectDropdown' in content) {
-        return content.multiSelectDropdown.dropdownRowOid.join(',');
+        return content.multiSelectDropdown.label;
     } else {
         return content.readonly.label;
     }

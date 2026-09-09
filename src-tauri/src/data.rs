@@ -166,7 +166,7 @@ pub enum QueryStream {
 
     TableRowLabels {
         table_oid: i64,
-        processid: i64
+        channel: JavaScriptChannelId
     }
 }
 
@@ -259,12 +259,11 @@ impl QueryStream {
 
             Self::TableRowLabels { 
                 table_oid, 
-                processid 
+                channel 
             } => {
                 tauri::async_runtime::spawn_blocking(move || {
-                    table::DropdownValue::emit_table_row_labels(
-                        app, 
-                        processid, 
+                    table::DropdownValue::query_table_row_labels(
+                        Sender::Channel(channel.channel_on(webview)), 
                         table_oid
                     )
                 });

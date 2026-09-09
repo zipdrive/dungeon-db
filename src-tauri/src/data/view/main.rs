@@ -164,16 +164,16 @@ pub fn construct_main_view(trans: &Transaction, schema_oid: i64) -> Result<(), E
                             format!("COLUMN{}_LABEL", table_column.column_metadata.oid),
                             format!(
                                 "
-'[' || (
-    SELECT 
-        GROUP_CONCAT(l.JSON_LABEL, ', ') 
+'[' || GROUP_CONCAT(
+    (SELECT 
+        l.JSON_LABEL
     FROM SCHEMA{table_oid}_LABEL_VIEW l 
-    WHERE l.OID = w.{}_OID
-    GROUP BY l.{}_OID
+    WHERE l.OID = w.{}_COLUMN{}_OID),
+    ', '
 ) || ']'
                                 ",
                                 table_column.datasource_alias,
-                                table_column.datasource_alias
+                                table_column.column_metadata.oid
                             )
                         );
                         // Value expression
@@ -183,13 +183,10 @@ pub fn construct_main_view(trans: &Transaction, schema_oid: i64) -> Result<(), E
                                 "
 GROUP_CONCAT(
     CAST(w.{}_COLUMN{}_OID AS TEXT)
-) OVER (
-    PARTITION BY w.{}_OID ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
 )
                                 ", 
                                 table_column.datasource_alias,
-                                table_column.column_metadata.oid,
-                                table_column.datasource_alias
+                                table_column.column_metadata.oid
                             )
                         );
                     }
@@ -276,18 +273,17 @@ GROUP_CONCAT(
                             if label_expr_filters.len() > 0 {
                                 format!(
                                     "
-'[' || (
-    SELECT 
-        GROUP_CONCAT(l.JSON_LABEL)
+'[' || GROUP_CONCAT(
+    (SELECT 
+        l.JSON_LABEL
     FROM SCHEMA{report_oid}_LABEL_VIEW l 
-    WHERE {}
-    GROUP BY l.{}_OID
+    WHERE {}),
+    ', '
 ) || ']'
                                     ",
                                     label_expr_filters.into_iter()
                                         .reduce(|acc, e| format!("{acc} AND {e}"))
-                                        .unwrap(),
-                                    table_column.datasource_alias
+                                        .unwrap()
                                 )
                             } else {
                                 String::from("NULL")

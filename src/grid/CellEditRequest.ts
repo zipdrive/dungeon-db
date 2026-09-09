@@ -120,6 +120,7 @@ export function editCellContents(content: CellContent, value: any, onError: (e: 
         cellIdentifier = content.singleSelectDropdown.cellIdentifier;
     } else if ('multiSelectDropdown' in content) {
         // Multi-Select Dropdown cell
+        console.log(value);
         promise = executeAsync({
             editCellContents: {
                 tableOid: content.multiSelectDropdown.dataTableOid,

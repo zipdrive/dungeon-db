@@ -180,7 +180,7 @@ impl DropdownValue {
         Ok(())
     }
 
-    pub fn emit_table_row_labels(app: AppHandle, processid: i64, table_oid: i64) -> Result<(), Error> {
+    pub fn query_table_row_labels<'a>(mut sender: Sender<'a, Self>, table_oid: i64) -> Result<(), Error> {
         let conn = db::open()?;
         
         sql_iter(
@@ -196,12 +196,9 @@ impl DropdownValue {
             ),
             [],
             |row| {
-                app.emit(PUSH_DROPDOWN_VALUE_SIGNAL, DropdownValueEmit {
-                    processid: processid.clone(),
-                    dropdown_value: Self { 
-                        value: row.get::<_, i64>("OID")?, 
-                        label: row.get::<_, String>("LABEL")? 
-                    }
+                sender.send(Self {
+                    value: row.get::<_, i64>("OID")?, 
+                    label: row.get::<_, String>("LABEL")? 
                 })?;
                 Ok(None::<()>)
             }
