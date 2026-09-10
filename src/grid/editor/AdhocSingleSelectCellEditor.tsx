@@ -23,6 +23,9 @@ export class AdhocSingleSelectCellEditor implements ICellEditorComp {
 
         this.choices = new Choices(select, {
             choices: [],
+            shouldSort: false,
+            itemSelectText: '',
+            resetScrollPosition: false,
             classNames: {
                 containerOuter: ['choices', 'size-full'],
                 containerInner: ['choices__inner', 'border-none!', 'bg-transparent!'],
@@ -84,12 +87,12 @@ export class AdhocSingleSelectCellEditor implements ICellEditorComp {
         const singleSelectDropdown: SingleSelectDropdownCellContent = params.singleSelectDropdown;
         const dropdownValues = params.dropdownValues;
 
-        console.log('Dropdown Values:', JSON.stringify(dropdownValues));
+        console.log(dropdownValues);
         this.choices.setChoices(
             dropdownValues.map((item) => {
                 return {
                     value: item.value.toString(),
-                    label: item.label,
+                    label: item.label ? item.label : ' ',
                     selected: item.value == singleSelectDropdown.dropdownRowOid
                 };
             }), 

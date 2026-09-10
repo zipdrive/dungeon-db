@@ -16,6 +16,7 @@ export class SubtypeEditor implements ICellEditorComp {
 
         this.choices = new Choices(select, {
             choices: [],
+            itemSelectText: '',
             classNames: {
                 containerOuter: ['choices', 'size-full'],
                 containerInner: ['choices__inner', 'border-none!', 'bg-transparent!'],

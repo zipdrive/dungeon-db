@@ -6,3 +6,5 @@
 @tailwind utilities;
 
 @custom-variant dark (&:where(.dark-mode, .dark-mode *));
+
+@source inline('{sm:,md:,lg:,xl:,}indent-{{1..40}}');

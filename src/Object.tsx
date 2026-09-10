@@ -116,8 +116,10 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
                             return classNames('ag-allow-overflow');
                         } else {
                             const columnMetadata = data.columnMetadata;
+                            const content = data.content;
                             return classNames(
-                                `column${columnMetadata.oid}`
+                                `column${columnMetadata.oid}`,
+                                { 'ag-allow-overflow': 'singleSelectDropdown' in content || 'multiSelectDropdown' in content }
                             );
                         }
                     }
@@ -126,6 +128,7 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
                 //flex: 1,
                 resizable: false,
                 wrapText: true,
+                autoHeight: true,
                 editable({ data }) {
                     if (data) {
                         if (data.rowId === 'subtype') {
@@ -524,21 +527,31 @@ export function ObjectPage(props: ObjectProps): React.JSX.Element {
     async function updateDropdownValuesAsync(tableOid: number) {
         const key: string = tableOid.toString();
         await navigator.locks.request(key, async () => {
-            setDropdownValues((prevValues) => { return { ...prevValues, [key]: [] }});
+            const items: DropdownValue[] = [];
+            setDropdownValues((prevValues) => { 
+                return { 
+                    ...prevValues, 
+                    [key]: [] 
+                }
+            });
             try {
                 await queryAsync({
                     tableRowLabels: {
                         tableOid,
                         channel: new Channel<DropdownValue>((item) => {
-                            setDropdownValues((prevValues) => {
-                                return { ...prevValues, [key]: prevValues[key].concat([item]) };
-                            });
+                            items.push(item);
                         })
                     }
                 });
             } catch (e) {
                 props.onError(e);
             }
+            setDropdownValues((prevValues) => {
+                return {
+                    ...prevValues,
+                    [key]: items
+                };
+            });
         });
     }
 

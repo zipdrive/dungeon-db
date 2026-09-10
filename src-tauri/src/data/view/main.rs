@@ -164,13 +164,13 @@ pub fn construct_main_view(trans: &Transaction, schema_oid: i64) -> Result<(), E
                             format!("COLUMN{}_LABEL", table_column.column_metadata.oid),
                             format!(
                                 "
-'[' || GROUP_CONCAT(
+'[ ' || GROUP_CONCAT(
     (SELECT 
         l.JSON_LABEL
     FROM SCHEMA{table_oid}_LABEL_VIEW l 
     WHERE l.OID = w.{}_COLUMN{}_OID),
     ', '
-) || ']'
+) || ' ]'
                                 ",
                                 table_column.datasource_alias,
                                 table_column.column_metadata.oid
@@ -273,13 +273,13 @@ GROUP_CONCAT(
                             if label_expr_filters.len() > 0 {
                                 format!(
                                     "
-'[' || GROUP_CONCAT(
+'[ ' || GROUP_CONCAT(
     (SELECT 
         l.JSON_LABEL
     FROM SCHEMA{report_oid}_LABEL_VIEW l 
     WHERE {}),
     ', '
-) || ']'
+) || ' ]'
                                     ",
                                     label_expr_filters.into_iter()
                                         .reduce(|acc, e| format!("{acc} AND {e}"))

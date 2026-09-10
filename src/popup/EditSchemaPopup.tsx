@@ -60,7 +60,7 @@ export function EditSchemaPopup(props: EditSchemaPopupProps): React.JSX.Element 
                 await executeAsync({
                     editTable: {
                         schema: {
-                            oid: 0,
+                            oid: props.schemaOid,
                             name: schemaName,
                             masterSchemaOids: selectedMasterSchemas.map((selectedMasterSchema) => parseInt(selectedMasterSchema)),
                             orderByColumnOids: [],
@@ -71,7 +71,7 @@ export function EditSchemaPopup(props: EditSchemaPopupProps): React.JSX.Element 
                 await executeAsync({
                     editReport: {
                         schema: {
-                            oid: 0,
+                            oid: props.schemaOid,
                             name: schemaName,
                             masterSchemaOids: selectedMasterSchemas.map((selectedMasterSchema) => parseInt(selectedMasterSchema)),
                             orderByColumnOids: [],

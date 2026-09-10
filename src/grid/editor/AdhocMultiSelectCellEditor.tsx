@@ -3,7 +3,7 @@ import Choices, { EventChoice, InputChoice } from 'choices.js';
 import { DropdownValue, queryAsync, SelectedHierarchicalListItemMetadata } from '../../api/query';
 import classNames from 'classnames';
 import { Channel } from '@tauri-apps/api/core';
-import { MultiSelectDropdownCellContent, SingleSelectDropdownCellContent } from '../../api/model/cell';
+import { MultiSelectDropdownCellContent } from '../../api/model/cell';
 
 type AdhocMultiSelectDropdownCellParams = ICellEditorParams & {
     multiSelectDropdown: MultiSelectDropdownCellContent,
@@ -24,6 +24,9 @@ export class AdhocMultiSelectCellEditor implements ICellEditorComp {
 
         this.choices = new Choices(select, {
             choices: [],
+            shouldSort: false,
+            itemSelectText: '',
+            resetScrollPosition: false,
             classNames: {
                 containerOuter: ['choices', 'size-full'],
                 containerInner: ['choices__inner', 'border-none!', 'bg-transparent!'],

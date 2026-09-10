@@ -5,10 +5,13 @@ import {
   Spinner,
   Typography
 } from '@material-tailwind/react';
-import { HierarchicalListItemMetadata, queryAsync } from "./api/query";
+import { getSchemaMetadataAsync, HierarchicalListItemMetadata, queryAsync } from "./api/query";
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import expandImageSrc from './assets/expand_down.png';
+import { Menu } from "@tauri-apps/api/menu";
+import { Schema } from "./api/model/schema";
+import { executeAsync } from "./api/action";
 
 type SchemaHierarchyItem = [HierarchicalListItemMetadata, SchemaHierarchyItem[]];
 
@@ -16,6 +19,8 @@ type SidebarProps = {
     selectedSchemaOid: number | null,
     onSelectSchema: (schemaOid: number, schemaName: string) => void,
     onRequestCreateSchema: (defaultType: 'table' | 'report') => void,
+    onRequestEditSchema: (schema: Schema) => void,
+    onError: (e: unknown) => void,
 };
 
 export function Sidebar(props: SidebarProps): React.JSX.Element {
@@ -121,7 +126,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                     }}
                 >
                     <Typography 
-                        className={`px-4 pt-1 indent-${Math.min(30, 3 * schema.level)} text-[rgb(var(--color-secondary-foreground)/1)]`}
+                        className={`px-4 pt-1 indent-${Math.min(40, 4 * schema.level)} text-[rgb(var(--color-secondary-foreground)/1)]`}
                         onClick={() => {
                             props.onSelectSchema(schema.oid, schema.name);
                         }}
@@ -136,9 +141,35 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
             </div>);
         } else {
             return (<Typography 
-                className={`px-4 py-1 indent-${Math.min(30, 3 * schema.level)} ${(props.selectedSchemaOid == schema.oid ? 'bg-[rgb(var(--color-secondary)/1)] border-y-1 border-y-[rgb(var(--color-secondary-dark)/1)]' : '')} text-[rgb(var(--color-secondary-foreground)/1)]`}
+                className={`px-4 py-1 indent-${Math.min(40, 4 * schema.level)} ${(props.selectedSchemaOid == schema.oid ? 'bg-[rgb(var(--color-secondary)/1)] border-y-1 border-y-[rgb(var(--color-secondary-dark)/1)]' : '')} text-[rgb(var(--color-secondary-foreground)/1)]`}
                 onClick={() => {
                     props.onSelectSchema(schema.oid, schema.name);
+                }}
+                onContextMenu={async () => {
+                    const menu = await Menu.new({
+                        items: [
+                            {
+                                text: "Edit",
+                                action: async () => {
+                                    const fullSchema = await getSchemaMetadataAsync(schema.oid);
+                                    props.onRequestEditSchema(fullSchema);
+                                }
+                            },
+                            {
+                                text: "Delete",
+                                action: async () => {
+                                    try {
+                                        await executeAsync({
+                                            trashSchema: schema.oid
+                                        });
+                                    } catch (e) {
+                                        props.onError(e);
+                                    }
+                                }
+                            }
+                        ]
+                    });
+                    menu.popup();
                 }}
             >
                 {schema.name}
@@ -147,7 +178,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
     }
 
     return (
-        <div className="w-sm py-4 border-r-2 border-r-[rgb(var(--color-primary)/1)] bg-[rgb(var(--color-secondary-light)/1)] flex flex-col gap-y-6">
+        <div className="w-sm py-4 border-r-2 border-r-[rgb(var(--color-primary)/1)] bg-[rgb(var(--color-secondary-light)/1)] flex flex-col gap-y-6 overflow-y-auto">
             <div>
                 <div onClick={() => { setIsTableSidebarOpen(!isTableSidebarOpen); }} className="grid grid-cols-[1fr_40px] items-center w-full h-10 border-b-1 border-b-[rgb(var(--color-secondary-dark)/1)]">
                     <Typography type="h6" className="px-2 text-[rgb(var(--color-secondary-foreground)/1)]">Tables</Typography>

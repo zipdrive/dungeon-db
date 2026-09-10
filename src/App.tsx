@@ -91,6 +91,30 @@ function App() {
               onError,
             }); 
           }} 
+          onRequestEditSchema={(schema) => {
+            if ('table' in schema) {
+              setPopup({
+                popup: 'editSchema',
+                schemaType: 'table',
+                schemaOid: schema.table.schema.oid,
+                schemaName: schema.table.schema.name,
+                masterSchemaOids: schema.table.schema.masterSchemaOids,
+                onClosePopup,
+                onError
+              });
+            } else {
+              setPopup({
+                popup: 'editSchema',
+                schemaType: 'report',
+                schemaOid: schema.report.schema.oid,
+                schemaName: schema.report.schema.name,
+                masterSchemaOids: schema.report.schema.masterSchemaOids,
+                onClosePopup,
+                onError
+              });
+            }
+          }}
+          onError={onError}
         />
         <Page
           schema={selectedSchema}

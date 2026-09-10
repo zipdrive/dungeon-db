@@ -41,10 +41,12 @@ export class ObjectCellRenderer implements ICellRendererComp {
             const link: HTMLAnchorElement = document.createElement('a');
             link.className = classNames(
                 'text-[rgb(var(--color-primary)/1)]',
-                'cursor-pointer',
-                'w-full',
-                'h-full',
-                'inline-block'
+                'absolute',
+                'left-0',
+                'right-0',
+                'top-0',
+                'bottom-0',
+                'cursor-pointer'
             );
             this.gui.appendChild(link);
 
