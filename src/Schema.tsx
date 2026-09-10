@@ -334,6 +334,7 @@ function SchemaGrid(props: SchemaGridProps): React.JSX.Element {
 
     const onColumnResized = useCallback((event: ColumnResizedEvent) => {
         if (event.finished && event.columns) {
+            console.log('Finished resizing, so committing to database.');
             for (const column of event.columns) {
                 if (column.getColId().startsWith('column')) {
                     const key: `column${number}` = column.getColId() as `column${number}`;
@@ -489,7 +490,6 @@ export function SchemaPage(props: SchemaProps): React.JSX.Element {
                         tableOid,
                         channel: new Channel<DropdownValue>((item) => {
                             setDropdownValues((prevValues) => {
-                                console.log({ ...prevValues, [key]: prevValues[key].concat([item]) });
                                 return { ...prevValues, [key]: prevValues[key].concat([item]) };
                             });
                         })

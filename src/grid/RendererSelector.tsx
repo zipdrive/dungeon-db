@@ -6,6 +6,7 @@ import { DateCellRenderer } from './renderer/DateCellRenderer';
 import { DatetimeCellRenderer } from './renderer/DatetimeCellRenderer';
 import { ObjectCellRenderer } from './renderer/ObjectCellRenderer';
 import { ObjectPageBreadcrumb, SchemaPageBreadcrumb } from '../breadcrumb';
+import { SchemaCellRenderer } from './renderer/SchemaCellRenderer';
 
 export function selectRenderer(content: CellContent, onRequestOpenSchema: (schema: SchemaPageBreadcrumb) => void, onRequestOpenObject: (object: ObjectPageBreadcrumb) => void,): CellRendererSelectorResult | undefined {
     if ('textEntry' in content) {
@@ -45,6 +46,14 @@ export function selectRenderer(content: CellContent, onRequestOpenSchema: (schem
             params: {
                 deferRender: true,
                 onRequestOpenObject
+            }
+        };
+    } else if ('schemaLink' in content) {
+        return {
+            component: SchemaCellRenderer,
+            params: {
+                deferRender: true,
+                onRequestOpenSchema
             }
         };
     }
