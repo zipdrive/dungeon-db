@@ -15,7 +15,6 @@ mod export;
 mod file;
 mod report;
 mod row;
-mod schema;
 mod table;
 mod view;
 

@@ -1,23 +1,47 @@
-use crate::data::column;
-use crate::data::column_type;
-use crate::data::datasource::Datasource;
-use crate::data::schema;
-use crate::data::view::regenerate_schema_views;
 use crate::util::channel::Sender;
 use crate::util::db;
-use crate::util::db::sql_collect;
-use crate::util::db::sql_one;
-use crate::util::db::{sql_execute, sql_iter};
+use crate::util::db::{sql_execute, sql_iter, sql_one, sql_collect};
 use crate::util::error::Error;
 use rusqlite::Connection;
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
-use tauri::Emitter;
 use std::borrow::Borrow;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashSet};
 use std::hash::{Hash, Hasher};
-use std::sync::Mutex;
+
+mod column_type;
+mod column;
+mod view;
+
+
+#[derive(Serialize, Clone)]
+pub struct TableListItem {
+    pub oid: i64,
+    pub name: String
+}
+
+impl TableListItem {
+    /// Send a list of all tables.
+    pub fn send_all(mut sender: Sender<Self>) -> Result<(), Error> {
+        let conn = db::open()?;
+        sql_iter(
+            &conn, 
+            "SELECT OID, NAME FROM METADATA_TABLE ORDER BY NAME", 
+            [], 
+            |row| {
+                sender.send(Self {
+                    oid: row.get::<_, i64>("OID")?,
+                    name: row.get::<_, String>("NAME")?
+                })?;
+                Ok(None::<()>)
+            }
+        )?;
+        Ok(())
+    }
+}
+
+
+
 
 /// Data structure representing the table metadata
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
@@ -44,7 +68,11 @@ impl TableMetadata {
     /// Gets the metadata for a table.
     pub fn get(oid: i64) -> Result<Self, Error> {
         let conn = db::open()?;
+        Self::conn_get(&conn, oid)
+    }
 
+    /// Gets the metadata for a table.
+    pub fn conn_get(conn: &Connection, oid: i64) -> Result<Self, Error> {
         // Get the OID and name from the table metadata view
         let (oid, name) = sql_one(
             &conn, 
@@ -128,7 +156,7 @@ CREATE TABLE __TABLE{} (
     }
 
     /// Overwrites the metadata for the table.
-    pub fn set(&self) -> Result<(), Error> {
+    pub fn set_metadata(&self) -> Result<(), Error> {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
 

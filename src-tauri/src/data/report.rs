@@ -1,13 +1,40 @@
-use crate::data::view::regenerate_schema_views;
-use crate::data::{datasource, schema};
-use crate::util::db::{self, sql_collect};
-use crate::util::db::{sql_one, sql_execute, sql_iter};
+use crate::util::channel::Sender;
+use crate::util::db;
+use crate::util::db::{sql_collect, sql_one, sql_execute, sql_iter};
 use crate::util::error::Error;
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
-use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
+
+
+#[derive(Serialize, Clone)]
+pub struct ReportListItem {
+    pub oid: i64,
+    pub name: String
+}
+
+impl ReportListItem {
+    /// Send a list of all reports.
+    pub fn send_all(mut sender: Sender<Self>) -> Result<(), Error> {
+        let conn = db::open()?;
+        sql_iter(
+            &conn, 
+            "SELECT OID, NAME FROM METADATA_REPORT ORDER BY NAME", 
+            [], 
+            |row| {
+                sender.send(Self {
+                    oid: row.get::<_, i64>("OID")?,
+                    name: row.get::<_, String>("NAME")?
+                })?;
+                Ok(None::<()>)
+            }
+        )?;
+        Ok(())
+    }
+}
+
+
 
 /// Data structure representing the table metadata
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
@@ -33,10 +60,14 @@ impl Borrow<i64> for ReportMetadata {
 }
 
 impl ReportMetadata {
-    /// Gets the metadata for a table.
+    /// Gets the metadata for a report.
     pub fn get(oid: i64) -> Result<Self, Error> {
         let conn = db::open()?;
+        Self::conn_get(&conn, oid)
+    }
 
+    /// Gets the metadata for a report.
+    pub fn conn_get(conn: &Connection, oid: i64) -> Result<Self, Error> {
         // Get the OID, name, and filter formula from the report metadata view
         let (oid, name, filter_formula) = sql_one(
             &conn, 
@@ -116,7 +147,7 @@ ORDER BY OID
     }
 
     /// Overwrites the metadata for the table.
-    pub fn set(&self) -> Result<(), Error> {
+    pub fn set_metadata(&self) -> Result<(), Error> {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
 
