@@ -281,14 +281,14 @@ pub fn query(app: AppHandle, webview: Webview, query: QueryStream) -> Result<(),
 
 #[tauri::command]
 /// Gets the metadata for a table.
-pub fn get_table_metadata(table_oid: i64) -> Result<table::FullMetadata, Error> {
-    table::FullMetadata::get(table_oid)
+pub fn get_table_metadata(table_oid: i64) -> Result<table::TableMetadata, Error> {
+    table::TableMetadata::get(table_oid)
 }
 
 #[tauri::command]
 /// Gets the metadata for a report.
-pub fn get_report_metadata(report_oid: i64) -> Result<report::FullMetadata, Error> {
-    report::FullMetadata::get(report_oid)
+pub fn get_report_metadata(report_oid: i64) -> Result<report::ReportMetadata, Error> {
+    report::ReportMetadata::get(report_oid)
 }
 
 #[tauri::command]
@@ -342,10 +342,10 @@ pub fn get_table_row_labels(app: AppHandle, processid: i64, table_oid: i64) {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Action {
-    CreateTable(table::FullMetadata),
-    EditTable(table::FullMetadata),
-    CreateReport(report::FullMetadata),
-    EditReport(report::FullMetadata),
+    CreateTable(table::TableMetadata),
+    EditTable(table::TableMetadata),
+    CreateReport(report::ReportMetadata),
+    EditReport(report::ReportMetadata),
     TrashSchema(i64),
     UntrashSchema(i64),
 
@@ -434,8 +434,8 @@ impl Action {
             }
             Self::EditTable(metadata) => {
                 // Update the table
-                let old_metadata: table::FullMetadata =
-                    table::FullMetadata::get(metadata.schema.oid.clone())?;
+                let old_metadata: table::TableMetadata =
+                    table::TableMetadata::get(metadata.schema.oid.clone())?;
                 metadata.set()?;
                 record_action(Self::EditTable(old_metadata), is_forward);
 
@@ -452,8 +452,8 @@ impl Action {
             }
             Self::EditReport(metadata) => {
                 // Update the report
-                let old_metadata: report::FullMetadata =
-                    report::FullMetadata::get(metadata.schema.oid.clone())?;
+                let old_metadata: report::ReportMetadata =
+                    report::ReportMetadata::get(metadata.schema.oid.clone())?;
                 metadata.set()?;
                 record_action(Self::EditReport(old_metadata), is_forward);
 

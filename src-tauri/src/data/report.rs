@@ -1,9 +1,9 @@
 use crate::data::view::regenerate_schema_views;
 use crate::data::{datasource, schema};
-use crate::util::db;
+use crate::util::db::{self, sql_collect};
 use crate::util::db::{sql_one, sql_execute, sql_iter};
 use crate::util::error::Error;
-use rusqlite::{params, OptionalExtension, Transaction};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::collections::HashSet;
@@ -12,68 +12,86 @@ use std::hash::{Hash, Hasher};
 /// Data structure representing the table metadata
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct FullMetadata {
-    pub schema: schema::FullMetadata,
+pub struct ReportMetadata {
+    pub oid: i64,
+    pub name: String,
     pub filter_formula: Option<String>,
     pub group_by_column_oids: Vec<i64>,
+    pub order_by_column_oids: Vec<i64>
 }
 
-impl Hash for FullMetadata {
+impl Hash for ReportMetadata {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.schema.hash(state)
+        self.oid.hash(state)
     }
 }
 
-impl Borrow<schema::FullMetadata> for FullMetadata {
-    fn borrow(&self) -> &schema::FullMetadata {
-        &self.schema
+impl Borrow<i64> for ReportMetadata {
+    fn borrow(&self) -> &i64 {
+        &self.oid
     }
 }
 
-impl FullMetadata {
+impl ReportMetadata {
     /// Gets the metadata for a table.
     pub fn get(oid: i64) -> Result<Self, Error> {
         let conn = db::open()?;
 
-        // Get the schema metadata
-        let schema_metadata = schema::FullMetadata::get(&conn, oid)?;
-
-        // Query for filter formula
-        let filter_formula: Option<String> = sql_one(
-            &conn,
+        // Get the OID, name, and filter formula from the report metadata view
+        let (oid, name, filter_formula) = sql_one(
+            &conn, 
             "
-            SELECT 
-                FILTER_FORMULA 
-            FROM METADATA_REPORT 
-            WHERE OID = ?1
-            ",
-            params![oid],
-            |row| row.get::<_, Option<String>>("FILTER_FORMULA"),
+SELECT
+    OID,
+    NAME,
+    FILTER
+FROM METADATA_REPORT
+WHERE OID = ?1
+            ", 
+            params![oid], 
+            |row| {
+                return Ok((
+                    row.get::<_, i64>("OID")?,
+                    row.get::<_, String>("NAME")?,
+                    row.get::<_, Option<String>>("FILTER")?
+                ));
+            }
         )?;
 
         // Query for GROUP BY columns
-        let mut group_by_column_oids: Vec<i64> = Vec::new();
-        sql_iter(
-            &conn,
+        let group_by_column_oids = sql_collect(
+            &conn, 
             "
-            SELECT 
-                COLUMN_OID
-            FROM METADATA_REPORT_GROUPBY_VIEW
-            WHERE REPORT_OID = ?1
-            ",
-            params![oid],
-            |row| {
-                let group_by_column_oid: i64 = row.get::<_, i64>(0)?;
-                group_by_column_oids.push(group_by_column_oid);
-                Ok(None::<()>)
-            }
+SELECT 
+    COLUMN_OID
+FROM METADATA_REPORT_GROUPBY
+WHERE REPORT_OID = ?1
+ORDER BY OID
+            ", 
+            params![oid], 
+            |row| row.get::<_, i64>("COLUMN_OID")
+        )?;
+        // Query for ORDER BY columns
+        let order_by_column_oids = sql_collect(
+            &conn, 
+            "
+SELECT 
+    COLUMN_OID
+FROM METADATA_REPORT_ORDERBY
+WHERE REPORT_OID = ?1
+ORDER BY OID
+            ", 
+            params![oid], 
+            |row| row.get::<_, i64>("COLUMN_OID")
         )?;
 
         // Return the metadata
         Ok(Self {
-            schema: schema_metadata,
+            oid,
+            name,
             filter_formula,
             group_by_column_oids,
+            order_by_column_oids
         })
     }
 
@@ -82,22 +100,15 @@ impl FullMetadata {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
 
-        // Create schema
-        self.schema.create(&trans)?;
-        // Create the report metadata
-        sql_execute(
-            &trans,
-            "
-            INSERT INTO METADATA_REPORT 
-                (OID) 
-                VALUES 
-                (?1)
-            ",
-            params![self.schema.oid],
+        // Create row in table metadata
+        trans.execute(
+            "INSERT INTO __METADATA_TABLE (NAME, FILTER) VALUES (?1, ?2)", 
+            params![self.name, self.filter_formula]
         )?;
+        self.oid = trans.last_insert_rowid();
 
-        // Set the GROUP BY columns and filter formula
-        self.set_transact(&trans)?;
+        // Overwrite the GROUP BY and ORDER BY columns
+        self.conn_set_groupby_orderby(&trans)?;
 
         // Commit the transaction
         trans.commit()?;
@@ -109,67 +120,70 @@ impl FullMetadata {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
 
-        // Overwrite the schema metadata
-        self.schema.set(&trans)?;
+        // Create row in table metadata
+        trans.execute(
+            "
+UPDATE __METADATA_TABLE SET 
+    NAME = ?1, 
+    FILTER = ?2 
+WHERE OID = ?3
+            ", 
+            params![self.name, self.filter_formula]
+        )?;
 
-        // Set the GROUP BY columns and filter formula
-        self.set_transact(&trans)?;
+        // Overwrite the GROUP BY and ORDER BY columns
+        self.conn_set_groupby_orderby(&trans)?;
 
         // Commit the transaction
         trans.commit()?;
         Ok(())
     }
 
-    /// Overwrites the metadata for GROUP BY columns and filters.
-    fn set_transact(&self, trans: &Transaction) -> Result<(), Error> {
-        // Update the filter formula applied to each row of the table
+    fn conn_set_groupby_orderby(&self, conn: &Connection) -> Result<(), Error> {
+        // Delete prior rows in __METADATA_REPORT_GROUPBY table
         sql_execute(
-            trans,
+            conn, 
             "
-            UPDATE METADATA_REPORT SET 
-                FILTER_FORMULA = ?1 
-            WHERE OID = ?2
-            ",
-            params![self.filter_formula, self.schema.oid],
+UPDATE __METADATA_REPORT_GROUPBY AS g SET 
+    TRASH = TRUE
+FROM __METADATA_REPORT_COLUMN c
+WHERE c.OID = g.COLUMN_OID 
+    AND c.REPORT_OID = ?1
+            ", 
+            params![self.oid]
         )?;
 
-        // Trash all previous rows of GROUP BY
-        sql_execute(
-            trans,
-            "
-            UPDATE METADATA_REPORT_GROUPBY SET 
-                TRASH = TRUE 
-            WHERE REPORT_OID = ?1
-            ",
-            params![self.schema.oid],
-        )?;
-        // Set new rows of GROUP BY
-        for group_by_column_oid in self.group_by_column_oids.iter() {
+        // Insert new rows in __METADATA_REPORT_GROUPBY table
+        for groupby_column_oid in self.group_by_column_oids.iter() {
             sql_execute(
-                trans,
-                "
-                INSERT INTO METADATA_REPORT_GROUPBY 
-                    (REPORT_OID, COLUMN_OID)
-                    VALUES
-                    (?1, ?2)
-                ON CONFLICT DO UPDATE SET 
-                    TRASH = FALSE
-                WHERE EXISTS(
-                    SELECT
-                        c.OID
-                    FROM METADATA_COLUMN_VIEW c
-                    WHERE c.OID = excluded.COLUMN_OID
-                        AND (c.SCHEMA_OID = excluded.REPORT_OID
-                            OR EXISTS(SELECT MASTER_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE_VIEW WHERE INHERITOR_SCHEMA_OID = excluded.REPORT_OID)
-                        )
-                )
-                ",
-                params![self.schema.oid, group_by_column_oid]
+                conn, 
+                "INSERT INTO __METADATA_REPORT_GROUPBY (COLUMN_OID) VALUES (?1)", 
+                params![groupby_column_oid]
             )?;
         }
 
-        // Regenerate views related to the schema
-        regenerate_schema_views(&trans, self.schema.oid)?;
+        // Delete prior rows in __METADATA_REPORT_ORDERBY table
+        sql_execute(
+            conn, 
+            "
+UPDATE __METADATA_REPORT_ORDERBY AS o SET 
+    TRASH = TRUE
+FROM __METADATA_REPORT_COLUMN c
+WHERE c.OID = o.COLUMN_OID 
+    AND c.REPORT_OID = ?1
+            ", 
+            params![self.oid]
+        )?;
+
+        // Insert new rows in __METADATA_REPORT_ORDERBY table
+        for orderby_column_oid in self.order_by_column_oids.iter() {
+            sql_execute(
+                conn, 
+                "INSERT INTO __METADATA_REPORT_ORDERBY (COLUMN_OID) VALUES (?1)", 
+                params![orderby_column_oid]
+            )?;
+        }
+
         Ok(())
     }
 }
