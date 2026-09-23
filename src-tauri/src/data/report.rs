@@ -1,11 +1,13 @@
 use crate::util::channel::Sender;
-use crate::util::db;
 use crate::util::db::{sql_collect, sql_one, sql_execute, sql_iter};
+use crate::util::db;
 use crate::util::error::Error;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::hash::{Hash, Hasher};
+
+mod column_type;
 
 
 #[derive(Serialize, Clone)]

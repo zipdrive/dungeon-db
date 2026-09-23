@@ -12,6 +12,7 @@ use std::hash::{Hash, Hasher};
 mod column_type;
 mod column;
 mod view;
+mod cell;
 
 
 #[derive(Serialize, Clone)]
@@ -150,6 +151,9 @@ CREATE TABLE __TABLE{} (
         // Overwrite master OIDs
         self.conn_set_master_oids(&trans)?;
 
+        // Rebuild the table views
+        view::rebuild(&trans, self.oid)?;
+
         // Commit the transaction
         trans.commit()?;
         Ok(())
@@ -172,6 +176,9 @@ WHERE OID = ?2
 
         // Overwrite the master OIDs
         self.conn_set_master_oids(&trans)?;
+
+        // Rebuild the table views
+        view::rebuild(&trans, self.oid)?;
 
         // Commit the transaction
         trans.commit()?;

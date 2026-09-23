@@ -1,9 +1,12 @@
 use rusqlite::{Connection, params};
+use serde::{Deserialize, Serialize};
 use crate::util::db::{RowWrapper, sql_collect, sql_execute, sql_one};
 use crate::util::db;
 use crate::util::error::Error;
 use crate::data::table::column_type::{TableColumnType, Primitive};
+use crate::data::table::view;
 
+#[derive(Serialize, Deserialize, Clone)]
 pub struct TableColumnMetadata {
     pub oid: i64,
     pub name: String,
@@ -142,21 +145,22 @@ impl TableColumnMetadata {
     }
 
     /// Queries for all columns that are directly owned or inherited by the given table.
-    /// Returns tuples of the datasource path and the column metadata.
-    pub fn query_all_inherited(table_oid: i64) -> Result<Vec<(String, Self)>, Error> {
+    /// Returns tuples of the owning table OID, the datasource path from the given table, and the column metadata.
+    pub fn query_all_inherited(table_oid: i64) -> Result<Vec<(i64, String, Self)>, Error> {
         let conn = db::open()?;
         Self::conn_query_all_inherited(&conn, table_oid)
     }
 
     /// Queries for all columns that are directly owned or inherited by the given table.
     /// Uses the given connection.
-    /// Returns tuples of the datasource path and the column metadata.
-    pub fn conn_query_all_inherited(conn: &Connection, table_oid: i64) -> Result<Vec<(String, Self)>, Error> {
+    /// Returns tuples of the owning table OID, the datasource path from the given table, and the column metadata.
+    pub fn conn_query_all_inherited(conn: &Connection, table_oid: i64) -> Result<Vec<(i64, String, Self)>, Error> {
         sql_collect(
             conn, 
             "SELECT * FROM METADATA_TABLE_COLUMN_PATH WHERE TABLE_OID = ?1 AND IS_REQUIRED ORDER BY ORDERING", 
             params![table_oid], 
             |row| Ok((
+                row.get("BASE_TABLE_OID")?,
                 row.get("DATASOURCE_PATH")?,
                 Self::new(row)?
             ))
@@ -164,21 +168,22 @@ impl TableColumnMetadata {
     }
 
     /// Queries for all columns that are directly owned, inherited by, or belong to a table that inherits from the given table.
-    /// Returns tuples of the datasource path, true if the column is directly owned or inherited by the given table, and the column metadata.
-    pub fn query_all(table_oid: i64) -> Result<Vec<(String, bool, Self)>, Error> {
+    /// Returns tuples of the owning table OID, the datasource path from the given table, true if the column is directly owned or inherited by the given table, and the column metadata.
+    pub fn query_all(table_oid: i64) -> Result<Vec<(i64, String, bool, Self)>, Error> {
         let conn = db::open()?;
         Self::conn_query_all(&conn, table_oid)
     }
 
     /// Queries for all columns that are directly owned, inherited by, or belong to a table that inherits from the given table.
     /// Uses the given connection.
-    /// Returns tuples of the datasource path, true if the column is directly owned or inherited by the given table, and the column metadata.
-    pub fn conn_query_all(conn: &Connection, table_oid: i64) -> Result<Vec<(String, bool, Self)>, Error> {
+    /// Returns tuples of the owning table OID, the datasource path from the given table, true if the column is directly owned or inherited by the given table, and the column metadata.
+    pub fn conn_query_all(conn: &Connection, table_oid: i64) -> Result<Vec<(i64, String, bool, Self)>, Error> {
         sql_collect(
             conn, 
             "SELECT * FROM METADATA_TABLE_COLUMN_PATH WHERE TABLE_OID = ?1 ORDER BY ORDERING", 
             params![table_oid], 
             |row| Ok((
+                row.get("BASE_TABLE_OID")?,
                 row.get("DATASOURCE_PATH")?,
                 row.get("IS_REQUIRED")?,
                 Self::new(row)?
@@ -196,12 +201,16 @@ impl TableColumnMetadata {
         // Create the column metadata and storage
         let table_oid = self.conn_create(&trans, table_oid)?;
 
+        // Rebuild the table views
+        view::rebuild(&trans, table_oid)?;
+
         // Commit the transaction
         trans.commit()?;
         Ok(table_oid)
     }
 
     /// Creates the column on the given table.
+    /// This function does not trigger a rebuild of the table views.
     /// Uses the given connection.
     /// Returns the OID of the owning table.
     fn conn_create(&mut self, conn: &Connection, table_oid: i64) -> Result<i64, Error> {
@@ -444,6 +453,9 @@ WHERE OID = ?5
         // Trash the column being replaced
         Self::conn_trash(&trans, other.oid)?;
 
+        // Rebuild the table views
+        view::rebuild(&trans, table_oid)?;
+
         // Commit the transaction
         trans.commit()?;
         Ok(table_oid)
@@ -451,12 +463,15 @@ WHERE OID = ?5
 
 
     /// Trash the column.
-    pub fn trash(oid: i64) -> Result<(), Error> {
+    pub fn trash(table_oid: i64, column_oid: i64) -> Result<(), Error> {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
 
         // Trash the column
-        Self::conn_trash(&trans, oid)?;
+        Self::conn_trash(&trans, column_oid)?;
+
+        // Rebuild the table views
+        view::rebuild(&trans, table_oid)?;
 
         // Commit the transaction
         trans.commit()?;
@@ -464,6 +479,7 @@ WHERE OID = ?5
     }
 
     /// Trash the column.
+    /// This function does not trigger a rebuild of the table views.
     /// Uses the given connection.
     pub fn conn_trash(conn: &Connection, oid: i64) -> Result<(), Error> {
         sql_execute(
@@ -475,12 +491,15 @@ WHERE OID = ?5
     }
 
     /// Untrash the column.
-    pub fn untrash(oid: i64) -> Result<(), Error> {
+    pub fn untrash(table_oid: i64, column_oid: i64) -> Result<(), Error> {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
 
         // Untrash the column
-        Self::conn_untrash(&trans, oid)?;
+        Self::conn_untrash(&trans, column_oid)?;
+
+        // Rebuild the table views
+        view::rebuild(&trans, table_oid)?;
 
         // Commit the transaction
         trans.commit()?;
@@ -488,6 +507,7 @@ WHERE OID = ?5
     }
 
     /// Untrash the column.
+    /// This function does not trigger a rebuild of the table views.
     /// Uses the given connection.
     pub fn conn_untrash(conn: &Connection, oid: i64) -> Result<(), Error> {
         sql_execute(
@@ -499,14 +519,17 @@ WHERE OID = ?5
     }
 
     /// Trashes one column, and untrashs another.
-    pub fn swap(trash_oid: i64, untrash_oid: i64) -> Result<(), Error> {
+    pub fn swap(table_oid: i64, trash_column_oid: i64, untrash_column_oid: i64) -> Result<(), Error> {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
 
         // Trash one column
-        Self::conn_trash(&trans, trash_oid)?;
+        Self::conn_trash(&trans, trash_column_oid)?;
         // Untrash the other column
-        Self::conn_untrash(&trans, untrash_oid)?;
+        Self::conn_untrash(&trans, untrash_column_oid)?;
+
+        // Rebuild the table views
+        view::rebuild(&trans, table_oid)?;
 
         // Commit the transaction
         trans.commit()?;
