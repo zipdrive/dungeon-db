@@ -30,7 +30,7 @@ pub fn run() {
             data::get_cell,
             data::get_processid,
             data::get_table_row_labels,
-            data::get_image_src,
+            data::get_src,
             data::download_file,
             data::upload_file,
             data::execute

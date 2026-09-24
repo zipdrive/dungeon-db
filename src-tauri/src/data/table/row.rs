@@ -1,7 +1,7 @@
-use rusqlite::params;
+use rusqlite::{Connection, params};
 use serde::Serialize;
 
-use crate::{data::table::{column::TableColumnMetadata, column_type::{Primitive, TableColumnType}}, util::{channel::Sender, db::{self, RowWrapper, sql_iter, sql_one}, error::Error}};
+use crate::{data::{file::File, table::{column::TableColumnMetadata, column_type::{Primitive, TableColumnType}, label}}, util::{channel::Sender, db::{self, RowWrapper, sql_iter, sql_one}, error::Error}};
 
 #[derive(Serialize, Clone)]
 pub enum TableCellTextContentFormat {
@@ -36,13 +36,11 @@ pub enum TableCellContent {
         format: TableCellTextContentFormat,
     },
     File {
-        value: Option<i64>,
-        label: Option<String>,
+        value: Option<File>,
     },
     Object {
         table_oid: i64,
         value: Option<i64>,
-        label: Option<String>,
     },
     SingleSelectDropdown {
         table_oid: i64,
@@ -51,22 +49,25 @@ pub enum TableCellContent {
     MultiSelectDropdown {
         table_oid: i64,
         value: Vec<i64>,
+    },
+    Subreport {
+        report_oid: i64,
     }
 }
 
 #[derive(Serialize, Clone)]
 pub struct TableCell {
-    table_oid: i64,
-    column_oid: i64,
-    row_oid: i64,
-    content: TableCellContent
+    pub table_oid: i64,
+    pub column_oid: i64,
+    pub row_oid: i64,
+    pub content: TableCellContent
 }
 
 #[derive(Serialize, Clone)]
 pub struct TableRow {
-    oid: i64,
-    index: i64,
-    cells: Vec<TableCell>
+    pub oid: i64,
+    pub index: i64,
+    pub cells: Vec<TableCell>
 }
 
 impl TableRow {
@@ -102,13 +103,19 @@ impl TableRow {
                             Primitive::Number => TableCellContent::Number { 
                                 value: row.get::<&str, _>(&ord)? 
                             },
-                            Primitive::Date => TableCellContent::Date { 
-                                value: row.get::<&str, _>(&ord)?, 
-                                label: todo!("date labels")
+                            Primitive::Date => {
+                                let label_ord: String = format!("COLUMN{}_LABEL", column.oid);
+                                TableCellContent::Date { 
+                                    value: row.get::<&str, _>(&ord)?, 
+                                    label: row.get::<&str, _>(&label_ord)?
+                                }
                             },
-                            Primitive::Datetime => TableCellContent::Datetime { 
-                                value: row.get::<&str, _>(&ord)?, 
-                                label: todo!("datetime labels")
+                            Primitive::Datetime => {
+                                let label_ord: String = format!("COLUMN{}_LABEL", column.oid);
+                                TableCellContent::Datetime { 
+                                    value: row.get::<&str, _>(&ord)?, 
+                                    label: row.get::<&str, _>(&label_ord)?
+                                }
                             },
                             Primitive::Text => TableCellContent::Text { 
                                 value: row.get::<&str, _>(&ord)?, 
@@ -135,9 +142,9 @@ impl TableRow {
                     TableColumnType::File { .. } => {
                         let ord: String = format!("COLUMN{}", column.oid);
                         let value: Option<i64> = row.get::<&str, _>(&ord)?;
+                        let file: Option<File> = if let Some(value) = value { Some(File::get(value)?) } else { None };
                         TableCellContent::File { 
-                            value, 
-                            label: todo!("file labels") 
+                            value: file,
                         }
                     }
                     TableColumnType::Object { table_oid: referenced_table_oid, .. } => {
@@ -145,14 +152,13 @@ impl TableRow {
                         TableCellContent::Object { 
                             table_oid: referenced_table_oid.clone(), 
                             value: row.get::<&str, _>(&ord)?,
-                            label: todo!("object labels")
                         }
                     }
                     TableColumnType::SingleSelect { table_oid: referenced_table_oid, .. } => {
                         let ord: String = format!("COLUMN{}", column.oid);
                         TableCellContent::SingleSelectDropdown { 
                             table_oid: referenced_table_oid.clone(), 
-                            value: row.get::<&str, _>(&ord)?
+                            value: row.get::<&str, _>(&ord)?,
                         }
                     }
                     TableColumnType::MultiSelect { table_oid: referenced_table_oid, .. } => {
@@ -170,7 +176,9 @@ impl TableRow {
                         }
                     }
                     TableColumnType::Subreport { report_oid, .. } => {
-
+                        TableCellContent::Subreport { 
+                            report_oid: report_oid.clone()
+                        }
                     }
                 }
             });
@@ -182,14 +190,19 @@ impl TableRow {
     /// Gets a single row from the given table.
     pub fn get(table_oid: i64, row_oid: i64) -> Result<Self, Error> {
         let conn = db::open()?;
+        Self::conn_get(&conn, table_oid, row_oid)
+    }
 
+    /// Gets a single row from the given table.
+    /// Uses the given connection.
+    pub fn conn_get(conn: &Connection, table_oid: i64, row_oid: i64) -> Result<Self, Error> {
         // Send the columns of the table
-        let columns: Vec<(i64, TableColumnMetadata)> = TableColumnMetadata::conn_query_all_inherited(&conn, table_oid)?
+        let columns: Vec<(i64, TableColumnMetadata)> = TableColumnMetadata::conn_query_all(&conn, table_oid)?
             .into_iter().map(|(owning_table_oid, _, column)| (owning_table_oid, column)).collect();
         
         // Send the rows of the table
         sql_one(
-            &conn, 
+            conn, 
             format!("SELECT ROW_NUMBER() AS ROW_INDEX, * FROM TABLE{table_oid} WHERE OID = ?1"), 
             params![row_oid], 
             |row| {
@@ -199,11 +212,11 @@ impl TableRow {
     }
 
     /// Queries for multiple rows from the given table.
-    pub fn query(mut sender: Sender<Self>, table_oid: i64) -> Result<(), Error> {
+    pub fn send(mut sender: Sender<Self>, table_oid: i64) -> Result<(), Error> {
         let conn = db::open()?;
 
         // Send the columns of the table
-        let columns: Vec<(i64, TableColumnMetadata)> = TableColumnMetadata::conn_query_all_inherited(&conn, table_oid)?
+        let columns: Vec<(i64, TableColumnMetadata)> = TableColumnMetadata::conn_query_all(&conn, table_oid)?
             .into_iter().map(|(owning_table_oid, _, column)| (owning_table_oid, column)).collect();
         
         // Send the rows of the table
@@ -217,6 +230,35 @@ impl TableRow {
             |row| {
                 let payload: Self = Self::new(row, &table_oid, &columns)?;
                 sender.send(payload)?;
+                Ok(None::<()>)
+            }
+        )?;
+        Ok(())
+    }
+}
+
+
+#[derive(Serialize, Clone)]
+pub struct TableRowLabel {
+    pub oid: i64,
+    pub label: String
+}
+
+impl TableRowLabel {
+    /// Send all labels for SingleSelect and MultiSelect options.
+    pub fn send_all(mut sender: Sender<Self>, table_oid: i64) -> Result<(), Error> {
+        let conn = db::open()?;
+        sql_iter(
+            &conn,
+            format!("SELECT OID FROM TABLE{table_oid}"),
+            [],
+            |row| {
+                let oid: i64 = row.get("OID")?;
+                let label: String = label::get_select_label(table_oid.clone(), oid.clone())?;
+                sender.send(Self {
+                    oid,
+                    label
+                })?;
                 Ok(None::<()>)
             }
         )?;

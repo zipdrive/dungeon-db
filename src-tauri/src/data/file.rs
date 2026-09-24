@@ -6,71 +6,93 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::fs::File as FilesystemFile;
 use std::io::{BufReader, Read, Write};
-use std::{collections::btree_map::Entry::Occupied, path::Path};
+use std::path::Path;
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum File {
-    Path { oid: i64, path: String },
-    Blob { oid: i64 },
+    Path { 
+        oid: i64, 
+        name: String, 
+        path: String,
+    },
+    Blob { 
+        oid: i64,
+        name: String,
+        size: String,
+    }
 }
 
 impl File {
-    /// Retrieve the file with the given OID.
-    pub fn get(oid: i64) -> Result<Self, Error> {
-        let conn = db::open()?;
-        Self::get_transact(&conn, oid)
+    /// The OID of the file.
+    pub fn oid(&self) -> &i64 {
+        match self {
+            Self::Path { oid, .. }
+            | Self::Blob { oid, .. } => oid 
+        }
+    }
+
+    /// The name of the file.
+    pub fn name(&self) -> &String {
+        match self {
+            Self::Path { name, .. }
+            | Self::Blob { name, .. } => name
+        }
     }
 
     /// Retrieve the file with the given OID.
-    pub fn get_transact(conn: &Connection, oid: i64) -> Result<Self, Error> {
+    pub fn get(oid: i64) -> Result<Self, Error> {
+        let conn = db::open()?;
+        Self::conn_get(&conn, oid)
+    }
+
+    /// Retrieve the file with the given OID.
+    pub fn conn_get(conn: &Connection, oid: i64) -> Result<Self, Error> {
         sql_one(
             conn,
-            "
-            SELECT
-                OID,
-                NULL AS FILEPATH
-            FROM METADATA_FILE__BLOB
-            WHERE OID = ?1
-
-            UNION
-
-            SELECT
-                OID,
-                FILEPATH
-            FROM METADATA_FILE__PATH
-            WHERE OID = ?1
-            ",
+            "SELECT * FROM METADATA_FILE WHERE OID = ?1",
             params![oid],
             |row| {
                 let oid: i64 = row.get::<_, i64>("OID")?;
-                Ok(match row.get::<_, Option<String>>("FILEPATH")? {
-                    Some(path) => Self::Path { oid, path },
-                    None => Self::Blob { oid }
+                let name: String = row.get::<_, String>("FILE_NAME")?;
+                let file_type: String = row.get::<_, String>("FILE_TYPE")?;
+                Ok(if file_type == "path" {
+                    Self::Path {
+                        oid,
+                        name,
+                        path: row.get("FILE_PATH")?
+                    }
+                } else if file_type == "blob" {
+                    Self::Blob { 
+                        oid, 
+                        name,
+                        size: row.get("FILE_CONTENT_SIZE")?
+                    }
+                } else {
+                    return Err(Error::adhoc(format!("Unknown file storage method \"{file_type}\"")));
                 })
             }
         )
     }
 
     /// Loads the file as a URI (e.g. for an img tag).
-    pub fn get_image_src(self) -> Result<String, Error> {
+    pub fn get_src(self) -> Result<String, Error> {
         let conn = db::open()?;
-        self.get_image_src_transact(&conn)
+        self.conn_get_src(&conn)
     }
 
     /// Loads the file as a URI (e.g. for an img tag).
-    pub fn get_image_src_transact(self, conn: &Connection) -> Result<String, Error> {
-        // Load file content into buffer
+    pub fn conn_get_src(self, conn: &Connection) -> Result<String, Error> {
         // Load file content into buffer
         let buf: Vec<u8> = match self {
-            Self::Path { path, .. } => match std::fs::read(path) {
+            Self::Path { path, .. } => match std::fs::read(path.clone()) {
                 Ok(read_buf) => read_buf,
                 Err(_) => {
-                    return Err(Error::adhoc("Unable to open file."));
+                    return Err(Error::adhoc(format!("Unable to open file at \"{path}\"")));
                 }
             },
-            Self::Blob { oid } => {
-                let blob = conn.blob_open("main", "METADATA_FILE__BLOB", "CONTENT", oid, true)?;
+            Self::Blob { oid, name, .. } => {
+                let blob = conn.blob_open("main", "__METADATA_FILE_BLOB", "CONTENT", oid, true)?;
 
                 // Read the BLOB into a buffer
                 let mut buf: Vec<u8> = Vec::new();
@@ -78,7 +100,7 @@ impl File {
                 match buf_reader.read_to_end(&mut buf) {
                     Ok(_) => {}
                     Err(_) => {
-                        return Err(Error::adhoc("Unable to read stored file."));
+                        return Err(Error::adhoc(format!("Unable to read stored file \"{name}\"")));
                     }
                 }
                 buf
@@ -98,55 +120,23 @@ impl File {
         }
     }
 
-    /// Loads the file as a base64 string.
-    pub fn into_base64(self) -> Result<String, Error> {
-        let conn = db::open()?;
-
-        // Load file content into buffer
-        let buf: Vec<u8> = match self {
-            Self::Path { path, .. } => match std::fs::read(path) {
-                Ok(read_buf) => read_buf,
-                Err(_) => {
-                    return Err(Error::adhoc("Unable to open file."));
-                }
-            },
-            Self::Blob { oid } => {
-                let blob = conn.blob_open("main", "METADATA_FILE__BLOB", "CONTENT", oid, true)?;
-
-                // Read the BLOB into a buffer
-                let mut buf: Vec<u8> = Vec::new();
-                let mut buf_reader = BufReader::new(blob);
-                match buf_reader.read_to_end(&mut buf) {
-                    Ok(_) => {}
-                    Err(_) => {
-                        return Err(Error::adhoc("Unable to read stored file."));
-                    }
-                }
-                buf
-            }
-        };
-
-        // Encode buffer into base64
-        return Ok(base64standard.encode(&buf));
-    }
-
     /// Download a file to a location in the local filesystem.
     pub fn download(self, download_to_path: String) -> Result<(), Error> {
         // Load the file content to a buffer
         let buf: Vec<u8> = match self {
             Self::Path { path, .. } => {
                 // Read the file into a buffer
-                match std::fs::read(path) {
+                match std::fs::read(path.clone()) {
                     Ok(read_buf) => read_buf,
                     Err(_) => {
-                        return Err(Error::adhoc("Unable to open file."));
+                        return Err(Error::adhoc(format!("Unable to open file at \"{path}\"")));
                     }
                 }
             }
-            Self::Blob { oid } => {
+            Self::Blob { oid, name, .. } => {
                 // Create the BLOB
                 let conn = db::open()?;
-                let blob = conn.blob_open("main", "METADATA_FILE__BLOB", "CONTENT", oid, true)?;
+                let blob = conn.blob_open("main", "__METADATA_FILE_BLOB", "CONTENT", oid, true)?;
 
                 // Read the BLOB into a buffer
                 let mut buf_reader = BufReader::new(blob);
@@ -154,7 +144,7 @@ impl File {
                 match buf_reader.read_to_end(&mut buf) {
                     Ok(_) => {}
                     Err(_) => {
-                        return Err(Error::adhoc("Unable to read stored file."));
+                        return Err(Error::adhoc(format!("Unable to read stored file \"{name}\"")));
                     }
                 }
                 buf
@@ -184,11 +174,12 @@ impl File {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
 
-        // Create a file
-        sql_execute(&trans, "INSERT INTO METADATA_FILE DEFAULT VALUES", [])?;
-
         match self {
-            Self::Path { oid, path } => {
+            Self::Path { oid, name, path } => {
+                // Create a file
+                *name = String::from(Path::new(&upload_from_path).file_name().unwrap().to_str().unwrap());
+                sql_execute(&trans, "INSERT INTO __METADATA_FILE (NAME) VALUES (?1)", params![*name])?;
+
                 // Update the file OID and path
                 *oid = trans.last_insert_rowid();
                 *path = upload_from_path;
@@ -197,32 +188,27 @@ impl File {
                 sql_execute(
                     &trans,
                     "
-                    INSERT INTO METADATA_FILE__PATH 
-                        (OID, FILEPATH) 
+                    INSERT INTO __METADATA_FILE_PATH 
+                        (OID, PATH) 
                         VALUES 
                         (?1, ?2)
                     ",
                     params![*oid, *path],
                 )?;
             }
-            Self::Blob { oid } => {
+            Self::Blob { oid, name, .. } => {
+                // Create a file
+                *name = String::from(Path::new(&upload_from_path).file_name().unwrap().to_str().unwrap());
+                sql_execute(&trans, "INSERT INTO __METADATA_FILE (NAME) VALUES (?1)", params![*name])?;
+
                 // Update the file OID
                 *oid = trans.last_insert_rowid();
 
-                // Crop the filepath down to the file name
-                let name: String = {
-                    let path = Path::new(&upload_from_path);
-                    match path.file_name() {
-                        Some(n) => String::from(n.to_str().unwrap_or("")),
-                        None => String::from(""),
-                    }
-                };
-
                 // Load the file from the filesystem
-                let buf = match std::fs::read(upload_from_path) {
+                let buf = match std::fs::read(upload_from_path.clone()) {
                     Ok(read_buf) => read_buf,
                     Err(_) => {
-                        return Err(Error::adhoc("Unable to open file."));
+                        return Err(Error::adhoc(format!("Unable to open file at \"{upload_from_path}\"")));
                     }
                 };
                 let cropped_file_len: i64 = match i64::try_from(buf.len()) {
@@ -238,18 +224,18 @@ impl File {
                 sql_execute(
                     &trans,
                     "
-                    INSERT INTO METADATA_FILE__BLOB 
-                        (OID, FILENAME, CONTENT) 
+                    INSERT INTO __METADATA_FILE_BLOB 
+                        (OID, CONTENT) 
                         VALUES 
-                        (?1, ?2, ZEROBLOB(?3))
+                        (?1, ZEROBLOB(?2))
                     ", 
-                    params![*oid, name, cropped_file_len]
+                    params![*oid, cropped_file_len]
                 )?;
 
                 // Fill the empty blob with the data from the file
                 {
                     let mut blob =
-                        trans.blob_open("main", "METADATA_FILE__BLOB", "CONTENT", *oid, false)?;
+                        trans.blob_open("main", "__METADATA_FILE_BLOB", "CONTENT", *oid, false)?;
                     match blob.write_all(&buf) {
                         Ok(_) => {}
                         Err(_) => {

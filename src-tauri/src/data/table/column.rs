@@ -95,7 +95,7 @@ impl TableColumnMetadata {
                         report_oid: row.get("COLUMNTYPE_REPORT_OID")? 
                     },
                     _ => {
-                        return Err(Error::adhoc(format!("\"{column_type_id}\" is not a known column type!")));
+                        return Err(Error::adhoc(format!("\"{column_type_id}\" is not a known column type for tables!")));
                     }
                 }
             },
@@ -146,38 +146,15 @@ impl TableColumnMetadata {
 
     /// Queries for all columns that are directly owned or inherited by the given table.
     /// Returns tuples of the owning table OID, the datasource path from the given table, and the column metadata.
-    pub fn query_all_inherited(table_oid: i64) -> Result<Vec<(i64, String, Self)>, Error> {
+    pub fn query_all(table_oid: i64) -> Result<Vec<(i64, String, Self)>, Error> {
         let conn = db::open()?;
-        Self::conn_query_all_inherited(&conn, table_oid)
+        Self::conn_query_all(&conn, table_oid)
     }
 
     /// Queries for all columns that are directly owned or inherited by the given table.
     /// Uses the given connection.
     /// Returns tuples of the owning table OID, the datasource path from the given table, and the column metadata.
-    pub fn conn_query_all_inherited(conn: &Connection, table_oid: i64) -> Result<Vec<(i64, String, Self)>, Error> {
-        sql_collect(
-            conn, 
-            "SELECT * FROM METADATA_TABLE_COLUMN_PATH WHERE TABLE_OID = ?1 AND IS_REQUIRED ORDER BY ORDERING", 
-            params![table_oid], 
-            |row| Ok((
-                row.get("BASE_TABLE_OID")?,
-                row.get("DATASOURCE_PATH")?,
-                Self::new(row)?
-            ))
-        )
-    }
-
-    /// Queries for all columns that are directly owned, inherited by, or belong to a table that inherits from the given table.
-    /// Returns tuples of the owning table OID, the datasource path from the given table, true if the column is directly owned or inherited by the given table, and the column metadata.
-    pub fn query_all(table_oid: i64) -> Result<Vec<(i64, String, bool, Self)>, Error> {
-        let conn = db::open()?;
-        Self::conn_query_all(&conn, table_oid)
-    }
-
-    /// Queries for all columns that are directly owned, inherited by, or belong to a table that inherits from the given table.
-    /// Uses the given connection.
-    /// Returns tuples of the owning table OID, the datasource path from the given table, true if the column is directly owned or inherited by the given table, and the column metadata.
-    pub fn conn_query_all(conn: &Connection, table_oid: i64) -> Result<Vec<(i64, String, bool, Self)>, Error> {
+    pub fn conn_query_all(conn: &Connection, table_oid: i64) -> Result<Vec<(i64, String, Self)>, Error> {
         sql_collect(
             conn, 
             "SELECT * FROM METADATA_TABLE_COLUMN_PATH WHERE TABLE_OID = ?1 ORDER BY ORDERING", 
@@ -185,7 +162,6 @@ impl TableColumnMetadata {
             |row| Ok((
                 row.get("BASE_TABLE_OID")?,
                 row.get("DATASOURCE_PATH")?,
-                row.get("IS_REQUIRED")?,
                 Self::new(row)?
             ))
         )
@@ -222,6 +198,7 @@ impl TableColumnMetadata {
             conn,
             "
 INSERT INTO __METADATA_TABLE_COLUMN (
+    TABLE_OID,
     NAME,
     COLUMNTYPE_OID,
     SIZE,
@@ -232,10 +209,12 @@ INSERT INTO __METADATA_TABLE_COLUMN (
     ?2,
     ?3,
     ?4,
-    ?5
+    ?5,
+    ?6
 )
             ", 
             params![
+                table_oid,
                 self.name,
                 self.column_type.oid(),
                 self.size,

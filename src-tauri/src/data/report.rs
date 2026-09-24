@@ -8,6 +8,7 @@ use std::borrow::Borrow;
 use std::hash::{Hash, Hasher};
 
 mod column_type;
+pub mod column;
 
 
 #[derive(Serialize, Clone)]

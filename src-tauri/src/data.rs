@@ -1,4 +1,3 @@
-use crate::data::schema::UPDATE_SCHEMA_SIGNAL;
 use crate::util::channel::Sender;
 use crate::util::error::Error;
 use crate::util::{db, dialog, process};
@@ -7,16 +6,10 @@ use std::sync::Mutex;
 use tauri::ipc::JavaScriptChannelId;
 use tauri::{AppHandle, Emitter, Manager, Webview};
 use tauri_plugin_dialog::DialogExt;
-mod cell;
-mod column;
-mod column_type;
-mod datasource;
-mod export;
 mod file;
-mod report;
-mod row;
 mod table;
-mod view;
+mod report;
+mod formula;
 
 fn reset(app: &AppHandle) -> Result<(), Error> {
     // Close all dialogs
@@ -173,10 +166,11 @@ impl QueryStream {
     /// Sends data through a channel from the database to the frontend.
     pub fn send(self, app: AppHandle, webview: Webview) -> Result<(), Error> {
         match self {
-            Self::Tables { channel } => schema::HierarchicalListItemMetadata::query_tables(
+            Self::Tables { channel } => table::TableListItem::send_all(
                 Sender::Channel(channel.channel_on(webview)),
             ),
-            Self::Reports { channel } => schema::HierarchicalListItemMetadata::query_reports(
+
+            Self::Reports { channel } => report::ReportListItem::send_all(
                 Sender::Channel(channel.channel_on(webview)),
             ),
 
@@ -259,22 +253,17 @@ impl QueryStream {
             Self::TableRowLabels { 
                 table_oid, 
                 channel 
-            } => {
-                tauri::async_runtime::spawn_blocking(move || {
-                    table::DropdownValue::query_table_row_labels(
-                        Sender::Channel(channel.channel_on(webview)), 
-                        table_oid
-                    )
-                });
-                Ok(())
-            }
+            } => table::row::TableRowLabel::send_all(
+                Sender::Channel(channel.channel_on(webview)), 
+                table_oid
+            )
         }
     }
 }
 
 #[tauri::command]
 /// Sends data through a channel from the backend to the frontend.
-pub fn query(app: AppHandle, webview: Webview, query: QueryStream) -> Result<(), Error> {
+pub async fn query(app: AppHandle, webview: Webview, query: QueryStream) -> Result<(), Error> {
     query.send(app, webview)
 }
 
@@ -285,21 +274,22 @@ pub fn get_table_metadata(table_oid: i64) -> Result<table::TableMetadata, Error>
 }
 
 #[tauri::command]
+/// Gets the metadata for a table column.
+pub fn get_table_column_metadata(column_oid: i64) -> Result<table::column::TableColumnMetadata, Error> {
+    let (_, column_metadata) = table::column::TableColumnMetadata::get(column_oid)?;
+    Ok(column_metadata)
+}
+
+#[tauri::command]
+/// Gets the label for an Object.
+pub async fn get_object_label(table_oid: i64, row_oid: i64) -> Result<String, Error> {
+    table::label::get_object_label(table_oid, row_oid)
+}
+
+#[tauri::command]
 /// Gets the metadata for a report.
 pub fn get_report_metadata(report_oid: i64) -> Result<report::ReportMetadata, Error> {
     report::ReportMetadata::get(report_oid)
-}
-
-#[tauri::command]
-/// Gets the metadata for a schema.
-pub fn get_schema_metadata(schema_oid: i64) -> Result<schema::Schema, Error> {
-    schema::Schema::get(schema_oid)
-}
-
-#[tauri::command]
-/// Get the metadata for a particular column in a table.
-pub fn get_column(column_oid: i64) -> Result<column::FullMetadata, Error> {
-    column::FullMetadata::get(column_oid)
 }
 
 #[tauri::command]
@@ -307,33 +297,26 @@ pub fn get_cell(cell_identifier: cell::CellIdentifier) -> cell::Cell {
     cell::Cell::get(cell_identifier)
 }
 
+
+
 #[tauri::command]
-pub fn get_image_src(file: file::File) -> Result<String, Error> {
-    file.get_image_src()
+/// Gets the content of a file as a base64 string.
+pub async fn get_src(file: file::File) -> Result<String, Error> {
+    file.get_src()
 }
 
 #[tauri::command]
-pub fn download_file(file_oid: i64, download_to_path: String) -> Result<(), Error> {
+/// Downloads a file.
+pub async fn download_file(file_oid: i64, download_to_path: String) -> Result<(), Error> {
     let file: file::File = file::File::get(file_oid)?;
     file.download(download_to_path)
 }
 
 #[tauri::command]
-pub fn upload_file(mut file: file::File, upload_from_path: String) -> Result<i64, Error> {
+/// Uploads a file.
+pub async fn upload_file(mut file: file::File, upload_from_path: String) -> Result<i64, Error> {
     file.upload(upload_from_path)?;
-    Ok(match file {
-        file::File::Path { oid, .. } | file::File::Blob { oid } => oid,
-    })
-}
-
-#[tauri::command] 
-pub fn get_processid() -> i64 {
-    process::get_processid()
-}
-
-#[tauri::command]
-pub fn get_table_row_labels(app: AppHandle, processid: i64, table_oid: i64) {
-    
+    Ok(*file.oid())
 }
 
 

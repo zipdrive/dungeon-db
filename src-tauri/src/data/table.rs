@@ -10,9 +10,10 @@ use std::collections::{HashSet};
 use std::hash::{Hash, Hasher};
 
 mod column_type;
-mod column;
+pub mod column;
 mod view;
-mod cell;
+pub mod row;
+pub mod label;
 
 
 #[derive(Serialize, Clone)]

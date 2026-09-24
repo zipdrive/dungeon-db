@@ -8,7 +8,8 @@ use crate::util::error::Error;
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ReportColumnType {
     Formula { 
-        oid: i64
+        oid: i64,
+        formula: String
     },
     Subreport { 
         oid: i64, 
@@ -31,12 +32,12 @@ impl ReportColumnType {
         let inserted_oid: i64 = conn.last_insert_rowid();
         
         match self {
-            Self::Formula { oid } => {
+            Self::Formula { oid, formula } => {
                 *oid = inserted_oid;
                 sql_execute(
                     conn, 
                     "INSERT INTO __METADATA_REPORT_COLUMNTYPE_FORMULA (OID, FORMULA) VALUES (?1, ?2)", 
-                    params![*oid, todo!("formula")]
+                    params![*oid, *formula]
                 )?;
             }
             Self::Subreport { oid, report_oid } => {

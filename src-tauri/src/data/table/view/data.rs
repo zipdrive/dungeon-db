@@ -25,18 +25,6 @@ struct DataCteColumn {
     value_ord: String
 }
 
-impl Hash for DataCteColumn {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.oid.hash(state)
-    }
-}
-
-impl Borrow<i64> for DataCteColumn {
-    fn borrow(&self) -> &i64 {
-        &self.oid
-    }
-}
-
 impl PartialEq for DataCteColumn {
     fn eq(&self, other: &Self) -> bool {
         self.oid == other.oid
@@ -50,7 +38,7 @@ struct DataCte {
     table_oid: i64,
 
     /// The columns queried in this CTE.
-    columns: HashSet<DataCteColumn>,
+    columns: Vec<DataCteColumn>,
 
     /// Master tables to this one.
     master_ctes: HashSet<DataCte>
@@ -79,7 +67,7 @@ impl DataCte {
     pub fn new(table_oid: i64) -> Self {
         Self {
             table_oid,
-            columns: HashSet::new(),
+            columns: Vec::new(),
             master_ctes: HashSet::new()
         }
     }
@@ -104,31 +92,51 @@ impl DataCte {
             self.master_ctes.insert(cte);
         } else {
             // No datasource to be added, so insert the column
-            if !self.columns.contains(&column.oid) {
-                self.columns.insert(DataCteColumn { 
-                    value_expr: match column.column_type {
-                        TableColumnType::Primitive { .. }
-                        | TableColumnType::File { .. }
-                        | TableColumnType::Object { .. }
-                        | TableColumnType::SingleSelect { .. } => {
-                            format!("t.COLUMN{}", column.oid)
-                        }
-                        TableColumnType::MultiSelect { table_oid, .. } => {
-                            format!(
-                                "(SELECT GROUP_CONCAT(CAST(m.TABLE{table_oid}_OID AS TEXT), ',') FROM MULTISELECT{} m WHERE m.TABLE{}_OID = t.OID GROUP BY m.TABLE{}_OID)",
-                                column.oid,
-                                self.table_oid,
-                                self.table_oid
-                            )
-                        }
-                        _ => {
-                            // Virtual column. Do not add to view.
-                            return Ok(());
-                        }
-                    }, 
-                    value_ord: format!("COLUMN{}", column.oid),
-                    oid: column.oid
-                });
+            self.columns.push(DataCteColumn { 
+                value_expr: match column.column_type {
+                    TableColumnType::Primitive { .. }
+                    | TableColumnType::File { .. }
+                    | TableColumnType::Object { .. }
+                    | TableColumnType::SingleSelect { .. } => {
+                        format!("t.COLUMN{}", column.oid)
+                    }
+                    TableColumnType::MultiSelect { table_oid, .. } => {
+                        format!(
+                            "(SELECT GROUP_CONCAT(CAST(m.TABLE{table_oid}_OID AS TEXT), ',') FROM MULTISELECT{} m WHERE m.TABLE{}_OID = t.OID GROUP BY m.TABLE{}_OID)",
+                            column.oid,
+                            self.table_oid,
+                            self.table_oid
+                        )
+                    }
+                    _ => {
+                        // Virtual column. Do not add to view.
+                        return Ok(());
+                    }
+                }, 
+                value_ord: format!("COLUMN{}", column.oid),
+                oid: column.oid
+            });
+
+            if let TableColumnType::Primitive { primitive, .. } = column.column_type {
+                match primitive {
+                    Primitive::Date => {
+                        // Additionally add label for date
+                        self.columns.push(DataCteColumn {
+                            oid: column.oid.clone(),
+                            value_expr: format!("DATE(t.COLUMN{}, 'julianday')", column.oid),
+                            value_ord: format!("COLUMN{}_LABEL", column.oid)
+                        });
+                    }
+                    Primitive::Datetime => {
+                        // Additionally add label for datetime
+                        self.columns.push(DataCteColumn {
+                            oid: column.oid.clone(),
+                            value_expr: format!("STRFTIME('%FT%TZ', t.COLUMN{}, 'julianday')", column.oid),
+                            value_ord: format!("COLUMN{}_LABEL", column.oid)
+                        });
+                    }
+                    _ => {} // Do not add label column
+                }
             }
         }
         Ok(())
@@ -198,7 +206,7 @@ pub fn rebuild(conn: &Connection, table_oid: i64) -> Result<(), Error> {
     sql_execute(conn, format!("DROP VIEW IF EXISTS TABLE{table_oid}"), [])?;
 
     // Query for all columns
-    let columns: Vec<(i64, String, TableColumnMetadata)> = TableColumnMetadata::conn_query_all_inherited(conn, table_oid)?;
+    let columns: Vec<(i64, String, TableColumnMetadata)> = TableColumnMetadata::conn_query_all(conn, table_oid)?;
     if columns.len() == 0 {
         sql_execute(
             conn, 
