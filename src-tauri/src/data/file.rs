@@ -6,6 +6,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::fs::File as FilesystemFile;
 use std::io::{BufReader, Read, Write};
+use std::os::windows::fs::MetadataExt;
 use std::path::Path;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -19,7 +20,7 @@ pub enum File {
     Blob { 
         oid: i64,
         name: String,
-        size: String,
+        size: i64,
     }
 }
 
@@ -117,6 +118,26 @@ impl File {
             ));
         } else {
             return Err(Error::adhoc("File is not an image!"));
+        }
+    }
+
+    /// Determines the size of the file.
+    pub fn get_size(&self) -> Result<i64, Error> {
+        match self {
+            Self::Path { path, .. } => {
+                match std::fs::metadata(path) {
+                    Ok(metadata) => {
+                        let true_file_size = metadata.file_size();
+                        if true_file_size > i64::MAX as u64 {
+                            Err(Error::adhoc("File size is greater than 9,223,372,036,854,775,807 bytes."))
+                        } else {
+                            Ok(true_file_size as i64)
+                        }
+                    }
+                    Err(_) => Err(Error::adhoc(""))
+                }
+            }
+            Self::Blob { size, .. } => Ok(size.clone())
         }
     }
 

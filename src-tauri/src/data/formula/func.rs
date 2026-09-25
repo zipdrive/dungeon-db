@@ -1,9 +1,14 @@
 use std::collections::HashMap;
 
+use rusqlite::Connection;
+
+use crate::data::formula::value::{Value, TextValue, RecordValue};
 use crate::data::table::column::TableColumnMetadata;
+use crate::data::table::row::TableCellTextContentFormat;
 use crate::util::error::Error;
 
-pub struct Context {
+pub struct Context<'a> {
+    pub conn: &'a Connection,
     pub table_restrictions: HashMap<i64, Vec<i64>>
 }
 pub struct ContextRestriction {
@@ -15,10 +20,6 @@ pub struct ContextRestriction {
 }
 
 pub enum Func {
-    Cell {
-        path: Vec<String>
-    },
-
     Null,
     Boolean(bool),
     Integer(i64),
@@ -29,6 +30,11 @@ pub enum Func {
     And(Box<Func>, Box<Func>),
     Or(Box<Func>, Box<Func>),
 
+    Abs(Box<Func>),
+    Sign(Box<Func>),
+    Round(Box<Func>),
+    Floor(Box<Func>),
+    Ceiling(Box<Func>),
     Add(Box<Func>, Box<Func>),
     Sub(Box<Func>, Box<Func>),
     Mul(Box<Func>, Box<Func>),
@@ -37,164 +43,276 @@ pub enum Func {
     Pow(Box<Func>, Box<Func>),
 
     Concat(Box<Func>, Box<Func>),
+    Upper(Box<Func>),
+    Lower(Box<Func>),
+    StringLength(Box<Func>),
+
+    FileName(Box<Func>),
+    FileSize(Box<Func>),
 }
 
 impl Func {
-    /// Evaluates a boolean value.
-    fn eval_bool(&self, context: &Context) -> Result<bool, Error> {
+    fn eval(&self, context: &Context) -> Result<Value, Error> {
         Ok(match self {
-            Self::Boolean(value) => value.clone(),
+            Self::Null => Value::Null {
+                reference: None
+            },
+            Self::Boolean(value) => Value::Boolean {
+                value: value.clone(),
+                reference: None
+            },
+            Self::Integer(value) => Value::Integer {
+                value: value.clone(),
+                reference: None
+            },
+            Self::Number(value) => Value::Number {
+                value: value.clone(),
+                reference: None
+            },
+            Self::Text(value) => Value::Text { 
+                value: TextValue {
+                    text: value.clone(), 
+                    format: TableCellTextContentFormat::Plain 
+                },
+                reference: None
+            },
+
             Self::Not(inner) => {
-                !inner.eval_bool(context)?      
+                let value = inner.eval(context)?.into_bool("NOT")?;
+                Value::Boolean { 
+                    value: !value, 
+                    reference: None 
+                }
             }
             Self::And(lhs, rhs) => {
-                lhs.eval_bool(context)? && rhs.eval_bool(context)?
+                let lhs = lhs.eval(context)?.into_bool("AND, argument lhs")?;
+                let rhs = rhs.eval(context)?.into_bool("AND, argument rhs")?;
+                Value::Boolean { 
+                    value: lhs && rhs, 
+                    reference: None 
+                }
             }
             Self::Or(lhs, rhs) => {
-                lhs.eval_bool(context)? || rhs.eval_bool(context)?
+                let lhs = lhs.eval(context)?.into_bool("OR, argument lhs")?;
+                let rhs = rhs.eval(context)?.into_bool("OR, argument rhs")?;
+                Value::Boolean { 
+                    value: lhs || rhs, 
+                    reference: None 
+                }
             }
-            _ => {
-                return Err(Error::adhoc(format!("Unable to evaluate as bool.")));
-            }
-        })
-    }
 
-    /// Evaluates an integer value.
-    fn eval_i64(&self, context: &Context) -> Result<Option<i64>, Error> {
-        Ok(match self {
-            Self::Null => None,
-            Self::Integer(value) => Some(value.clone()),
-            Self::Add(lhs, rhs) => {
-                match lhs.eval_i64(context)? {
-                    Some(lhs_eval) => match rhs.eval_i64(context)? {
-                        Some(rhs_eval) => Some(lhs_eval + rhs_eval),
-                        None => None 
+            Self::Abs(inner) => {
+                let inner = inner.eval(context)?;
+                if let Value::Integer { value: inner, .. } = inner {
+                    return Ok(Value::Integer { value: inner.abs(), reference: None });
+                }
+                let Some(inner) = inner.into_f64("ABS")? else { return Ok(Value::new_null()); };
+                Value::Number { 
+                    value: inner.abs(),
+                    reference: None 
+                }
+            }
+            Self::Sign(inner) => {
+                let inner = inner.eval(context)?;
+                if let Value::Integer { value: inner, .. } = inner {
+                    return Ok(Value::Integer { value: inner.signum(), reference: None });
+                }
+                let Some(inner) = inner.into_f64("SIGN")? else { return Ok(Value::new_null()); };
+                if inner.is_nan() {
+                    Value::Number {
+                        value: f64::NAN,
+                        reference: None
                     }
-                    None => None 
+                } else {
+                    Value::Integer { 
+                        value: if inner.signum() > 0.0 { 1 } else { -1 },
+                        reference: None 
+                    }
+                }
+            }
+            Self::Round(inner) => {
+                let Some(inner) = inner.eval(context)?.into_f64("ROUND")? else { return Ok(Value::new_null()); };
+                if inner.is_nan() {
+                    Value::Number {
+                        value: f64::NAN,
+                        reference: None
+                    }
+                } else {
+                    Value::Integer { 
+                        value: inner.round() as i64,
+                        reference: None 
+                    }
+                }
+            }
+            Self::Floor(inner) => {
+                let Some(inner) = inner.eval(context)?.into_f64("ROUND")? else { return Ok(Value::new_null()); };
+                if inner.is_nan() {
+                    Value::Number {
+                        value: f64::NAN,
+                        reference: None
+                    }
+                } else {
+                    Value::Integer { 
+                        value: inner.floor() as i64,
+                        reference: None 
+                    }
+                }
+            }
+            Self::Ceiling(inner) => {
+                let Some(inner) = inner.eval(context)?.into_f64("CEIL")? else { return Ok(Value::new_null()); };
+                if inner.is_nan() {
+                    Value::Number {
+                        value: f64::NAN,
+                        reference: None
+                    }
+                } else {
+                    Value::Integer { 
+                        value: inner.ceil() as i64,
+                        reference: None 
+                    }
+                }
+            }
+            Self::Add(lhs, rhs) => {
+                let lhs = lhs.eval(context)?;
+                let rhs = rhs.eval(context)?;
+                if let Value::Integer { value: lhs, .. } = lhs {
+                    if let Value::Integer { value: rhs, .. } = rhs {
+                        return Ok(Value::Integer { value: lhs + rhs, reference: None });
+                    }
+                }
+                let Some(lhs) = lhs.into_f64("ADD, argument lhs")? else { return Ok(Value::new_null()); };
+                let Some(rhs) = rhs.into_f64("ADD, argument rhs")? else { return Ok(Value::new_null()); };
+                Value::Number { 
+                    value: lhs + rhs, 
+                    reference: None 
                 }
             }
             Self::Sub(lhs, rhs) => {
-                match lhs.eval_i64(context)? {
-                    Some(lhs_eval) => match rhs.eval_i64(context)? {
-                        Some(rhs_eval) => Some(lhs_eval - rhs_eval),
-                        None => None 
+                let lhs = lhs.eval(context)?;
+                let rhs = rhs.eval(context)?;
+                if let Value::Integer { value: lhs, .. } = lhs {
+                    if let Value::Integer { value: rhs, .. } = rhs {
+                        return Ok(Value::Integer { value: lhs - rhs, reference: None });
                     }
-                    None => None 
+                }
+                let Some(lhs) = lhs.into_f64("SUB, argument lhs")? else { return Ok(Value::new_null()); };
+                let Some(rhs) = rhs.into_f64("SUB, argument rhs")? else { return Ok(Value::new_null()); };
+                Value::Number { 
+                    value: lhs - rhs, 
+                    reference: None 
                 }
             }
             Self::Mul(lhs, rhs) => {
-                match lhs.eval_i64(context)? {
-                    Some(lhs_eval) => match rhs.eval_i64(context)? {
-                        Some(rhs_eval) => Some(lhs_eval * rhs_eval),
-                        None => None 
+                let lhs = lhs.eval(context)?;
+                let rhs = rhs.eval(context)?;
+                if let Value::Integer { value: lhs, .. } = lhs {
+                    if let Value::Integer { value: rhs, .. } = rhs {
+                        return Ok(Value::Integer { value: lhs * rhs, reference: None });
                     }
-                    None => None 
                 }
-            }
-            Self::Mod(lhs, rhs) => {
-                match lhs.eval_i64(context)? {
-                    Some(lhs_eval) => match rhs.eval_i64(context)? {
-                        Some(rhs_eval) => Some(lhs_eval % rhs_eval),
-                        None => None 
-                    }
-                    None => None 
-                }
-            }
-            Self::Pow(lhs, rhs) => {
-                match lhs.eval_i64(context)? {
-                    Some(lhs_eval) => match rhs.eval_i64(context)? {
-                        Some(rhs_eval) => Some(match u32::try_from(rhs_eval) {
-                            Ok(rhs_eval) => lhs_eval.pow(rhs_eval),
-                            Err(_) => {
-                                return Err(Error::adhoc(format!("Unable to evaluate as int.")));        
-                            }
-                        }),
-                        None => None 
-                    }
-                    None => None 
-                }
-            }
-            _ => {
-                return Err(Error::adhoc(format!("Unable to evaluate as int.")));
-            }
-        })
-    }
-
-    /// Evaluates a floating-point value
-    fn eval_f64(&self, context: &Context) -> Result<Option<f64>, Error> {
-        Ok(match self {
-            Self::Integer(value) => Some(value.clone() as f64),
-            Self::Number(value) => Some(value.clone()),
-            Self::Add(lhs, rhs) => {
-                match lhs.eval_f64(context)? {
-                    Some(lhs_eval) => match rhs.eval_f64(context)? {
-                        Some(rhs_eval) => Some(lhs_eval + rhs_eval),
-                        None => None 
-                    }
-                    None => None 
-                }
-            }
-            Self::Sub(lhs, rhs) => {
-                match lhs.eval_f64(context)? {
-                    Some(lhs_eval) => match rhs.eval_f64(context)? {
-                        Some(rhs_eval) => Some(lhs_eval - rhs_eval),
-                        None => None 
-                    }
-                    None => None 
-                }
-            }
-            Self::Mul(lhs, rhs) => {
-                match lhs.eval_f64(context)? {
-                    Some(lhs_eval) => match rhs.eval_f64(context)? {
-                        Some(rhs_eval) => Some(lhs_eval * rhs_eval),
-                        None => None 
-                    }
-                    None => None 
+                let Some(lhs) = lhs.into_f64("MUL, argument lhs")? else { return Ok(Value::new_null()); };
+                let Some(rhs) = rhs.into_f64("MUL, argument rhs")? else { return Ok(Value::new_null()); };
+                Value::Number { 
+                    value: lhs * rhs, 
+                    reference: None 
                 }
             }
             Self::Div(lhs, rhs) => {
-                match lhs.eval_f64(context)? {
-                    Some(lhs_eval) => match rhs.eval_f64(context)? {
-                        Some(rhs_eval) => Some(lhs_eval / rhs_eval),
-                        None => None 
-                    }
-                    None => None 
+                let Some(lhs) = lhs.eval(context)?.into_f64("DIV, argument lhs")? else { return Ok(Value::new_null()); };
+                let Some(rhs) = rhs.eval(context)?.into_f64("DIV, argument rhs")? else { return Ok(Value::new_null()); };
+                Value::Number { 
+                    value: lhs / rhs, 
+                    reference: None 
                 }
             }
             Self::Mod(lhs, rhs) => {
-                match lhs.eval_f64(context)? {
-                    Some(lhs_eval) => match rhs.eval_f64(context)? {
-                        Some(rhs_eval) => Some(lhs_eval % rhs_eval),
-                        None => None 
+                let lhs = lhs.eval(context)?;
+                let rhs = rhs.eval(context)?;
+                if let Value::Integer { value: lhs, .. } = lhs {
+                    if let Value::Integer { value: rhs, .. } = rhs {
+                        return Ok(Value::Integer { value: lhs % rhs, reference: None });
                     }
-                    None => None 
+                }
+                let Some(lhs) = lhs.into_f64("MOD, argument lhs")? else { return Ok(Value::new_null()); };
+                let Some(rhs) = rhs.into_f64("MOD, argument rhs")? else { return Ok(Value::new_null()); };
+                Value::Number { 
+                    value: lhs % rhs, 
+                    reference: None 
                 }
             }
             Self::Pow(lhs, rhs) => {
-                match lhs.eval_f64(context)? {
-                    Some(lhs_eval) => match rhs.eval_f64(context)? {
-                        Some(rhs_eval) => Some(lhs_eval.powf(rhs_eval)),
-                        None => None 
+                let lhs = lhs.eval(context)?;
+                let rhs = rhs.eval(context)?;
+                if let Value::Integer { value: lhs, .. } = lhs {
+                    if let Value::Integer { value: rhs, .. } = rhs {
+                        if let Ok(rhs) = rhs.try_into() {
+                            return Ok(Value::Integer { value: lhs.pow(rhs), reference: None });
+                        }
                     }
-                    None => None 
+                }
+                let Some(lhs) = lhs.into_f64("MOD, argument lhs")? else { return Ok(Value::new_null()); };
+                let Some(rhs) = rhs.into_f64("MOD, argument rhs")? else { return Ok(Value::new_null()); };
+                Value::Number { 
+                    value: lhs.powf(rhs), 
+                    reference: None 
                 }
             }
-            _ => {
-                return Err(Error::adhoc(format!("Unable to evaluate as number.")));
-            }
-        })
-    }
 
-    /// Evaluates a text value.
-    fn eval_text(&self, context: &Context) -> Result<String, Error> {
-        Ok(match self {
-            Self::Text(value) => value.clone(),
             Self::Concat(lhs, rhs) => {
-                let rhs_value: String = rhs.eval_text(context)?;
-                lhs.eval_text(context)? + &rhs_value
+                let Some(lhs) = lhs.eval(context)?.into_text("CONCAT, argument lhs")? else { return Ok(Value::new_null()); };
+                let Some(rhs) = rhs.eval(context)?.into_text("CONCAT, argument rhs")? else { return Ok(Value::new_null()); };
+                Value::Text { 
+                    value: TextValue {
+                        text: lhs.text + &rhs.text,
+                        format: TableCellTextContentFormat::Plain
+                    }, 
+                    reference: None 
+                }
             }
-            _ => {
-                return Err(Error::adhoc(format!("Unable to evaluate as text.")));
+            Self::Upper(inner) => {
+                let Some(inner) = inner.eval(context)?.into_text("UPPER")? else { return Ok(Value::new_null()); };
+                Value::Text { 
+                    value: TextValue { 
+                        text: inner.text.to_uppercase(), 
+                        format: inner.format
+                    }, 
+                    reference: None 
+                }
+            }
+            Self::Lower(inner) => {
+                let Some(inner) = inner.eval(context)?.into_text("LOWER")? else { return Ok(Value::new_null()); };
+                Value::Text { 
+                    value: TextValue { 
+                        text: inner.text.to_lowercase(), 
+                        format: inner.format
+                    }, 
+                    reference: None 
+                }
+            }
+            Self::StringLength(inner) => {
+                let Some(inner) = inner.eval(context)?.into_text("LENGTH")? else { return Ok(Value::new_null()); };
+                Value::Integer { 
+                    value: inner.text.len() as i64, 
+                    reference: None 
+                }
+            }
+
+            Self::FileName(inner) => {
+                let Some(inner) = inner.eval(context)?.into_file("NAME")? else { return Ok(Value::new_null()); };
+                Value::Text { 
+                    value: TextValue { 
+                        text: inner.name().clone(), 
+                        format: TableCellTextContentFormat::Plain 
+                    },
+                    reference: None 
+                }
+            }
+            Self::FileSize(inner) => {
+                let Some(inner) = inner.eval(context)?.into_file("SIZE")? else { return Ok(Value::new_null()); };
+                Value::Integer { 
+                    value: inner.get_size()?, 
+                    reference: None 
+                }
             }
         })
     }
