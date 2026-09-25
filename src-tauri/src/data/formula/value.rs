@@ -1,3 +1,5 @@
+use crate::data::{file::File, table::row::TableCellTextContentFormat};
+
 pub enum ValueType {
     /// A union of multiple value types.
     Union(Vec<ValueType>),
@@ -97,4 +99,25 @@ impl ValueType {
             _ => false 
         }
     }
+}
+
+
+
+pub enum Value {
+    Null,
+    Boolean(bool),
+    Date(i64),
+    Datetime(f64),
+    Integer(i64),
+    Number(f64),
+    Text {
+        value: String,
+        format: TableCellTextContentFormat
+    },
+    File(File),
+    Record {
+        table_oid: i64,
+        row_oid: i64
+    },
+    List(Vec<Value>)
 }
