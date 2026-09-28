@@ -34,21 +34,28 @@ impl PartialEq for PolymorphismCte {
 }
 
 impl PolymorphismCte {
-    /// Inserts an inheritor datasource path into the CTE chain.
-    pub fn push<S>(&mut self, path: S) -> Result<(), Error> where S : AsRef<str> {
-        let inheritor_regex: Regex = Regex::new(r#"^_INHERITOR(\d+)(_INHERITOR(?:\d+))*$"#).unwrap();
-        if let Some(inheritor_caps) = inheritor_regex.captures(path.as_ref()) {
-            let (_, [inheritor_table_oid_str, remaining_path]) = inheritor_caps.extract();
-            let inheritor_table_oid: i64 = inheritor_table_oid_str.parse::<i64>().unwrap();
+    fn _push(&mut self, path: &[i64]) -> Result<(), Error> {
+        if path.len() > 0 {
+            let inheritor_table_oid: i64 = path[0];
+            let path: &[i64] = &path[1..];
+
             let mut cte = self.inheritors.take(&inheritor_table_oid)
                 .unwrap_or(Self {
                     table_oid: inheritor_table_oid,
                     inheritors: HashSet::new()
                 });
-            cte.push(remaining_path)?;
+            cte._push(path)?;
             self.inheritors.insert(cte);
         }
         Ok(())
+    }
+
+    /// Inserts an inheritor datasource path into the CTE chain.
+    pub fn push<S>(&mut self, path: S) -> Result<(), Error> where S : AsRef<str> {
+        let path: Vec<i64> = path.as_ref().split(',')
+            .filter_map(|s| match s.parse::<i64>() { Ok(i) => Some(i), Err(_) => None })
+            .collect();
+        self._push(&path)
     }
 
     /// Converts the CTE (and any child CTEs) to SQL.

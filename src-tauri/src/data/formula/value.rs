@@ -1,5 +1,8 @@
+use rusqlite::Connection;
+
 use crate::data::file::File; 
-use crate::data::table::row::TableCellTextContentFormat;
+use crate::data::table::TableMetadata;
+use crate::data::table::row::{TableCell, TableCellContent, TableCellTextContentFormat, TableRow};
 use crate::util::encode::json_encode_string;
 use crate::util::error::Error;
 
@@ -105,6 +108,7 @@ impl ValueType {
 }
 
 
+#[derive(Clone)]
 pub struct TableCellReference {
     pub table_oid: i64,
     pub column_oid: i64,
@@ -119,7 +123,7 @@ pub struct TextValue {
 pub struct RecordValue {
     pub table_oid: i64,
     pub table_name: String,
-    pub row_oid: i64
+    pub row: TableRow
 }
 
 pub enum Value {
@@ -150,13 +154,24 @@ pub enum Value {
         value: TextValue,
         reference: Option<TableCellReference>
     },
-    File {
+    FileCellReference {
         value: File,
-        reference: Option<TableCellReference>
+        reference: TableCellReference
     },
-    Record {
-        value: RecordValue,
-        reference: Option<TableCellReference>
+    ObjectCellReference {
+        table_oid: i64,
+        value: i64,
+        reference: TableCellReference
+    },
+    SingleSelectCellReference {
+        table_oid: i64,
+        value: i64,
+        reference: TableCellReference
+    },
+    MultiSelectCellReference {
+        table_oid: i64,
+        value: Vec<i64>,
+        reference: TableCellReference
     },
     List(Vec<Value>)
 }
@@ -164,6 +179,58 @@ pub enum Value {
 impl Value {
     pub fn new_null() -> Self {
         Self::Null { reference: None }
+    }
+
+    /// 
+    pub fn from_cell(cell: &TableCell) -> Result<Self, Error> {
+        let reference: Option<TableCellReference> = Some(TableCellReference {
+            table_oid: cell.table_oid,
+            column_oid: cell.column_oid,
+            row_oid: cell.row_oid
+        });
+        Ok(match &cell.content {
+            TableCellContent::Boolean { value } => Self::Boolean { value: value.clone(), reference },
+            TableCellContent::Date { value, .. } => match value {
+                Some(value) => Self::Date { value: value.clone(), reference },
+                None => Self::Null { reference }
+            },
+            TableCellContent::Datetime { value, .. } => match value {
+                Some(value) => Self::Datetime { value: value.clone(), reference },
+                None => Self::Null { reference }
+            },
+            TableCellContent::File { value } => match value {
+                Some(value) => Self::FileCellReference { value: value.clone(), reference: reference.unwrap() },
+                None => Self::Null { reference }
+            },
+            TableCellContent::Integer { value } => match value {
+                Some(value) => Self::Integer { value: value.clone(), reference },
+                None => Self::Null { reference }
+            },
+            TableCellContent::Number { value } => match value {
+                Some(value) => Self::Number { value: value.clone(), reference },
+                None => Self::Null { reference }
+            },
+            TableCellContent::Text { value, format } => match value {
+                Some(value) => Self::Text { value: TextValue { text: value.clone(), format: format.clone() }, reference },
+                None => Self::Null { reference }
+            },
+            TableCellContent::Object { table_oid, value } => match value {
+                Some(value) => Self::ObjectCellReference { table_oid: table_oid.clone(), value: value.clone(), reference: reference.unwrap() },
+                None => Self::Null { reference }
+            }
+            TableCellContent::SingleSelectDropdown { table_oid, value } => match value {
+                Some(value) => Self::SingleSelectCellReference { table_oid: table_oid.clone(), value: value.clone(), reference: reference.unwrap() },
+                None => Self::Null { reference }
+            },
+            TableCellContent::MultiSelectDropdown { table_oid, value } => Self::MultiSelectCellReference { 
+                table_oid: table_oid.clone(), 
+                value: value.clone(), 
+                reference: reference.unwrap() 
+            },
+            TableCellContent::Subreport { .. } => {
+                return Err(Error::adhoc("Drill-Down Reports cannot be used in formulas."));
+            }
+        })
     }
 
     /// Converts the value into a non-optional bool.
@@ -197,7 +264,7 @@ impl Value {
     pub fn into_file<S>(self, fn_id: S) -> Result<Option<File>, Error> where S : AsRef<str> {
         match self {
             Self::Null { .. } => Ok(None),
-            Self::File { value, .. } => Ok(Some(value)),
+            Self::FileCellReference { value, .. } => Ok(Some(value)),
             _ => Err(Error::adhoc(format!("Function {} expected a File value, but received a {} value.", fn_id.as_ref(), self.to_string())))
         }
     }
@@ -215,24 +282,29 @@ impl Value {
     /// Describes the type of the Value.
     fn to_string(&self) -> String {
         match self {
-            Self::Null { .. } => String::from("Null"),
-            Self::Boolean { .. } => String::from("Boolean"),
-            Self::Date { .. } => String::from("Date"),
-            Self::Datetime { .. } => String::from("Datetime"),
-            Self::File { .. } => String::from("File"),
-            Self::Integer { .. } => String::from("Integer"),
+            Self::Null { reference, .. } => if let Some(_) = reference { String::from("NullRef") } else { String::from("Null") },
+            Self::Boolean { reference, .. } => if let Some(_) = reference { String::from("Ref<Boolean>") } else { String::from("Boolean") },
+            Self::Date { reference, .. } => if let Some(_) = reference { String::from("Ref<Date>") } else { String::from("Date") },
+            Self::Datetime { reference, .. } => if let Some(_) = reference { String::from("Ref<Datetime>") } else { String::from("Datetime") },
+            Self::Integer { reference, .. } => if let Some(_) = reference { String::from("Ref<Integer>") } else { String::from("Integer") },
+            Self::Number { reference, .. } => if let Some(_) = reference { String::from("Ref<Number>") } else { String::from("Number") },
             Self::List(list) => {
                 String::from("List") // TODO
             }
-            Self::Number { .. } => String::from("Number"),
-            Self::Record { value, .. } => format!("\"{}\"", json_encode_string(&value.table_name)),
-            Self::Text { value, .. } => match value.format {
-                TableCellTextContentFormat::Plain => String::from("Text"),
-                TableCellTextContentFormat::Json => String::from("Json"),
-                TableCellTextContentFormat::Xml => String::from("Xml"),
-                TableCellTextContentFormat::Markdown => String::from("Markdown"),
-                TableCellTextContentFormat::BBCode => String::from("BBCode")
+            Self::Text { reference, value } => {
+                let base = match value.format {
+                    TableCellTextContentFormat::Plain => String::from("Text"),
+                    TableCellTextContentFormat::Json => String::from("Json"),
+                    TableCellTextContentFormat::Xml => String::from("Xml"),
+                    TableCellTextContentFormat::Markdown => String::from("Markdown"),
+                    TableCellTextContentFormat::BBCode => String::from("BBCode")
+                };
+                if let Some(_) = reference { format!("Ref<{}>", base) } else { base }
             }
+            Self::FileCellReference { .. } => String::from("Ref<File>"),
+            Self::ObjectCellReference { .. } => String::from("Ref<Object>"),
+            Self::SingleSelectCellReference { .. } => String::from("Ref<SingleSelectDropdown>"),
+            Self::MultiSelectCellReference { .. } => String::from("Ref<MultiSelectDropdown>")
         }
     }
 }

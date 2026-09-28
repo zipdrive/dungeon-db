@@ -6,7 +6,7 @@ use crate::util::error::Error;
 use crate::data::table::column_type::{TableColumnType, Primitive};
 use crate::data::table::view;
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct TableColumnMetadata {
     pub oid: i64,
     pub name: String,

@@ -63,6 +63,107 @@ pub struct TableCell {
     pub content: TableCellContent
 }
 
+impl TableCell {
+    pub fn new(table_oid: i64, column: &TableColumnMetadata, column_base_alias: String, row_oid: i64, row: &RowWrapper) -> Result<Self, Error> {
+        Ok(Self { 
+            table_oid, 
+            column_oid: column.oid.clone(), 
+            row_oid, 
+            content: match &column.column_type {
+                TableColumnType::Primitive { primitive, .. } => {
+                    let ord: String = column_base_alias;
+                    match primitive {
+                        Primitive::Boolean => TableCellContent::Boolean { 
+                            value: row.get::<&str, Option<bool>>(&ord)?.unwrap_or(false)
+                        },
+                        Primitive::Integer => TableCellContent::Integer { 
+                            value: row.get::<&str, _>(&ord)? 
+                        },
+                        Primitive::Number => TableCellContent::Number { 
+                            value: row.get::<&str, _>(&ord)? 
+                        },
+                        Primitive::Date => {
+                            let label_ord: String = format!("{column_base_alias}_LABEL");
+                            TableCellContent::Date { 
+                                value: row.get::<&str, _>(&ord)?, 
+                                label: row.get::<&str, _>(&label_ord)?
+                            }
+                        },
+                        Primitive::Datetime => {
+                            let label_ord: String = format!("{column_base_alias}_LABEL");
+                            TableCellContent::Datetime { 
+                                value: row.get::<&str, _>(&ord)?, 
+                                label: row.get::<&str, _>(&label_ord)?
+                            }
+                        },
+                        Primitive::Text => TableCellContent::Text { 
+                            value: row.get::<&str, _>(&ord)?, 
+                            format: TableCellTextContentFormat::Plain 
+                        },
+                        Primitive::TextJson => TableCellContent::Text { 
+                            value: row.get::<&str, _>(&ord)?, 
+                            format: TableCellTextContentFormat::Json 
+                        },
+                        Primitive::TextXml => TableCellContent::Text { 
+                            value: row.get::<&str, _>(&ord)?, 
+                            format: TableCellTextContentFormat::Xml 
+                        },
+                        Primitive::TextMarkdown => TableCellContent::Text { 
+                            value: row.get::<&str, _>(&ord)?, 
+                            format: TableCellTextContentFormat::Markdown 
+                        },
+                        Primitive::TextBBCode => TableCellContent::Text { 
+                            value: row.get::<&str, _>(&ord)?, 
+                            format: TableCellTextContentFormat::BBCode 
+                        }
+                    }
+                }
+                TableColumnType::File { .. } => {
+                    let ord: String = column_base_alias;
+                    let value: Option<i64> = row.get::<&str, _>(&ord)?;
+                    let file: Option<File> = if let Some(value) = value { Some(File::get(value)?) } else { None };
+                    TableCellContent::File { 
+                        value: file,
+                    }
+                }
+                TableColumnType::Object { table_oid: referenced_table_oid, .. } => {
+                    let ord: String = column_base_alias;
+                    TableCellContent::Object { 
+                        table_oid: referenced_table_oid.clone(), 
+                        value: row.get::<&str, _>(&ord)?,
+                    }
+                }
+                TableColumnType::SingleSelect { table_oid: referenced_table_oid, .. } => {
+                    let ord: String = column_base_alias;
+                    TableCellContent::SingleSelectDropdown { 
+                        table_oid: referenced_table_oid.clone(), 
+                        value: row.get::<&str, _>(&ord)?,
+                    }
+                }
+                TableColumnType::MultiSelect { table_oid: referenced_table_oid, .. } => {
+                    let ord: String = column_base_alias;
+                    let s = row.get::<&str, Option<String>>(&ord)?;
+                    TableCellContent::MultiSelectDropdown { 
+                        table_oid: referenced_table_oid.clone(), 
+                        value: match s {
+                            Some(s) => s.split(',').filter_map(|n| match i64::from_str_radix(n, 10) {
+                                Ok(n) => Some(n),
+                                Err(_) => None
+                            }).collect(),
+                            None => Vec::new()
+                        }
+                    }
+                }
+                TableColumnType::Subreport { report_oid, .. } => {
+                    TableCellContent::Subreport { 
+                        report_oid: report_oid.clone()
+                    }
+                }
+            }
+        })
+    }
+}
+
 #[derive(Serialize, Clone)]
 pub struct TableRow {
     pub oid: i64,
@@ -81,107 +182,18 @@ impl TableRow {
 
         // Send the cells
         for (column_table_oid, column) in columns.iter() {
-            data.cells.push(TableCell { 
-                table_oid: column_table_oid.clone(), 
-                column_oid: column.oid.clone(), 
-                row_oid: if *column_table_oid == *table_oid {
+            data.cells.push(TableCell::new(
+                column_table_oid.clone(), 
+                column, 
+                format!("COLUMN{}", column.oid),
+                if *column_table_oid == *table_oid {
                     data.oid.clone()
                 } else {
                     let row_oid_ord: String = format!("MASTER{column_table_oid}_OID");
                     row.get::<&str, _>(&row_oid_ord)?
                 }, 
-                content: match &column.column_type {
-                    TableColumnType::Primitive { primitive, .. } => {
-                        let ord: String = format!("COLUMN{}", column.oid);
-                        match primitive {
-                            Primitive::Boolean => TableCellContent::Boolean { 
-                                value: row.get::<&str, Option<bool>>(&ord)?.unwrap_or(false)
-                            },
-                            Primitive::Integer => TableCellContent::Integer { 
-                                value: row.get::<&str, _>(&ord)? 
-                            },
-                            Primitive::Number => TableCellContent::Number { 
-                                value: row.get::<&str, _>(&ord)? 
-                            },
-                            Primitive::Date => {
-                                let label_ord: String = format!("COLUMN{}_LABEL", column.oid);
-                                TableCellContent::Date { 
-                                    value: row.get::<&str, _>(&ord)?, 
-                                    label: row.get::<&str, _>(&label_ord)?
-                                }
-                            },
-                            Primitive::Datetime => {
-                                let label_ord: String = format!("COLUMN{}_LABEL", column.oid);
-                                TableCellContent::Datetime { 
-                                    value: row.get::<&str, _>(&ord)?, 
-                                    label: row.get::<&str, _>(&label_ord)?
-                                }
-                            },
-                            Primitive::Text => TableCellContent::Text { 
-                                value: row.get::<&str, _>(&ord)?, 
-                                format: TableCellTextContentFormat::Plain 
-                            },
-                            Primitive::TextJson => TableCellContent::Text { 
-                                value: row.get::<&str, _>(&ord)?, 
-                                format: TableCellTextContentFormat::Json 
-                            },
-                            Primitive::TextXml => TableCellContent::Text { 
-                                value: row.get::<&str, _>(&ord)?, 
-                                format: TableCellTextContentFormat::Xml 
-                            },
-                            Primitive::TextMarkdown => TableCellContent::Text { 
-                                value: row.get::<&str, _>(&ord)?, 
-                                format: TableCellTextContentFormat::Markdown 
-                            },
-                            Primitive::TextBBCode => TableCellContent::Text { 
-                                value: row.get::<&str, _>(&ord)?, 
-                                format: TableCellTextContentFormat::BBCode 
-                            }
-                        }
-                    }
-                    TableColumnType::File { .. } => {
-                        let ord: String = format!("COLUMN{}", column.oid);
-                        let value: Option<i64> = row.get::<&str, _>(&ord)?;
-                        let file: Option<File> = if let Some(value) = value { Some(File::get(value)?) } else { None };
-                        TableCellContent::File { 
-                            value: file,
-                        }
-                    }
-                    TableColumnType::Object { table_oid: referenced_table_oid, .. } => {
-                        let ord: String = format!("COLUMN{}", column.oid);
-                        TableCellContent::Object { 
-                            table_oid: referenced_table_oid.clone(), 
-                            value: row.get::<&str, _>(&ord)?,
-                        }
-                    }
-                    TableColumnType::SingleSelect { table_oid: referenced_table_oid, .. } => {
-                        let ord: String = format!("COLUMN{}", column.oid);
-                        TableCellContent::SingleSelectDropdown { 
-                            table_oid: referenced_table_oid.clone(), 
-                            value: row.get::<&str, _>(&ord)?,
-                        }
-                    }
-                    TableColumnType::MultiSelect { table_oid: referenced_table_oid, .. } => {
-                        let ord: String = format!("COLUMN{}", column.oid);
-                        let s = row.get::<&str, Option<String>>(&ord)?;
-                        TableCellContent::MultiSelectDropdown { 
-                            table_oid: referenced_table_oid.clone(), 
-                            value: match s {
-                                Some(s) => s.split(',').filter_map(|n| match i64::from_str_radix(n, 10) {
-                                    Ok(n) => Some(n),
-                                    Err(_) => None
-                                }).collect(),
-                                None => Vec::new()
-                            }
-                        }
-                    }
-                    TableColumnType::Subreport { report_oid, .. } => {
-                        TableCellContent::Subreport { 
-                            report_oid: report_oid.clone()
-                        }
-                    }
-                }
-            });
+                row
+            )?);
         }
 
         Ok(data)

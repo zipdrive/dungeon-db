@@ -4,7 +4,7 @@ use serde::{Serialize, Deserialize};
 use crate::util::db::sql_execute;
 use crate::util::error::Error;
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Primitive {
     Text,
@@ -19,7 +19,25 @@ pub enum Primitive {
     Datetime
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+impl Primitive {
+    /// Gets the name of the primitive.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Boolean => "Boolean",
+            Self::Date => "Date",
+            Self::Datetime => "Datetime",
+            Self::Integer => "Integer",
+            Self::Number => "Number",
+            Self::Text => "Plain Text",
+            Self::TextBBCode => "BBCode",
+            Self::TextJson => "JSON",
+            Self::TextMarkdown => "Markdown",
+            Self::TextXml => "XML"
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum TableColumnType {
     Primitive { 
@@ -124,5 +142,18 @@ impl TableColumnType {
             }
         }
         Ok(())
+    }
+
+    /// Gets the name of the column type.
+    /// For displaying to the user (e.g. in the case of errors).
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Primitive { primitive, .. } => primitive.name(),
+            Self::File { .. } => "File",
+            Self::Object { .. } => "Object",
+            Self::SingleSelect { .. } => "Single-Select Dropdown",
+            Self::MultiSelect { .. } => "Multi-Select Dropdown",
+            Self::Subreport { .. } => "Drill-Down Report"
+        }
     }
 }

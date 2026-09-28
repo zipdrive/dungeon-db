@@ -72,21 +72,18 @@ impl DataCte {
         }
     }
 
-    /// Registers a child datasource of this datasource via path.
-    pub fn add_column<S>(&mut self, path: S, column: TableColumnMetadata) -> Result<(), Error> where S : AsRef<str> {
-        let regex: Regex = Regex::new(r#"^_MASTER(\d+)(_MASTER(?:\d+))*$"#).unwrap();
-        if let Some(caps) = regex.captures(path.as_ref()) {
-            // If the regex matches, there is still at least one datasource to add first
-
-            let (_, [table_oid_str, remaining_path]) = caps.extract();
-            let table_oid: i64 = table_oid_str.parse::<i64>().unwrap();
+    fn _add_column(&mut self, path: &[i64], column: TableColumnMetadata) -> Result<(), Error> {
+        if path.len() > 0 {
+            // Extract table OID and remaining path
+            let table_oid = path[0];
+            let path: &[i64] = &path[1..];
 
             // Get or create CTE for the datasource
             let mut cte: Self = self.master_ctes.take(&table_oid)
                 .unwrap_or(Self::new(table_oid));
 
             // Add datasources from remaining path, if any
-            cte.add_column(remaining_path, column)?;
+            cte._add_column(path, column)?;
 
             // Reinsert the CTE back into the set
             self.master_ctes.insert(cte);
@@ -140,6 +137,14 @@ impl DataCte {
             }
         }
         Ok(())
+    }
+
+    /// Registers a child datasource of this datasource via path.
+    pub fn add_column<S>(&mut self, path: S, column: TableColumnMetadata) -> Result<(), Error> where S : AsRef<str> {
+        let path: Vec<i64> = path.as_ref().split(',')
+            .filter_map(|s| match s.parse::<i64>() { Ok(i) => Some(i), Err(_) => None })
+            .collect();
+        self._add_column(&path, column)
     }
 
     /// Builds the SQL statement for this CTE.

@@ -9,7 +9,7 @@ use std::borrow::Borrow;
 use std::collections::{HashSet};
 use std::hash::{Hash, Hasher};
 
-mod column_type;
+pub mod column_type;
 pub mod column;
 mod view;
 pub mod row;
