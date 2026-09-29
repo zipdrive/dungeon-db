@@ -1,6 +1,6 @@
 use crate::util::error::Error;
 use rusqlite::{Connection, Error as RusqliteError, OptionalExtension, Params, Result, Row, RowIndex};
-use rusqlite::types::FromSql;
+use rusqlite::types::{FromSql, ValueRef};
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
@@ -254,7 +254,8 @@ CREATE TABLE IF NOT EXISTS __METADATA_REPORT_ORDERBY (
     TRASH BOOLEAN NOT NULL DEFAULT FALSE,
     COLUMN_OID INTEGER NOT NULL REFERENCES __METADATA_REPORT_COLUMN (OID)
         ON UPDATE CASCADE
-        ON DELETE CASCADE
+        ON DELETE CASCADE,
+    DIRECTION BOOLEAN NOT NULL
 );
 
 -- METADATA_REPORT_ORDERBY restricts access only to columns that have not been deleted
@@ -262,7 +263,8 @@ CREATE VIEW METADATA_REPORT_ORDERBY AS
     SELECT 
         o.OID,
         c.REPORT_OID,
-        o.COLUMN_OID
+        o.COLUMN_OID,
+        o.DIRECTION
     FROM __METADATA_REPORT_ORDERBY o 
     INNER JOIN METADATA_REPORT_COLUMN c ON c.OID = o.COLUMN_OID
     WHERE NOT o.TRASH
@@ -1009,6 +1011,18 @@ impl<'a> RowWrapper<'a> {
     /// Gets an index from the row.
     pub fn get<I, T>(&self, idx: I) -> Result<T, Error> where I : RowIndex, T : FromSql {
         match self.row.get::<I, T>(idx) {
+            Ok(value) => Ok(value),
+            Err(err) => Err(Error::SqlError { 
+                sql: self.sql.clone(), 
+                backtrace: Backtrace::new_unresolved(), 
+                err 
+            })
+        }
+    }
+
+    /// Gets an index from the row, as a reference.
+    pub fn get_ref<I>(&self, idx: I) -> Result<ValueRef, Error> where I : RowIndex {
+        match self.row.get_ref::<I>(idx) {
             Ok(value) => Ok(value),
             Err(err) => Err(Error::SqlError { 
                 sql: self.sql.clone(), 

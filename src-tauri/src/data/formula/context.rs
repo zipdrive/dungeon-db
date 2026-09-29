@@ -1,16 +1,20 @@
+use crate::data::formula::query::RecordFuncQuery;
+use crate::data::formula::value::Value;
 use crate::data::table::column::TableColumnMetadata;
 use crate::data::table::row::TableCell; 
-use crate::data::formula::func::RecordFunc;
-use crate::util::db::RowWrapper;
+use crate::data::formula::func::{Func, RecordFunc};
+use crate::util::db::{RowWrapper, sql_collect, sql_iter};
+use crate::util::db;
 use crate::util::error::Error;
 
 pub struct Context<'a> {
+    query: &'a RecordFuncQuery,
     row: &'a RowWrapper<'a>
 }
 
 impl<'a> Context<'a> {
-    pub fn new(row: &'a RowWrapper<'a>) -> Self {
-        Self { row }
+    pub fn new(query: &'a RecordFuncQuery, row: &'a RowWrapper<'a>) -> Self {
+        Self { query, row }
     }
 
     /// Gets the cell associated with a column.

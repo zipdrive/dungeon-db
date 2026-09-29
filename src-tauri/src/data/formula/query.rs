@@ -151,6 +151,14 @@ LEFT JOIN {alias} ON MULTISELECT{}.TABLE{table_oid}_OID = {alias}_OID
         Ok(())
     }
 
+    /// List all OID filters for the CTE.
+    pub fn oid_filters(&self) -> Vec<String> {
+        self.cte.iter()
+            .flat_map(|cte| cte.oid_filters())
+            .chain(vec![format!("{}_OID", self.alias)])
+            .collect()
+    }
+
     /// Converts this object into an SQL expression.
     pub fn sql(&self) -> String {
         let sql: String = format!(
@@ -181,18 +189,17 @@ LEFT JOIN {alias} ON MULTISELECT{}.TABLE{table_oid}_OID = {alias}_OID
 }
 
 #[derive(Clone)]
-struct RecordFuncQuery {
-    /// The alias of the CTE.
-    alias: String,
-
-    /// The table being selected from.
-    table_oid: i64,
-
+pub struct RecordFuncQuery {
     /// The child CTE.
     cte: HashSet<RecordFuncCte>
 }
 
 impl RecordFuncQuery {
+    /// Create a new query.
+    pub fn new() -> Self {
+        Self { cte: HashSet::new() }
+    }
+
     /// Takes a child CTE from this CTE, or creates it if it does not exist.
     /// The child CTE will need to be added back to this set of child CTEs after manipulation is done to it.
     fn take_child(&mut self, func: &RecordFunc) -> Result<RecordFuncCte, Error> {
@@ -231,22 +238,27 @@ impl RecordFuncQuery {
         Ok(())
     }
 
-    /// Converts this object into an SQL expression.
+    /// List all OID filters for the query.
+    pub fn oid_filters(&self) -> Vec<String> {
+        self.cte.iter()
+            .flat_map(|cte| cte.oid_filters())
+            .collect()
+    }
+
+    /// Converts this object into an SQL expression of CTEs.
     pub fn sql(&self) -> String {
         let sql: String = format!(
             "
-{} AS (
+WRAPPER AS (
     SELECT 
         {}
     {}
 )
             ",
-            self.alias,
-            self.cte.iter()
-                .fold(
-                    format!("t.OID AS {}_OID", self.alias),
-                    |acc, e| format!("{acc}, {}.*", e.alias)
-                ),
+            match self.cte.iter().map(|e| format!("{}.*", e.alias)).reduce(|acc, e| format!("{acc}, {e}")) {
+                Some(columns) => columns,
+                None => String::from("NULL")
+            },
             match self.cte.iter().map(|j| j.alias.clone()).reduce(|acc, e| format!("{acc}, {e}")) {
                 Some(sources) => format!("FROM {sources}"),
                 None => String::from("WHERE FALSE")
@@ -254,7 +266,7 @@ impl RecordFuncQuery {
         );
         self.cte.iter().fold(
             sql,
-            |acc, e| format!("{acc}, {}", e.sql())
+            |acc, e| format!("{}, {acc}", e.sql())
         )
     }
 }

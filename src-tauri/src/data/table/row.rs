@@ -52,6 +52,7 @@ pub enum TableCellContent {
     },
     Subreport {
         report_oid: i64,
+        oid_filters: Vec<(String, Vec<i64>)>
     }
 }
 
@@ -65,13 +66,10 @@ pub struct TableCell {
 
 impl TableCell {
     pub fn new(table_oid: i64, column: &TableColumnMetadata, column_base_alias: String, row_oid: i64, row: &RowWrapper) -> Result<Self, Error> {
-        Ok(Self { 
-            table_oid, 
-            column_oid: column.oid.clone(), 
-            row_oid, 
+        Ok(Self {  
             content: match &column.column_type {
                 TableColumnType::Primitive { primitive, .. } => {
-                    let ord: String = column_base_alias;
+                    let ord: String = column_base_alias.clone();
                     match primitive {
                         Primitive::Boolean => TableCellContent::Boolean { 
                             value: row.get::<&str, Option<bool>>(&ord)?.unwrap_or(false)
@@ -156,10 +154,17 @@ impl TableCell {
                 }
                 TableColumnType::Subreport { report_oid, .. } => {
                     TableCellContent::Subreport { 
-                        report_oid: report_oid.clone()
+                        report_oid: report_oid.clone(),
+                        oid_filters: vec![(
+                            format!("TABLE{table_oid}_OID"),
+                            vec![row_oid.clone()]
+                        )]
                     }
                 }
-            }
+            },
+            table_oid, 
+            column_oid: column.oid.clone(), 
+            row_oid
         })
     }
 }

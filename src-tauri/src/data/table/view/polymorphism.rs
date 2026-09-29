@@ -5,6 +5,7 @@ use regex::Regex;
 use rusqlite::{Connection, params};
 use crate::util::db::{sql_collect, sql_execute};
 use crate::util::error::Error;
+use crate::util::mapping::oid_list;
 
 #[derive(Eq)]
 struct PolymorphismCte {
@@ -52,9 +53,7 @@ impl PolymorphismCte {
 
     /// Inserts an inheritor datasource path into the CTE chain.
     pub fn push<S>(&mut self, path: S) -> Result<(), Error> where S : AsRef<str> {
-        let path: Vec<i64> = path.as_ref().split(',')
-            .filter_map(|s| match s.parse::<i64>() { Ok(i) => Some(i), Err(_) => None })
-            .collect();
+        let path: Vec<i64> = oid_list(path);
         self._push(&path)
     }
 

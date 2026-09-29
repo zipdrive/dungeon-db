@@ -1,4 +1,5 @@
 use rusqlite::Connection;
+use serde::Serialize;
 
 use crate::data::file::File; 
 use crate::data::table::TableMetadata;
@@ -108,13 +109,14 @@ impl ValueType {
 }
 
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct TableCellReference {
     pub table_oid: i64,
     pub column_oid: i64,
     pub row_oid: i64
 }
 
+#[derive(Clone)]
 pub struct TextValue {
     pub text: String,
     pub format: TableCellTextContentFormat
@@ -126,6 +128,7 @@ pub struct RecordValue {
     pub row: TableRow
 }
 
+#[derive(Clone)]
 pub enum Value {
     Null {
         reference: Option<TableCellReference>
@@ -174,6 +177,100 @@ pub enum Value {
         reference: TableCellReference
     },
     List(Vec<Value>)
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match self {
+            Self::Null { .. } => {
+                if let Self::Null { .. } = other {
+                    true
+                } else {
+                    false
+                }
+            }
+            Self::Boolean { value, .. } => {
+                if let Self::Boolean { value: other_value, .. } = other {
+                    value == other_value 
+                } else {
+                    false
+                }
+            }
+            Self::Date { value, .. } => {
+                if let Self::Date { value: other_value, .. } = other {
+                    value == other_value 
+                } else {
+                    false
+                }
+            }
+            Self::Datetime { value, .. } => {
+                if let Self::Datetime { value: other_value, .. } = other {
+                    value == other_value 
+                } else {
+                    false
+                }
+            }
+            Self::Integer { value, .. } => {
+                if let Self::Integer { value: other_value, .. } = other {
+                    value == other_value 
+                } else {
+                    false
+                }
+            }
+            Self::Number { value, .. } => {
+                if let Self::Number { value: other_value, .. } = other {
+                    value == other_value 
+                } else {
+                    false
+                }
+            }
+            Self::Text { value, .. } => {
+                if let Self::Text { value: other_value, .. } = other {
+                    value.text == other_value.text
+                } else {
+                    false
+                }
+            }
+            Self::FileCellReference { value, .. } => {
+                if let Self::FileCellReference { value: other_value, .. } = other {
+                    value.oid() == other_value.oid() 
+                } else {
+                    false
+                }
+            }
+            Self::ObjectCellReference { table_oid, value, .. }
+            | Self::SingleSelectCellReference { table_oid, value, .. } => {
+                match other {
+                    Self::ObjectCellReference { table_oid: other_table_oid, value: other_value, .. }
+                    | Self::SingleSelectCellReference { table_oid: other_table_oid, value: other_value, .. } => 
+                        table_oid == other_table_oid && value == other_value,
+                    Self::MultiSelectCellReference { table_oid: other_table_oid, value: other_value, .. } =>
+                        table_oid == other_table_oid && other_value.len() == 1 && *value == other_value[0],
+                    _ => false
+                }
+            }
+            Self::MultiSelectCellReference { table_oid, value, .. } => {
+                match other {
+                    Self::ObjectCellReference { table_oid: other_table_oid, value: other_value, .. }
+                    | Self::SingleSelectCellReference { table_oid: other_table_oid, value: other_value, .. } => 
+                        table_oid == other_table_oid && value.len() == 1 && value[0] == *other_value,
+                    Self::MultiSelectCellReference { table_oid: other_table_oid, value: other_value, .. } =>
+                        table_oid == other_table_oid 
+                            && value.iter().all(|i| other_value.contains(i))
+                            && other_value.iter().all(|i| value.contains(i)),
+                    _ => false
+                }
+            }
+            Self::List(values) => {
+                if let Self::List(other_values) = other {
+                    values.iter().all(|i| other_values.contains(i))
+                        && other_values.iter().all(|i| values.contains(i))
+                } else {
+                    false
+                }
+            }
+        }
+    }
 }
 
 impl Value {
@@ -233,47 +330,141 @@ impl Value {
         })
     }
 
+    /// Performs a unary operation on one value.
+    pub fn transform_unary<F>(value1: &Self, f: &F) -> Result<Self, Error> where F : Fn(&Self) -> Result<Self, Error> {
+        Ok(match value1 {
+            Self::List(values1) => Self::List({
+                let mut trans_values: Vec<Value> = Vec::new();
+                for value1 in values1 {
+                    let value = Self::transform_unary(value1, f)?;
+                    if let Self::List(values) = value {
+                        for value in values {
+                            trans_values.push(value);
+                        }
+                    } else {
+                        trans_values.push(value);
+                    }
+                }
+                trans_values
+            }),
+            _ => f(&value1)?
+        })
+    }
+
+    /// Performs a binary operation on two values.
+    pub fn transform_binary<F>(value1: &Self, value2: &Self, f: &F) -> Result<Self, Error> where F : Fn(&Self, &Self) -> Result<Self, Error> {
+        Ok(match value1 {
+            Self::List(values1) => match value2 {
+                Self::List(values2) => Self::List({
+                    let mut trans_values: Vec<Value> = Vec::new();
+                    for value1 in values1 {
+                        for value2 in values2 {
+                            let value = Self::transform_binary(value1, value2, f)?;
+                            if let Self::List(values) = value {
+                                for value in values {
+                                    trans_values.push(value);
+                                }
+                            } else {
+                                trans_values.push(value);
+                            }
+                        }
+                    }
+                    trans_values
+                }),
+                _ => Self::List({
+                    let mut trans_values: Vec<Value> = Vec::new();
+                    for value1 in values1 {
+                        let value = Self::transform_binary(value1, value2, f)?;
+                        if let Self::List(values) = value {
+                            for value in values {
+                                trans_values.push(value);
+                            }
+                        } else {
+                            trans_values.push(value);
+                        }
+                    }
+                    trans_values
+                })
+            }
+            _ => match value2 {
+                Self::List(values2) => Self::List({
+                    let mut trans_values: Vec<Value> = Vec::new();
+                    for value2 in values2 {
+                        let value = Self::transform_binary(value1, value2, f)?;
+                        if let Self::List(values) = value {
+                            for value in values {
+                                trans_values.push(value);
+                            }
+                        } else {
+                            trans_values.push(value);
+                        }
+                    }
+                    trans_values
+                }),
+                _ => f(&value1, &value2)?
+            }
+        })
+    }
+
     /// Converts the value into a non-optional bool.
-    pub fn into_bool<S>(self, fn_id: S) -> Result<bool, Error> where S : AsRef<str> {
+    pub fn into_bool<S>(&self, fn_id: S) -> Result<bool, Error> where S : AsRef<str> {
         match self {
-            Self::Boolean { value, .. } => Ok(value),
+            Self::Boolean { value, .. } => Ok(value.clone()),
             _ => Err(Error::adhoc(format!("Function {} expected a Boolean value, but received a {} value.", fn_id.as_ref(), self.to_string())))
         }
     }
 
+    /// True if the value can be converted into a nullable integer.
+    pub fn is_i64(&self) -> bool {
+        match self {
+            Self::Null { .. }
+            | Self::Integer { .. } => true,
+            _ => false
+        }
+    }
+
     /// Converts the value into a nullable integer.
-    pub fn into_i64<S>(self, fn_id: S) -> Result<Option<i64>, Error> where S : AsRef<str> {
+    pub fn into_i64<S>(&self, fn_id: S) -> Result<Option<i64>, Error> where S : AsRef<str> {
         match self {
             Self::Null { .. } => Ok(None),
-            Self::Integer { value, .. } => Ok(Some(value)),
+            Self::Integer { value, .. } => Ok(Some(value.clone())),
             _ => Err(Error::adhoc(format!("Function {} expected an Integer value, but received a {} value.", fn_id.as_ref(), self.to_string())))
         }
     }
 
+    /// True if the value can be converted into a nullable floating-point number.
+    pub fn is_f64(&self) -> bool {
+        match self {
+            Self::Null { .. }
+            | Self::Integer { .. } => true,
+            _ => false
+        }
+    }
+
     /// Converts the value into a nullable floating-point value.
-    pub fn into_f64<S>(self, fn_id: S) -> Result<Option<f64>, Error> where S : AsRef<str> {
+    pub fn into_f64<S>(&self, fn_id: S) -> Result<Option<f64>, Error> where S : AsRef<str> {
         match self {
             Self::Null { .. } => Ok(None),
-            Self::Integer { value, .. } => Ok(Some(value as f64)),
-            Self::Number { value, .. } => Ok(Some(value)),
+            Self::Integer { value, .. } => Ok(Some(value.clone() as f64)),
+            Self::Number { value, .. } => Ok(Some(value.clone())),
             _ => Err(Error::adhoc(format!("Function {} expected a Number value, but received a {} value.", fn_id.as_ref(), self.to_string())))
         }
     }
 
     /// Converts the value into a nullable File.
-    pub fn into_file<S>(self, fn_id: S) -> Result<Option<File>, Error> where S : AsRef<str> {
+    pub fn into_file<S>(&self, fn_id: S) -> Result<Option<File>, Error> where S : AsRef<str> {
         match self {
             Self::Null { .. } => Ok(None),
-            Self::FileCellReference { value, .. } => Ok(Some(value)),
+            Self::FileCellReference { value, .. } => Ok(Some(value.clone())),
             _ => Err(Error::adhoc(format!("Function {} expected a File value, but received a {} value.", fn_id.as_ref(), self.to_string())))
         }
     }
 
     /// Converts the value into a nullable TextValue.
-    pub fn into_text<S>(self, fn_id: S) -> Result<Option<TextValue>, Error> where S : AsRef<str> {
+    pub fn into_text<S>(&self, fn_id: S) -> Result<Option<TextValue>, Error> where S : AsRef<str> {
         match self {
             Self::Null { .. } => Ok(None),
-            Self::Text { value, .. } => Ok(Some(value)),
+            Self::Text { value, .. } => Ok(Some(value.clone())),
             _ => Err(Error::adhoc(format!("Function {} expected a Text value, but received a {} value.", fn_id.as_ref(), self.to_string())))
         }
     }

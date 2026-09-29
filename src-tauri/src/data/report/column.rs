@@ -6,7 +6,7 @@ use crate::util::error::Error;
 use crate::data::report::column_type::ReportColumnType;
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct TableColumnMetadata {
+pub struct ReportColumnMetadata {
     pub oid: i64,
     pub name: String,
     pub column_type: ReportColumnType,
@@ -15,7 +15,7 @@ pub struct TableColumnMetadata {
     pub is_primary_key: bool
 }
 
-impl TableColumnMetadata {
+impl ReportColumnMetadata {
     /// Constructs a new TableColumnMetadata.
     fn new(row: &RowWrapper) -> Result<Self, Error> {
         Ok(Self {
