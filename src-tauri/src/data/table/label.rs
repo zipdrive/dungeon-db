@@ -119,7 +119,7 @@ fn conn_get_keys(conn: &Connection, table_oid: i64, row_oid: i64, block_recursio
                                 label
                             )
                         }
-                        TableCellContent::Subreport { report_oid } => {
+                        TableCellContent::Subreport { oid_filters, report_oid } => {
                             let label: String = String::from("[]"); // TODO
                             (
                                 column.name,

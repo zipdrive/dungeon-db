@@ -158,6 +158,9 @@ pub enum Func {
     Lower(Box<Func>),
     StringLength(Box<Func>),
 
+    ToUnixEpoch(Box<Func>),
+    FromUnixEpoch(Box<Func>),
+
     Sum(Box<Func>),
     Average(Box<Func>),
     Min(Box<Func>),
@@ -196,6 +199,8 @@ impl Func {
             | Self::Sign(a)
             | Self::StringLength(a)
             | Self::Upper(a) 
+            | Self::ToUnixEpoch(a)
+            | Self::FromUnixEpoch(a)
             | Self::Join { delimiter: a, .. } => a.get_all_columns(),
 
             Self::Add(a, b)
@@ -245,6 +250,8 @@ impl Func {
             | Self::Round(a)
             | Self::Sign(a)
             | Self::StringLength(a)
+            | Self::ToUnixEpoch(a)
+            | Self::FromUnixEpoch(a)
             | Self::Upper(a) 
             | Self::Average(a)
             | Self::Count(a)
@@ -387,7 +394,16 @@ impl Func {
             }
             Self::StringLength(inner) => {
                 let inner = inner.sql()?;
-                FuncSql::new(format!("LENGTH({})", inner.value_expr), "Text")
+                FuncSql::new(format!("LENGTH({})", inner.value_expr), "Integer")
+            }
+
+            Self::ToUnixEpoch(inner) => {
+                let inner = inner.sql()?;
+                FuncSql::new(format!("UNIXEPOCH({}, 'julianday')", inner.value_expr), "Integer")
+            }
+            Self::FromUnixEpoch(inner) => {
+                let inner = inner.sql()?;
+                FuncSql::new(format!("JULIANDAY({}, 'unixepoch')", inner.value_expr), "Datetime")
             }
 
             Self::If(a, b1, b2) => {

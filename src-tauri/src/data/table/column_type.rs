@@ -21,7 +21,7 @@ pub enum Primitive {
 
 impl Primitive {
     /// Gets the string ID of the primitive.
-    pub fn name(&self) -> &'static str {
+    pub fn id(&self) -> &'static str {
         match self {
             Self::Boolean => "Boolean",
             Self::Date => "Date",
@@ -164,7 +164,7 @@ impl TableColumnType {
     /// For use to determine value type of formula's return value.
     pub fn id(&self) -> String {
         match self {
-            Self::Primitive { primitive, .. } => primitive.id(),
+            Self::Primitive { primitive, .. } => String::from(primitive.id()),
             Self::File { .. } => String::from("File"),
             Self::Object { table_oid, .. } => format!("Object/{table_oid}"),
             Self::SingleSelect { table_oid, .. } => format!("SingleSelect/{table_oid}"),

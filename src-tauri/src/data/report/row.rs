@@ -1,7 +1,11 @@
+use base64::engine::general_purpose::{STANDARD as base64standard};
+use base64::Engine;
 use rusqlite::params;
 use rusqlite::types::ValueRef;
 use serde::Serialize;
-
+use finetime::IntoDateTime;
+use finetime;
+use std::borrow::Borrow;
 use crate::data::file::File;
 use crate::data::formula::context::Context;
 use crate::data::formula::func::Func;
@@ -49,7 +53,7 @@ impl ReportRow {
 
         let report: ReportMetadata = ReportMetadata::conn_get(&conn, report_oid)?;
         let filter_func: Option<Func> = if let Some(filter_formula) = report.filter_formula {
-            Func::parse(filter_formula)?
+            Some(Func::parse(filter_formula)?)
         } else {
             None 
         };
@@ -78,7 +82,7 @@ impl ReportRow {
         let mut query: RecordFuncQuery = RecordFuncQuery::new();
 
         // Determine which records are to be automatically excluded from groupings
-        if let Some(filter_func) = filter_func {
+        if let Some(filter_func) = &filter_func {
             for (record, table_oid, col) in filter_func.get_nonaggregated_columns() {
                 query.add_column(&record.linearize(), table_oid, col.name)?;
             }
@@ -124,7 +128,7 @@ FROM (
             ",
             // Convert each column into an equivalent SQL expression
             {
-                let cols: Vec<String> = Vec::new();
+                let mut cols: Vec<String> = Vec::new();
                 for column in columns.iter() {
                     if let ParsedReportColumn::Formula { column_oid, func } = column {
                         let sql = func.sql()?;
@@ -143,7 +147,7 @@ FROM (
                 .unwrap_or(String::from("")),
 
             // Filters on the query, applied pre-grouping
-            if let Some(filter_func) = filter_func {
+            if let Some(filter_func) = &filter_func {
                 let filter_sql = filter_func.sql()?;
                 format!("WHERE {}", filter_sql.value_expr)
             } else {
@@ -281,7 +285,28 @@ FROM (
                                         let value: Option<i64> = row.get::<&str, _>(&ord)?;
                                         TableCellContent::Date { 
                                             label: if let Some(value) = &value {
-
+                                                let julian: finetime::JulianDay<_, finetime::SecondsPerHalfDay> = finetime::JulianDay::from_time_since_epoch(finetime::Duration::new(value.clone()));
+                                                let jul_point = finetime::TaiTime::from_julian_day(julian);
+                                                if let Some(sec_point) = jul_point.try_into_unit::<finetime::Second>() {
+                                                    let (date, _, _, _) = sec_point.into_gregorian_datetime();
+                                                    let month: u8 = match date.month() {
+                                                        finetime::Month::January => 1,
+                                                        finetime::Month::February => 2,
+                                                        finetime::Month::March => 3,
+                                                        finetime::Month::April => 4,
+                                                        finetime::Month::May => 5,
+                                                        finetime::Month::June => 6,
+                                                        finetime::Month::July => 7,
+                                                        finetime::Month::August => 8,
+                                                        finetime::Month::September => 9,
+                                                        finetime::Month::October => 10,
+                                                        finetime::Month::November => 11,
+                                                        finetime::Month::December => 12,
+                                                    };
+                                                    Some(format!("{:04}-{:02}-{:02}", date.year(), month, date.day()))
+                                                } else {
+                                                    None
+                                                }
                                             } else {
                                                 None
                                             },
@@ -291,7 +316,28 @@ FROM (
                                         let value: Option<f64> = row.get::<&str, _>(&ord)?;
                                         TableCellContent::Datetime { 
                                             label: if let Some(value) = &value {
-
+                                                let julian: finetime::JulianDay<_, finetime::SecondsPerHalfDay> = finetime::JulianDay::from_time_since_epoch(finetime::Duration::new(value.clone()));
+                                                let jul_point = finetime::TaiTime::from_julian_day(julian);
+                                                if let Some(sec_point) = jul_point.try_into_unit::<finetime::Second>() {
+                                                    let (date, hour, minute, second) = sec_point.into_gregorian_datetime();
+                                                    let month: u8 = match date.month() {
+                                                        finetime::Month::January => 1,
+                                                        finetime::Month::February => 2,
+                                                        finetime::Month::March => 3,
+                                                        finetime::Month::April => 4,
+                                                        finetime::Month::May => 5,
+                                                        finetime::Month::June => 6,
+                                                        finetime::Month::July => 7,
+                                                        finetime::Month::August => 8,
+                                                        finetime::Month::September => 9,
+                                                        finetime::Month::October => 10,
+                                                        finetime::Month::November => 11,
+                                                        finetime::Month::December => 12,
+                                                    };
+                                                    Some(format!("{:04}-{:02}-{:02}T{hour:02}:{minute:02}:{second:02}Z", date.year(), month, date.day()))
+                                                } else {
+                                                    None
+                                                }
                                             } else {
                                                 None
                                             },
@@ -307,10 +353,15 @@ FROM (
                                                 let value_ref = row.get_ref::<&str>(&ord)?;
                                                 match value_ref {
                                                     ValueRef::Null => None,
-                                                    ValueRef::Text(text) => Some(String::from(text)),
+                                                    ValueRef::Text(text) => Some(match str::from_utf8(text) {
+                                                        Ok(text) => String::from(text),
+                                                        Err(_) => {
+                                                            return Err(Error::adhoc("Unable to extract text value from formula return value."));
+                                                        }
+                                                    }),
                                                     ValueRef::Integer(value) => Some(format!("{value}")),
                                                     ValueRef::Real(value) => Some(format!("{value}")),
-                                                    ValueRef::Blob(blob) => Some(String::from(blob))
+                                                    ValueRef::Blob(buf) => Some(base64standard.encode(&buf))
                                                 }
                                             }, 
                                             format: TableCellTextContentFormat::Plain 

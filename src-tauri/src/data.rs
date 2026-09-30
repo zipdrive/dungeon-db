@@ -1,6 +1,6 @@
 use crate::util::channel::Sender;
 use crate::util::error::Error;
-use crate::util::{db, dialog, process};
+use crate::util::db;
 use serde::Deserialize;
 use std::sync::Mutex;
 use tauri::ipc::JavaScriptChannelId;
