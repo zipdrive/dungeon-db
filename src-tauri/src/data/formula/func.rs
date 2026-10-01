@@ -122,7 +122,7 @@ impl FuncSql {
 
 pub enum Func {
     Column {
-        record: Box<RecordFunc>,
+        record: RecordFunc,
         table_oid: i64,
         column: TableColumnMetadata,
     },
@@ -132,6 +132,8 @@ pub enum Func {
     Integer(i64),
     Number(f64),
     Text(String),
+
+    Wrap(Box<Func>),
 
     Not(Box<Func>),
     And(Box<Func>, Box<Func>),
@@ -177,7 +179,7 @@ impl Func {
     pub fn get_nonaggregated_columns(&self) -> Vec<(RecordFunc, i64, TableColumnMetadata)> {
         match self {
             Self::Column { record, table_oid, column } => 
-                vec![(*record.clone(), table_oid.clone(), column.clone())],
+                vec![(record.clone(), table_oid.clone(), column.clone())],
 
             Self::Null
             | Self::Boolean(_)
@@ -190,7 +192,8 @@ impl Func {
             | Self::Min(_)
             | Self::Sum(_) => Vec::new(),
 
-            Self::Abs(a)
+            Self::Wrap(a)
+            | Self::Abs(a)
             | Self::Ceiling(a)
             | Self::Floor(a)
             | Self::Lower(a)
@@ -234,7 +237,7 @@ impl Func {
     pub fn get_all_columns(&self) -> Vec<(RecordFunc, i64, TableColumnMetadata)> {
         match self {
             Self::Column { record, table_oid, column } => 
-                vec![(*record.clone(), table_oid.clone(), column.clone())],
+                vec![(record.clone(), table_oid.clone(), column.clone())],
 
             Self::Null
             | Self::Boolean(_)
@@ -242,7 +245,8 @@ impl Func {
             | Self::Number(_)
             | Self::Text(_) => Vec::new(),
 
-            Self::Abs(a)
+            Self::Wrap(a)
+            | Self::Abs(a)
             | Self::Ceiling(a)
             | Self::Floor(a)
             | Self::Lower(a)
@@ -287,6 +291,54 @@ impl Func {
         }
     }
 
+    /// Constructs the equivalent formula representing the function.
+    pub fn formula(&self) -> String {
+        match self {
+            Self::Abs(inner) => format!("ABS({})", inner.formula()),
+            Self::Add(lhs, rhs) => format!("({} + {})", lhs.formula(), rhs.formula()),
+            Self::And(lhs, rhs) => format!("({} AND {})", lhs.formula(), rhs.formula()),
+            Self::Average(list) => format!("AVG({})", list.formula()),
+            Self::Boolean(value) => String::from(if *value { "true" } else { "false" }),
+            Self::Ceiling(inner) => format!("CEIL({})", inner.formula()),
+            Self::Coalesce(items) => if items.len() == 0 {
+                String::from("null")
+            } else if items.len() == 1 {
+                items[0].formula()
+            } else {
+                format!("COALESCE({})", items.iter().map(|item| item.formula()).reduce(|acc, e| format!("{acc}, {e}")).unwrap())
+            },
+            Self::Column { record, column, .. } => format!("{}.\"{}\"", record.formula(), json_encode_string(&column.name)),
+            Self::Concat(lhs, rhs) => format!("({} || {})", lhs.formula(), rhs.formula()),
+            Self::Count(list) => format!("COUNT({})", list.formula()),
+            Self::Div(lhs, rhs) => format!("({} / {})", lhs.formula(), rhs.formula()),
+            Self::Floor(inner) => format!("FLOOR({})", inner.formula()),
+            Self::FromUnixEpoch(inner) => format!("FROMUNIXTIME({})", inner.formula()),
+            Self::If(a, b1, b2) => format!("IF({}, {}, {})", a.formula(), b1.formula(), b2.formula()),
+            Self::Integer(value) => format!("{value}"),
+            Self::Join { list, delimiter } => format!("JOIN({}, {})", list.formula(), delimiter.formula()),
+            Self::Lower(inner) => format!("LOWER({})", inner.formula()),
+            Self::Max(list) => format!("MAX({})", list.formula()),
+            Self::Min(list) => format!("MIN({})", list.formula()),
+            Self::Mod(lhs, rhs) => format!("({} % {})", lhs.formula(), rhs.formula()),
+            Self::Mul(lhs, rhs) => format!("({} * {})", lhs.formula(), rhs.formula()),
+            Self::Not(inner) => format!("(NOT {})", inner.formula()),
+            Self::Null => String::from("null"),
+            Self::NullIf(a, b) => format!("NULLIF({}, {})", a.formula(), b.formula()),
+            Self::Number(value) => format!("{value}"),
+            Self::Or(lhs, rhs) => format!("({} OR {})", lhs.formula(), rhs.formula()),
+            Self::Pow(lhs, rhs) => format!("POW({}, {})", lhs.formula(), rhs.formula()),
+            Self::Round(inner) => format!("ROUND({})", inner.formula()),
+            Self::Sign(inner) => format!("SIGN({})", inner.formula()),
+            Self::StringLength(inner) => format!("LENGTH({})", inner.formula()),
+            Self::Sub(lhs, rhs) => format!("({} - {})", lhs.formula(), rhs.formula()),
+            Self::Sum(list) => format!("SUM({})", list.formula()),
+            Self::Text(value) => format!("'{}'", sql_encode_string(value)),
+            Self::ToUnixEpoch(inner) => format!("UNIXTIME({})", inner.formula()),
+            Self::Upper(inner) => format!("UPPER({})", inner.formula()),
+            Self::Wrap(inner) => format!("({})", inner.formula())
+        }
+    }
+
     /// Converts the function into an equivalent SQL expression.
     pub fn sql(&self) -> Result<FuncSql, Error> {
         Ok(match self {
@@ -312,6 +364,8 @@ impl Func {
             Self::Integer(value) => FuncSql::new(format!("{value}"), "Text"),
             Self::Number(value) => FuncSql::new(format!("{value}"), "Text"),
             Self::Text(value) => FuncSql::new(format!("'{}'", sql_encode_string(value)), "Text"),
+
+            Self::Wrap(inner) => inner.sql()?,
 
             Self::Not(inner) => {
                 let inner = inner.sql()?;

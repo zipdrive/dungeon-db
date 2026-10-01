@@ -1,6 +1,7 @@
 use crate::util::channel::Sender;
 use crate::util::db;
 use crate::util::db::{sql_execute, sql_iter, sql_one, sql_collect};
+use crate::util::encode::json_encode_string;
 use crate::util::error::Error;
 use rusqlite::Connection;
 use rusqlite::{params, OptionalExtension, Transaction};
@@ -113,6 +114,29 @@ WHERE INHERITOR_TABLE_OID = ?1
             name,
             master_oids
         })
+    }
+
+    /// Finds the unique table with a matching name.
+    pub fn conn_find(conn: &Connection, name: String) -> Result<Self, Error> {
+        // Get the OID of all matching tables
+        let matching_oids = sql_collect(
+            &conn, 
+            "
+SELECT
+    OID
+FROM METADATA_TABLE
+WHERE NAME = ?1
+            ", 
+            params![name], 
+            |row| row.get::<_, i64>("OID")
+        )?;
+        if matching_oids.len() == 0 {
+            Err(Error::adhoc(format!("No table with name \"{}\" exists!", json_encode_string(&name))))
+        } else if matching_oids.len() > 1 {
+            Err(Error::adhoc(format!("More than one table with name \"{}\" exists!", json_encode_string(&name))))
+        } else {
+            Self::get(matching_oids[0])
+        }
     }
 
     /// Creates a new table.

@@ -53,7 +53,7 @@ pub enum Error {
 
 
     /// Error for when a formula has invalid syntax.
-    FormulaParseError {
+    FormulaSyntaxError {
         msg: String,
         full_formula: String,
         substring_with_error: String,
@@ -150,7 +150,7 @@ impl Into<String> for Error {
                 return format!("{column_type} column \"{}\" (ID {column_oid}) cannot be a parameter!", column_name.replace("\\", "\\\\").replace("\"", "\\\""));
             }
             
-            Self::FormulaParseError { msg, full_formula, substring_with_error } => {
+            Self::FormulaSyntaxError { msg, full_formula, substring_with_error } => {
                 return match full_formula.find(&substring_with_error) {
                     Some(idx) => format!(
                         "{msg}\nAt char {idx} (\"{}{}\"): {full_formula}", 

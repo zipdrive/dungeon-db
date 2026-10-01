@@ -2,8 +2,10 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use crate::util::db::{RowWrapper, sql_collect, sql_execute, sql_one};
 use crate::util::db;
+use crate::util::encode::json_encode_string;
 use crate::util::error::Error;
 use crate::data::table::column_type::{TableColumnType, Primitive};
+use crate::data::table;
 use crate::data::table::view;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -125,6 +127,27 @@ impl TableColumnMetadata {
                 Self::new(row)?
             ))
         )
+    }
+
+    /// Retrieves the metadata for the unique column on a table with a given name.
+    /// Uses the given connection.
+    /// Returns a tuple of the owner table OID and the column metadata.
+    pub fn conn_find(conn: &Connection, table_oid: i64, name: String) -> Result<(i64, Self), Error> {
+        let matching_oids: Vec<i64> = sql_collect(
+            conn, 
+            "SELECT OID FROM METADATA_TABLE_COLUMN WHERE TABLE_OID = ?1 AND NAME = ?2", 
+            params![table_oid, name], 
+            |row| row.get("OID")
+        )?;
+        if matching_oids.len() == 0 {
+            let table: table::TableMetadata = table::TableMetadata::conn_get(conn, table_oid)?;
+            Err(Error::adhoc(format!("No column with name \"{}\" exists on table \"{}\"!", json_encode_string(&name), json_encode_string(&table.name))))
+        } else if matching_oids.len() > 1 {
+            let table: table::TableMetadata = table::TableMetadata::conn_get(conn, table_oid)?;
+            Err(Error::adhoc(format!("More than one column with name \"{}\" exists on table \"{}\"!", json_encode_string(&name), json_encode_string(&table.name))))
+        } else {
+            Self::get(matching_oids[0])
+        }
     }
 
     /// Queries for all columns that are directly owned by the given table.
