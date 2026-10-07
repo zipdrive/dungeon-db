@@ -1,12 +1,42 @@
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
-use crate::util::db::{RowWrapper, sql_collect, sql_execute, sql_one};
+use crate::util::channel::Sender;
+use crate::util::db::{RowWrapper, sql_collect, sql_execute, sql_one, sql_iter};
 use crate::util::db;
 use crate::util::encode::json_encode_string;
 use crate::util::error::Error;
 use crate::data::table::column_type::{TableColumnType, Primitive};
 use crate::data::table;
 use crate::data::table::view;
+
+
+#[derive(Serialize, Clone)]
+pub struct TableColumnListItem {
+    pub oid: i64,
+    pub table_oid: i64,
+    pub name: String
+}
+
+impl TableColumnListItem {
+    /// Send a basic list of all columns directly owned by or inherited by a table.
+    pub fn send_all(mut sender: Sender<Self>, table_oid: i64) -> Result<(), Error> {
+        let conn = db::open()?;
+        sql_iter(
+            &conn, 
+            "SELECT OID, BASE_TABLE_OID, NAME FROM METADATA_TABLE_COLUMN_PATH WHERE TABLE_OID = ?1 ORDER BY ORDERING", 
+            params![table_oid], 
+            |row| {
+                sender.send(Self {
+                    oid: row.get::<_, i64>("OID")?,
+                    table_oid: row.get::<_, i64>("BASE_TABLE_OID")?,
+                    name: row.get::<_, String>("NAME")?
+                })?;
+                Ok(None::<()>)
+            }
+        )?;
+        Ok(())
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct TableColumnMetadata {
@@ -395,41 +425,54 @@ WHERE OID = ?5
     }
 
     /// Sets the ordering for the column.
-    /// Returns the OID of the owning table.
-    pub fn set_ordering(&self, ordering: i64) -> Result<i64, Error> {
+    /// Returns the old ordering of the column.
+    pub fn set_ordering(&self, ordering: Option<i64>) -> Result<i64, Error> {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
 
-        // Query for the OID of the table that owns the column being replaced
-        let table_oid: i64 = sql_one(
-            &trans, 
-            "SELECT TABLE_OID FROM METADATA_TABLE_COLUMN WHERE OID = ?1", 
-            params![self.oid], 
-            |row| row.get("TABLE_OID")
+        // Query for the old ordering of the column
+        let old_ordering: i64 = sql_one(
+            &trans,
+            "SELECT ORDERING FROM METADATA_TABLE_COLUMN WHERE OID = ?1",
+            params![self.oid],
+            |row| row.get("ORDERING")
         )?;
 
-        // Make space for the inserted ordering
-        sql_execute(
-            &trans, 
-            "UPDATE __METADATA_TABLE_COLUMN SET ORDERING = -ORDERING WHERE ORDERING >= ?1",
-            params![ordering]
-        )?;
-        // Set the specified column's ordering
-        sql_execute(
-            &trans, 
-            "UPDATE __METADATA_TABLE_COLUMN SET ORDERING = ?1 WHERE OID = ?2", 
-            params![ordering, self.oid]
-        )?;
-        // Shift all greater orderings to ensure there is space
-        sql_execute(
-            &trans, 
-            "UPDATE __METADATA_TABLE_COLUMN SET ORDERING = 1-ORDERING WHERE ORDERING < 0", 
-            []
-        )?;
+        if let Some(ordering) = ordering {
+            // Make space for the inserted ordering
+            sql_execute(
+                &trans, 
+                "UPDATE __METADATA_TABLE_COLUMN SET ORDERING = -ORDERING WHERE ORDERING >= ?1",
+                params![ordering]
+            )?;
+            // Set the specified column's ordering
+            sql_execute(
+                &trans, 
+                "UPDATE __METADATA_TABLE_COLUMN SET ORDERING = ?1 WHERE OID = ?2", 
+                params![ordering, self.oid]
+            )?;
+            // Shift all greater orderings to ensure there is space
+            sql_execute(
+                &trans, 
+                "UPDATE __METADATA_TABLE_COLUMN SET ORDERING = 1-ORDERING WHERE ORDERING < 0", 
+                []
+            )?;
+        } else {
+            // Set the specified column's ordering to 1 + the maximum ordering of any other column
+            sql_execute(
+                &trans, 
+                "
+UPDATE __METADATA_TABLE_COLUMN SET 
+    ORDERING = (SELECT COALESCE(MAX(c.ORDERING) + 1, 1) FROM __METADATA_TABLE_COLUMN c) 
+WHERE OID = ?1
+                ", 
+                params![self.oid]
+            )?;
+        }
 
         // Commit the transaction
         trans.commit()?;
-        Ok(table_oid)
+        Ok(old_ordering)
     }
 
     /// Replaces a column.

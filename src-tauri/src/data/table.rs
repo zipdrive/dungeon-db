@@ -20,7 +20,8 @@ pub mod label;
 #[derive(Serialize, Clone)]
 pub struct TableListItem {
     pub oid: i64,
-    pub name: String
+    pub name: String,
+    pub disabled: bool
 }
 
 impl TableListItem {
@@ -34,12 +35,46 @@ impl TableListItem {
             |row| {
                 sender.send(Self {
                     oid: row.get::<_, i64>("OID")?,
-                    name: row.get::<_, String>("NAME")?
+                    name: row.get::<_, String>("NAME")?,
+                    disabled: false
                 })?;
                 Ok(None::<()>)
             }
         )?;
         Ok(())
+    }
+
+    /// Send a list of all tables that are valid as a master of the given table.
+    pub fn send_masters(mut sender: Sender<Self>, table_oid: Option<i64>) -> Result<(), Error> {
+        if let Some(table_oid) = table_oid {
+            let conn = db::open()?;
+            sql_iter(
+                &conn, 
+                "
+    SELECT 
+        t.OID, 
+        t.NAME,
+        (inh.MASTER_TABLE_OID IS NOT NULL OR t.OID = ?1) AS DISABLED
+    FROM METADATA_TABLE t 
+    LEFT JOIN METADATA_TABLE_INHERITANCE_PATH inh 
+        ON inh.INHERITOR_TABLE_OID = t.OID
+            AND inh.MASTER_TABLE_OID = ?1
+    ORDER BY t.NAME
+    ", 
+                params![table_oid], 
+                |row| {
+                    sender.send(Self {
+                        oid: row.get("OID")?,
+                        name: row.get("NAME")?,
+                        disabled: row.get("DISABLED")?
+                    })?;
+                    Ok(None::<()>)
+                }
+            )?;
+            Ok(())
+        } else {
+            Self::send_all(sender)
+        }
     }
 }
 
@@ -252,6 +287,55 @@ REFERENCES __TABLE{master_oid} (OID)
                 )?;
             }
         }
+        Ok(())
+    }
+
+
+    /// Trash the table.
+    pub fn trash(table_oid: i64) -> Result<(), Error> {
+        let mut conn = db::open()?;
+        let trans = conn.transaction()?;
+
+        // Trash the table
+        Self::conn_trash(&trans, table_oid)?;
+
+        // Commit the transaction
+        trans.commit()?;
+        Ok(())
+    }
+
+    /// Trash the table.
+    /// Uses the given connection.
+    pub fn conn_trash(conn: &Connection, oid: i64) -> Result<(), Error> {
+        sql_execute(
+            conn, 
+            "UPDATE __METADATA_TABLE SET TRASH = TRUE WHERE OID = ?1", 
+            params![oid]
+        )?;
+        Ok(())
+    }
+
+    /// Untrash the table.
+    pub fn untrash(table_oid: i64) -> Result<(), Error> {
+        let mut conn = db::open()?;
+        let trans = conn.transaction()?;
+
+        // Untrash the table
+        Self::conn_untrash(&trans, table_oid)?;
+
+        // Commit the transaction
+        trans.commit()?;
+        Ok(())
+    }
+
+    /// Untrash the column.
+    /// Uses the given connection.
+    pub fn conn_untrash(conn: &Connection, oid: i64) -> Result<(), Error> {
+        sql_execute(
+            conn, 
+            "UPDATE __METADATA_TABLE SET TRASH = FALSE WHERE OID = ?1", 
+            params![oid]
+        )?;
         Ok(())
     }
 }

@@ -138,7 +138,7 @@ pub enum Value {
         reference: Option<TableCellReference>
     },
     Date {
-        value: i64,
+        value: f64,
         reference: Option<TableCellReference>
     },
     Datetime {

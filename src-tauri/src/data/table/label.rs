@@ -8,11 +8,11 @@ use crate::util::error::Error;
 
 fn conn_get_keys(conn: &Connection, table_oid: i64, row_oid: i64, block_recursion: &Vec<(i64, i64)>) -> Result<Vec<(String, Option<String>, String)>, Error> {
     // Get the values from the row
-    let row = TableRow::conn_get(conn, table_oid, row_oid)?;
+    let (columns, row) = TableRow::conn_get(conn, table_oid, row_oid)?;
     
     // Get the primary keys
     let mut keys: Vec<(String, Option<String>, String)> = Vec::new();
-    for (_, _, column) in TableColumnMetadata::conn_query_all(conn, table_oid)? {
+    for (_, column) in columns {
         if column.is_primary_key {
             let cell = row.cells.iter().find(|c| c.column_oid == column.oid);
             if let Some(cell) = cell {

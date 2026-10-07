@@ -20,7 +20,7 @@ fn reset(app: &AppHandle) -> Result<(), Error> {
     }
 
     // Emit that schemas have changed
-    app.emit(UPDATE_SCHEMA_SIGNAL, Vec::<i64>::new())?;
+    //app.emit(UPDATE_SCHEMA_SIGNAL, Vec::<i64>::new())?;
     Ok(())
 }
 
@@ -104,58 +104,47 @@ pub fn has_unsaved_changes() -> bool {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum QueryStream {
+    /// Emits a basic stream of all tables.
     Tables {
         channel: JavaScriptChannelId,
     },
+    /// Emits a basic stream of all reports.
     Reports {
         channel: JavaScriptChannelId,
     },
-    InheritorTables {
+
+    /// Emits a basic stream of all options for masters to a table.
+    TableMasters {
+        table_oid: Option<i64>,
+        channel: JavaScriptChannelId,
+    },
+
+
+    /// Emits a basic stream of all columns directly owned by or inherited by a table.
+    TableColumns {
         table_oid: i64,
-        channel: JavaScriptChannelId,
+        channel: JavaScriptChannelId
     },
-    MasterSchemas {
-        schema_oid: Option<i64>,
-        is_table: bool,
-        channel: JavaScriptChannelId,
-    },
-    Columns {
-        schema_oid: i64,
-        channel: JavaScriptChannelId,
-    },
-    RootDatasources {
-        channel: JavaScriptChannelId,
-    },
-    LinkedDatasources {
-        parent_datasource: datasource::Datasource,
-        channel: JavaScriptChannelId,
-    },
-    Parameters {
-        parent_datasource: datasource::Datasource,
-        channel: JavaScriptChannelId,
-    },
-    ColumnAssociatedTables {
-        channel: JavaScriptChannelId,
-    },
-    ColumnAssociatedReports {
-        channel: JavaScriptChannelId,
+    /// Emits a basic stream of all columns belonging to a report.
+    ReportColumns {
+        report_oid: i64,
+        channel: JavaScriptChannelId
     },
 
-    Cells {
-        schema_oid: i64,
-        oid_filters: Vec<(String, i64)>,
-        custom_filters: Vec<String>,
-        limit: cell::RetrievalLimit,
+    /// Emits a stream of all columns directly owned by or inherited by a table, and the rows of the table.
+    TableCells {
+        table_oid: i64,
         column_channel: JavaScriptChannelId,
-        cell_channel: JavaScriptChannelId,
+        row_channel: JavaScriptChannelId,
     },
-    Object {
-        schema_oid: i64,
-        oid_filters: Vec<(String, i64)>,
+    /// Emits a stream of all columns belonging to a report, and the rows of the report.
+    ReportCells {
+        report_oid: i64,
         column_channel: JavaScriptChannelId,
-        cell_channel: JavaScriptChannelId,
+        row_channel: JavaScriptChannelId,
     },
 
+    /// Emits a basic stream of labels for each row in a table.
     TableRowLabels {
         table_oid: i64,
         channel: JavaScriptChannelId
@@ -174,80 +163,48 @@ impl QueryStream {
                 Sender::Channel(channel.channel_on(webview)),
             ),
 
-            Self::InheritorTables {
-                channel,
+            Self::TableMasters {
                 table_oid,
-            } => table::DropdownValue::query_inheritor_tables(
+                channel,
+            } => table::TableListItem::send_masters(
                 Sender::Channel(channel.channel_on(webview)),
                 table_oid,
             ),
 
-            Self::MasterSchemas {
-                schema_oid,
-                is_table,
+            Self::TableColumns {
+                table_oid,
                 channel,
-            } => schema::ToggledHierarchicalListItemMetadata::query_master_schemas(
+            } => table::column::TableColumnListItem::send_all(
                 Sender::Channel(channel.channel_on(webview)),
-                schema_oid,
-                is_table,
+                table_oid,
             ),
 
-            Self::Columns {
-                schema_oid,
-                channel,
-            } => column::FullMetadata::query_by_schema(
-                Sender::Channel(channel.channel_on(webview)),
-                schema_oid,
+            Self::ReportColumns { 
+                report_oid, 
+                channel
+            } => report::column::ReportColumnListItem::send_all(
+                Sender::Channel(channel.channel_on(webview)), 
+                report_oid
             ),
 
-            Self::RootDatasources { channel } => {
-                datasource::Datasource::query_roots(Sender::Channel(channel.channel_on(webview)))
-            }
-            Self::LinkedDatasources {
-                parent_datasource,
-                channel,
-            } => parent_datasource.query_links(Sender::Channel(channel.channel_on(webview))),
-            Self::Parameters {
-                parent_datasource,
-                channel,
-            } => parent_datasource.query_parameters(Sender::Channel(channel.channel_on(webview))),
-
-            Self::ColumnAssociatedTables { channel } => {
-                column::FullMetadata::query_associated_tables(Sender::Channel(
-                    channel.channel_on(webview),
-                ))
-            }
-            Self::ColumnAssociatedReports { channel } => {
-                column::FullMetadata::query_associated_reports(Sender::Channel(
-                    channel.channel_on(webview),
-                ))
-            },
-
-            Self::Cells {
-                schema_oid,
-                oid_filters,
-                custom_filters,
-                limit,
+            Self::TableCells {
+                table_oid,
                 column_channel,
-                cell_channel,
-            } => cell::SchemaCellStream::query_by_schema(
+                row_channel,
+            } => table::row::TableRow::send(
                 Sender::Channel(column_channel.channel_on(webview.clone())),
-                Sender::Channel(cell_channel.channel_on(webview)),
-                schema_oid,
-                oid_filters,
-                custom_filters,
-                limit,
+                Sender::Channel(row_channel.channel_on(webview)),
+                table_oid,
             ),
-            Self::Object { 
-                schema_oid, 
-                oid_filters, 
+
+            Self::ReportCells { 
+                report_oid, 
                 column_channel, 
-                cell_channel 
-            } => cell::SchemaCellStream::query_object(
+                row_channel
+            } => report::row::ReportRow::send(
                 Sender::Channel(column_channel.channel_on(webview.clone())),
-                Sender::Channel(cell_channel.channel_on(webview)),
-                schema_oid,
-                oid_filters,
+                Sender::Channel(row_channel.channel_on(webview)), 
+                report_oid
             ),
 
             Self::TableRowLabels { 
@@ -293,8 +250,15 @@ pub fn get_report_metadata(report_oid: i64) -> Result<report::ReportMetadata, Er
 }
 
 #[tauri::command]
-pub fn get_cell(cell_identifier: cell::CellIdentifier) -> cell::Cell {
-    cell::Cell::get(cell_identifier)
+/// Gets the columns and cells of a row in a table.
+pub fn get_row(table_oid: i64, row_oid: i64) -> Result<(Vec<(i64, table::column::TableColumnMetadata)>, table::row::TableRow), Error> {
+    table::row::TableRow::get(table_oid, row_oid)
+}
+
+#[tauri::command]
+/// Gets the table, columns, and cells of an Object.
+pub fn get_object_row(table_oid: i64, row_oid: i64) -> Result<(i64, Vec<(i64, table::column::TableColumnMetadata)>, table::row::TableRow), Error> {
+    table::row::TableRow::get_object(table_oid, row_oid)
 }
 
 
@@ -326,61 +290,103 @@ pub async fn upload_file(mut file: file::File, upload_from_path: String) -> Resu
 pub enum Action {
     CreateTable(table::TableMetadata),
     EditTable(table::TableMetadata),
+    TrashTable(i64),
+    UntrashTable(i64),
+
     CreateReport(report::ReportMetadata),
     EditReport(report::ReportMetadata),
-    TrashSchema(i64),
-    UntrashSchema(i64),
+    TrashReport(i64),
+    UntrashReport(i64),
 
-    CreateColumn(column::FullMetadata),
-    ReplaceColumn(column::FullMetadata),
-    EditColumn {
-        metadata: column::FullMetadata,
-        new_column_size: Option<i64>,
-        new_column_style: Option<String>,
+    CreateTableColumn {
+        table_oid: i64,
+        metadata: table::column::TableColumnMetadata
     },
-    EditColumnOrdering {
-        metadata: column::FullMetadata,
-        new_column_ordering: Option<i64>,
+    ReplaceTableColumn {
+        old_metadata: table::column::TableColumnMetadata,
+        new_metadata: table::column::TableColumnMetadata
     },
-    TrashColumn {
-        schema_oid: i64,
+    EditTableColumnMetadata {
+        metadata: table::column::TableColumnMetadata,
+    },
+    EditTableColumnOrdering {
+        metadata: table::column::TableColumnMetadata,
+        ordering: Option<i64>
+    },
+    TrashTableColumn {
+        table_oid: i64,
         column_oid: i64,
     },
-    UntrashColumn {
-        schema_oid: i64,
+    UntrashTableColumn {
+        table_oid: i64,
         column_oid: i64,
     },
-    RestoreColumn {
-        schema_oid: i64,
+    RestoreTableColumn {
+        table_oid: i64,
         trash_column_oid: i64,
         untrash_column_oid: i64,
     },
 
-    CreateRow {
+    CreateReportColumn {
+        report_oid: i64,
+        metadata: report::column::ReportColumnMetadata
+    },
+    ReplaceReportColumn {
+        old_metadata: report::column::ReportColumnMetadata,
+        new_metadata: report::column::ReportColumnMetadata
+    },
+    EditReportColumnMetadata {
+        metadata: report::column::ReportColumnMetadata,
+    },
+    EditReportColumnOrdering {
+        metadata: report::column::ReportColumnMetadata,
+        ordering: Option<i64>
+    },
+    TrashReportColumn {
+        report_oid: i64,
+        column_oid: i64,
+    },
+    UntrashReportColumn {
+        report_oid: i64,
+        column_oid: i64,
+    },
+    RestoreReportColumn {
+        report_oid: i64,
+        trash_column_oid: i64,
+        untrash_column_oid: i64,
+    },
+
+    CreateTableRow {
         table_oid: i64,
         row_oid: Option<i64>,
-        fixed_parent_datasource: Option<(i64, i64, column::FullMetadata)>,
+        fixed_parent_datasource: Option<(i64, i64, table::column::TableColumnMetadata)>,
     },
-    EditRowOid {
+    EditTableRowOid {
         table_oid: i64,
         row_oid: i64,
         new_row_oid: Option<i64>,
     },
-    TrashRow {
+    TrashTableRow {
         table_oid: i64,
         row_oid: i64,
     },
-    UntrashRow {
+    UntrashTableRow {
         table_oid: i64,
         row_oid: i64,
     },
-    EditRowSubtype {
+    EditTableRowSubtype {
         table_oid: i64,
         row_oid: i64,
         inheritor_table_oid: i64,
     },
 
-    EditCellContents(cell::DataCellEntry),
+    EditCellContents(table::row::TableCell),
+    CreateObject {
+        table_oid: i64,
+        column_oid: i64,
+        row_oid: i64,
+        object_table_oid: i64
+    }
 }
 
 static REVERSE_STACK: Mutex<Vec<Action>> = Mutex::new(Vec::new());
@@ -409,184 +415,186 @@ impl Action {
             Self::CreateTable(mut metadata) => {
                 // Create the table
                 metadata.create()?;
-                record_action(Self::TrashSchema(metadata.schema.oid), is_forward);
+                record_action(Self::TrashTable(metadata.oid), is_forward);
 
                 // Send signal to update table
-                schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
+                //schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
             Self::EditTable(metadata) => {
                 // Update the table
-                let old_metadata: table::TableMetadata =
-                    table::TableMetadata::get(metadata.schema.oid.clone())?;
-                metadata.set()?;
+                let old_metadata: table::TableMetadata = table::TableMetadata::get(metadata.oid.clone())?;
+                metadata.set_metadata()?;
                 record_action(Self::EditTable(old_metadata), is_forward);
 
                 // Send signal to update table
-                schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
+                //schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
+            Self::TrashTable(table_oid) => {
+                // Trash the table
+                table::TableMetadata::trash(table_oid)?;
+                record_action(Self::UntrashTable(table_oid), is_forward);
+
+                // Send signal to update table
+            }
+            Self::UntrashTable(table_oid) => {
+                // Trash the table
+                table::TableMetadata::untrash(table_oid)?;
+                record_action(Self::TrashTable(table_oid), is_forward);
+
+                // Send signal to update table
+            }
+
+
             Self::CreateReport(mut metadata) => {
                 // Create the report
                 metadata.create()?;
-                record_action(Self::TrashSchema(metadata.schema.oid), is_forward);
+                record_action(Self::TrashReport(metadata.oid), is_forward);
 
                 // Send signal to update report
-                schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
+                //schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
             Self::EditReport(metadata) => {
                 // Update the report
-                let old_metadata: report::ReportMetadata =
-                    report::ReportMetadata::get(metadata.schema.oid.clone())?;
-                metadata.set()?;
+                let old_metadata: report::ReportMetadata = report::ReportMetadata::get(metadata.oid.clone())?;
+                metadata.set_metadata()?;
                 record_action(Self::EditReport(old_metadata), is_forward);
 
                 // Send signal to update report
-                schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
+                //schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
-            Self::TrashSchema(schema_oid) => {
-                // Flag the schema for garbage collection
-                schema::FullMetadata::trash(schema_oid.clone())?;
-                record_action(Self::UntrashSchema(schema_oid), is_forward);
+            Self::TrashReport(report_oid) => {
+                // Trash the table
+                report::ReportMetadata::trash(report_oid)?;
+                record_action(Self::UntrashReport(report_oid), is_forward);
 
-                // Send signal to update schema
-                schema::FullMetadata::emit_affected_schema(app, vec![schema_oid])?;
+                // Send signal to update report
             }
-            Self::UntrashSchema(schema_oid) => {
-                // Unflag the schema for garbage collection
-                schema::FullMetadata::untrash(schema_oid.clone())?;
-                record_action(Self::TrashSchema(schema_oid), is_forward);
+            Self::UntrashReport(table_oid) => {
+                // Trash the table
+                report::ReportMetadata::untrash(table_oid)?;
+                record_action(Self::TrashReport(table_oid), is_forward);
 
-                // Send signal to update schema
-                schema::FullMetadata::emit_affected_schema(app, vec![schema_oid])?;
+                // Send signal to update report
             }
+            
 
-            Self::CreateColumn(mut metadata) => {
+
+            Self::CreateTableColumn { 
+                table_oid,
+                mut metadata
+            } => {
                 // Create the column
-                metadata.create()?;
+                metadata.create(table_oid.clone())?;
                 record_action(
-                    Self::TrashColumn {
-                        schema_oid: metadata.schema.oid.clone(),
+                    Self::TrashTableColumn {
+                        table_oid: table_oid.clone(),
                         column_oid: metadata.oid,
                     },
                     is_forward,
                 );
 
                 // Send signal to update schema
-                schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
+                //schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
-            Self::ReplaceColumn(mut metadata) => {
+            Self::ReplaceTableColumn { 
+                old_metadata,
+                mut new_metadata
+            } => {
                 // Update the column
-                let old_column_oid: i64 = metadata.oid.clone();
-                metadata.set()?;
+                let table_oid: i64 = new_metadata.replace(&old_metadata)?;
                 record_action(
-                    Self::RestoreColumn {
-                        schema_oid: metadata.schema.oid.clone(),
-                        trash_column_oid: metadata.oid,
-                        untrash_column_oid: old_column_oid,
+                    Self::RestoreTableColumn {
+                        table_oid: table_oid.clone(),
+                        trash_column_oid: new_metadata.oid,
+                        untrash_column_oid: old_metadata.oid,
                     },
                     is_forward,
                 );
 
                 // Send signal to update schema
-                schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
+                //schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
-            Self::EditColumn {
-                mut metadata,
-                new_column_size,
-                new_column_style,
+            Self::EditTableColumnMetadata { 
+                metadata 
             } => {
-                // Update the column size
-                let old_column_size: Option<i64> = if let Some(new_column_size) = new_column_size {
-                    metadata.set_size(new_column_size)?;
-                    Some(metadata.size.clone())
-                } else {
-                    None 
-                };
-
-                // Update the column style
-                let old_column_style: Option<String> = if let Some(new_column_style) = new_column_style {
-                    metadata.set_style(new_column_style)?;
-                    Some(metadata.style.clone())
-                } else {
-                    None
-                };
-
+                // Overwrite the old metadata
+                let (_, old_metadata) = table::column::TableColumnMetadata::get(metadata.oid)?;
+                let table_oid: i64 = metadata.set_metadata()?;
                 record_action(
-                    Self::EditColumn {
-                        metadata: metadata.clone(),
-                        new_column_size: old_column_size,
-                        new_column_style: old_column_style,
+                    Self::EditTableColumnMetadata {
+                        metadata: old_metadata
                     },
                     is_forward,
                 );
 
                 // Send signal to update schema
-                schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
+                //schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
-            Self::EditColumnOrdering {
+            Self::EditTableColumnOrdering {
                 mut metadata,
-                new_column_ordering,
+                ordering,
             } => {
                 // Update the column style
-                let old_column_ordering: i64 = metadata.ordering.clone();
-                metadata.set_ordering(new_column_ordering)?;
+                let old_column_ordering = metadata.set_ordering(ordering)?;
                 record_action(
-                    Self::EditColumnOrdering {
+                    Self::EditTableColumnOrdering {
                         metadata: metadata.clone(),
-                        new_column_ordering: Some(old_column_ordering),
+                        ordering: Some(old_column_ordering),
                     },
                     is_forward,
                 );
 
                 // Send signal to update schema
-                schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
+                //schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
-            Self::TrashColumn {
-                schema_oid,
+            Self::TrashTableColumn {
+                table_oid,
                 column_oid,
             } => {
                 // Flag the column for garbage collection
-                column::FullMetadata::trash(column_oid.clone())?;
+                table::column::TableColumnMetadata::trash(table_oid.clone(), column_oid.clone())?;
                 record_action(
-                    Self::UntrashColumn {
-                        schema_oid: schema_oid.clone(),
+                    Self::UntrashTableColumn {
+                        table_oid: table_oid.clone(),
                         column_oid,
                     },
                     is_forward,
                 );
 
                 // Send signal to update schema
-                schema::FullMetadata::emit_affected_schema(app, vec![schema_oid])?;
+                //schema::FullMetadata::emit_affected_schema(app, vec![schema_oid])?;
             }
-            Self::UntrashColumn {
-                schema_oid,
+            Self::UntrashTableColumn {
+                table_oid,
                 column_oid,
             } => {
                 // Unflag the column for garbage collection
-                column::FullMetadata::untrash(column_oid.clone())?;
+                table::column::TableColumnMetadata::untrash(table_oid.clone(), column_oid.clone())?;
                 record_action(
-                    Self::TrashColumn {
-                        schema_oid: schema_oid.clone(),
+                    Self::TrashTableColumn {
+                        table_oid: table_oid.clone(),
                         column_oid,
                     },
                     is_forward,
                 );
 
                 // Send signal to update schema
-                schema::FullMetadata::emit_affected_schema(app, vec![schema_oid])?;
+                //schema::FullMetadata::emit_affected_schema(app, vec![schema_oid])?;
             }
-            Self::RestoreColumn {
-                schema_oid,
+            Self::RestoreTableColumn {
+                table_oid,
                 trash_column_oid,
                 untrash_column_oid,
             } => {
                 // Unflag the old column for garbage collection, and flag the new column in its place
-                column::FullMetadata::trash_and_untrash(
-                    untrash_column_oid.clone(),
-                    trash_column_oid.clone(),
+                table::column::TableColumnMetadata::swap(
+                    table_oid.clone(), 
+                    trash_column_oid.clone(), 
+                    untrash_column_oid.clone()
                 )?;
                 record_action(
-                    Self::RestoreColumn {
-                        schema_oid: schema_oid.clone(),
+                    Self::RestoreTableColumn {
+                        table_oid: table_oid.clone(),
                         trash_column_oid: untrash_column_oid,
                         untrash_column_oid: trash_column_oid,
                     },
@@ -594,29 +602,136 @@ impl Action {
                 );
 
                 // Send signal to update schema
-                schema::FullMetadata::emit_affected_schema(app, vec![schema_oid])?;
+                //schema::FullMetadata::emit_affected_schema(app, vec![schema_oid])?;
             }
 
-            Self::CreateRow {
+
+            Self::CreateReportColumn { report_oid, mut metadata } => {
+                // Create the column
+                metadata.create(report_oid.clone())?;
+                record_action(
+                    Self::TrashReportColumn {
+                        report_oid: report_oid.clone(),
+                        column_oid: metadata.oid,
+                    },
+                    is_forward,
+                );
+
+                // Emit signal to update report
+            }
+            Self::ReplaceReportColumn { old_metadata, mut new_metadata } => {
+                // Update the column
+                let report_oid: i64 = new_metadata.replace(&old_metadata)?;
+                record_action(
+                    Self::RestoreReportColumn {
+                        report_oid: report_oid.clone(),
+                        trash_column_oid: new_metadata.oid,
+                        untrash_column_oid: old_metadata.oid,
+                    },
+                    is_forward,
+                );
+
+                // Emit signal to update report
+            }
+            Self::EditReportColumnMetadata { metadata } => {
+                // Overwrite the old metadata
+                let (_, old_metadata) = report::column::ReportColumnMetadata::get(metadata.oid)?;
+                metadata.set_metadata()?;
+                record_action(
+                    Self::EditReportColumnMetadata {
+                        metadata: old_metadata
+                    },
+                    is_forward,
+                );
+
+                // Emit signal to update report
+            }
+            Self::EditReportColumnOrdering { metadata, ordering } => {
+                // Update the column style
+                let old_column_ordering = metadata.set_ordering(ordering)?;
+                record_action(
+                    Self::EditReportColumnOrdering {
+                        metadata: metadata.clone(),
+                        ordering: Some(old_column_ordering),
+                    },
+                    is_forward,
+                );
+
+                // Emit signal to update report
+            }
+            Self::TrashReportColumn { report_oid, column_oid } => {
+                // Flag the column for garbage collection
+                report::column::ReportColumnMetadata::trash(report_oid.clone(), column_oid.clone())?;
+                record_action(
+                    Self::UntrashReportColumn {
+                        report_oid: report_oid.clone(),
+                        column_oid,
+                    },
+                    is_forward,
+                );
+
+                // Emit signal to update report
+            }
+            Self::UntrashReportColumn { report_oid, column_oid } => {
+                // Unflag the column for garbage collection
+                report::column::ReportColumnMetadata::untrash(report_oid.clone(), column_oid.clone())?;
+                record_action(
+                    Self::TrashReportColumn {
+                        report_oid: report_oid.clone(),
+                        column_oid,
+                    },
+                    is_forward,
+                );
+
+                // Emit signal to update report
+            }
+            Self::RestoreReportColumn { report_oid, trash_column_oid, untrash_column_oid } => {
+                // Unflag the old column for garbage collection, and flag the new column in its place
+                report::column::ReportColumnMetadata::swap(
+                    report_oid.clone(), 
+                    trash_column_oid.clone(), 
+                    untrash_column_oid.clone()
+                )?;
+                record_action(
+                    Self::RestoreReportColumn {
+                        report_oid: report_oid.clone(),
+                        trash_column_oid: untrash_column_oid,
+                        untrash_column_oid: trash_column_oid,
+                    },
+                    is_forward,
+                );
+
+                // Emit signal to update report
+            }
+
+
+
+            Self::CreateTableRow {
                 table_oid,
                 row_oid,
                 fixed_parent_datasource,
             } => {
                 // Create the row
-                let row_oid: i64 = row::insert(table_oid, row_oid, fixed_parent_datasource)?;
-                record_action(Self::TrashRow { table_oid, row_oid }, is_forward);
+                let row_oid: i64 = table::row::TableRow::insert(table_oid, row_oid)?;
+                record_action(
+                    Self::TrashTableRow { 
+                        table_oid, 
+                        row_oid 
+                    }, 
+                    is_forward
+                );
 
                 // Send signal to update table
-                schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
+                //schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
             }
-            Self::EditRowOid {
+            Self::EditTableRowOid {
                 table_oid,
                 row_oid,
                 new_row_oid,
             } => {
-                let new_row_oid: i64 = row::reorder(table_oid, row_oid, new_row_oid)?;
+                let new_row_oid: i64 = table::row::TableRow::reorder(table_oid, row_oid, new_row_oid)?;
                 record_action(
-                    Self::EditRowOid {
+                    Self::EditTableRowOid {
                         table_oid,
                         row_oid: new_row_oid,
                         new_row_oid: Some(row_oid),
@@ -625,32 +740,32 @@ impl Action {
                 );
 
                 // Send signal to update table
-                schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
+                //schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
             }
-            Self::TrashRow { table_oid, row_oid } => {
-                if let Some((table_oid, row_oid)) = row::trash(table_oid, row_oid)? {
-                    record_action(Self::UntrashRow { table_oid, row_oid }, is_forward);
+            Self::TrashTableRow { table_oid, row_oid } => {
+                if let Some((table_oid, row_oid)) = table::row::TableRow::trash(table_oid, row_oid)? {
+                    record_action(Self::UntrashTableRow { table_oid, row_oid }, is_forward);
 
                     // Send signal to update table
-                    schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
+                    //schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
                 }
             }
-            Self::UntrashRow { table_oid, row_oid } => {
-                row::untrash(table_oid, row_oid)?;
-                record_action(Self::TrashRow { table_oid, row_oid }, is_forward);
+            Self::UntrashTableRow { table_oid, row_oid } => {
+                table::row::TableRow::untrash(table_oid, row_oid)?;
+                record_action(Self::TrashTableRow { table_oid, row_oid }, is_forward);
 
                 // Send signal to update table
-                schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
+                //schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
             }
-            Self::EditRowSubtype {
+            Self::EditTableRowSubtype {
                 table_oid,
                 row_oid,
                 inheritor_table_oid,
             } => {
                 let old_inheritor_table_oid: i64 =
-                    row::change_object_type(table_oid, row_oid, inheritor_table_oid)?;
+                    table::row::TableRow::change_object_type(table_oid, row_oid, inheritor_table_oid)?;
                 record_action(
-                    Self::EditRowSubtype {
+                    Self::EditTableRowSubtype {
                         table_oid,
                         row_oid,
                         inheritor_table_oid: old_inheritor_table_oid,
@@ -659,7 +774,7 @@ impl Action {
                 );
 
                 // Send signal to update table
-                schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
+                //schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
             }
 
             Self::EditCellContents(cell) => {
@@ -675,12 +790,29 @@ impl Action {
                 };
 
                 // Send signal to update that cell + any dependent cells
-                cell::Cell::emit_affected_cells(app, cell.table_oid, cell.column_oid, cell.row_oid)?;
+                //cell::Cell::emit_affected_cells(app, cell.table_oid, cell.column_oid, cell.row_oid)?;
 
                 // Throw error if execution failed
                 if let Err(e) = execution_result {
                     return Err(e);
                 }
+            }
+            Self::CreateObject { table_oid, column_oid, row_oid, object_table_oid } => {
+                let object_row_oid: i64 = table::row::TableRow::insert(object_table_oid, None)?;
+                let cell: table::row::TableCell = table::row::TableCell {
+                    table_oid,
+                    column_oid,
+                    row_oid,
+                    content: table::row::TableCellContent::Object { 
+                        table_oid: object_table_oid, 
+                        value: Some(object_row_oid) 
+                    }
+                };
+                let old_cell = cell.set()?;
+                record_action(Self::EditCellContents(old_cell), is_forward);
+
+                // Send signal to update that cell + any dependent cells
+                //cell::Cell::emit_affected_cells(app, cell.table_oid, cell.column_oid, cell.row_oid)?;
             }
         }
         Ok(())

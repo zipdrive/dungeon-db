@@ -26,6 +26,12 @@ enum ParsedReportColumn {
         column_oid: i64,
         func: Func 
     },
+    InvalidSyntaxFormula {
+        column_oid: i64,
+        msg: String,
+        full_formula: String,
+        substring_with_error: String
+    },
     Subreport {
         column_oid: i64,
         report_oid: i64
@@ -48,7 +54,7 @@ pub struct ReportRow {
 
 impl ReportRow {
     /// Queries for multiple rows from the given table.
-    pub fn send(mut sender: Sender<Self>, report_oid: i64) -> Result<(), Error> {
+    pub fn send(mut column_sender: Sender<ReportColumnMetadata>, mut row_sender: Sender<Self>, report_oid: i64) -> Result<(), Error> {
         let conn = db::open()?;
 
         let report: ReportMetadata = ReportMetadata::conn_get(&conn, report_oid)?;
@@ -63,10 +69,30 @@ impl ReportRow {
             let mut output: Vec<ParsedReportColumn> = Vec::new();
             let columns = ReportColumnMetadata::conn_query_all(&conn, report_oid)?;
             for column in columns {
+                column_sender.send(column.clone())?;
                 match column.column_type {
                     ReportColumnType::Formula { formula, .. } => {
                         // Parse the formula
-                        
+                        match Func::parse(formula) {
+                            Ok(func) => {
+                                output.push(ParsedReportColumn::Formula { 
+                                    column_oid: column.oid, 
+                                    func
+                                });
+                            }
+                            Err(Error::FormulaSyntaxError { msg, full_formula, substring_with_error }) => {
+                                output.push(ParsedReportColumn::InvalidSyntaxFormula { 
+                                    column_oid: column.oid, 
+                                    msg, 
+                                    full_formula, 
+                                    substring_with_error 
+                                });
+                            }
+                            Err(e) => {
+                                // Bubble any other errors up
+                                return Err(e);
+                            }
+                        }
                     }
                     ReportColumnType::Subreport { report_oid, .. } => {
                         output.push(ParsedReportColumn::Subreport { 
@@ -281,67 +307,44 @@ FROM (
                                     let ord: String = format!("COLUMN{column_oid}");
                                     if known_type == "Boolean" {
                                         TableCellContent::Boolean { value: row.get::<&str, _>(&ord)? }
-                                    } else if known_type == "Date" {
-                                        let value: Option<i64> = row.get::<&str, _>(&ord)?;
-                                        TableCellContent::Date { 
-                                            label: if let Some(value) = &value {
-                                                let julian: finetime::JulianDay<_, finetime::SecondsPerHalfDay> = finetime::JulianDay::from_time_since_epoch(finetime::Duration::new(value.clone()));
-                                                let jul_point = finetime::TaiTime::from_julian_day(julian);
-                                                if let Some(sec_point) = jul_point.try_into_unit::<finetime::Second>() {
-                                                    let (date, _, _, _) = sec_point.into_gregorian_datetime();
-                                                    let month: u8 = match date.month() {
-                                                        finetime::Month::January => 1,
-                                                        finetime::Month::February => 2,
-                                                        finetime::Month::March => 3,
-                                                        finetime::Month::April => 4,
-                                                        finetime::Month::May => 5,
-                                                        finetime::Month::June => 6,
-                                                        finetime::Month::July => 7,
-                                                        finetime::Month::August => 8,
-                                                        finetime::Month::September => 9,
-                                                        finetime::Month::October => 10,
-                                                        finetime::Month::November => 11,
-                                                        finetime::Month::December => 12,
-                                                    };
-                                                    Some(format!("{:04}-{:02}-{:02}", date.year(), month, date.day()))
-                                                } else {
-                                                    None
-                                                }
-                                            } else {
-                                                None
-                                            },
-                                            value
-                                        }
-                                    } else if known_type == "Datetime" {
+                                    } else if known_type == "Date" || known_type == "Datetime" {
                                         let value: Option<f64> = row.get::<&str, _>(&ord)?;
-                                        TableCellContent::Datetime { 
-                                            label: if let Some(value) = &value {
-                                                let julian: finetime::JulianDay<_, finetime::SecondsPerHalfDay> = finetime::JulianDay::from_time_since_epoch(finetime::Duration::new(value.clone()));
-                                                let jul_point = finetime::TaiTime::from_julian_day(julian);
-                                                if let Some(sec_point) = jul_point.try_into_unit::<finetime::Second>() {
-                                                    let (date, hour, minute, second) = sec_point.into_gregorian_datetime();
-                                                    let month: u8 = match date.month() {
-                                                        finetime::Month::January => 1,
-                                                        finetime::Month::February => 2,
-                                                        finetime::Month::March => 3,
-                                                        finetime::Month::April => 4,
-                                                        finetime::Month::May => 5,
-                                                        finetime::Month::June => 6,
-                                                        finetime::Month::July => 7,
-                                                        finetime::Month::August => 8,
-                                                        finetime::Month::September => 9,
-                                                        finetime::Month::October => 10,
-                                                        finetime::Month::November => 11,
-                                                        finetime::Month::December => 12,
-                                                    };
-                                                    Some(format!("{:04}-{:02}-{:02}T{hour:02}:{minute:02}:{second:02}Z", date.year(), month, date.day()))
-                                                } else {
-                                                    None
-                                                }
+                                        let label: Option<String> = if let Some(value) = &value {
+                                            let julian: finetime::JulianDay<_, finetime::SecondsPerHalfDay> = finetime::JulianDay::from_time_since_epoch(finetime::Duration::new(value.clone()));
+                                            let jul_point = finetime::TaiTime::from_julian_day(julian);
+                                            if let Some(sec_point) = jul_point.try_into_unit::<finetime::Second>() {
+                                                let (date, hour, minute, second) = sec_point.into_gregorian_datetime();
+                                                let month: u8 = match date.month() {
+                                                    finetime::Month::January => 1,
+                                                    finetime::Month::February => 2,
+                                                    finetime::Month::March => 3,
+                                                    finetime::Month::April => 4,
+                                                    finetime::Month::May => 5,
+                                                    finetime::Month::June => 6,
+                                                    finetime::Month::July => 7,
+                                                    finetime::Month::August => 8,
+                                                    finetime::Month::September => 9,
+                                                    finetime::Month::October => 10,
+                                                    finetime::Month::November => 11,
+                                                    finetime::Month::December => 12,
+                                                };
+                                                Some(format!("{:04}-{:02}-{:02}T{hour:02}:{minute:02}:{second:02}Z", date.year(), month, date.day()))
                                             } else {
                                                 None
-                                            },
-                                            value
+                                            }
+                                        } else {
+                                            None
+                                        };
+                                        if known_type == "Date" {
+                                            TableCellContent::Date { 
+                                                label,
+                                                value 
+                                            }
+                                        } else {
+                                            TableCellContent::Datetime { 
+                                                label,
+                                                value
+                                            }
                                         }
                                     } else if known_type == "Integer" {
                                         TableCellContent::Integer { value: row.get::<&str, _>(&ord)? }
@@ -413,6 +416,17 @@ FROM (
                                 }
                             }
                         }
+                        ParsedReportColumn::InvalidSyntaxFormula { column_oid, msg, full_formula, substring_with_error } => {
+                            // TODO add error tooltip
+                            ReportCell {
+                                column_oid: column_oid.clone(),
+                                reference: None,
+                                content: TableCellContent::Text { 
+                                    value: None, 
+                                    format: TableCellTextContentFormat::Plain 
+                                }
+                            }
+                        }
                         ParsedReportColumn::Subreport { column_oid, report_oid } => {
                             ReportCell {
                                 column_oid: column_oid.clone(),
@@ -425,7 +439,7 @@ FROM (
                         }
                     });
                 }
-                sender.send(ReportRow {
+                row_sender.send(ReportRow {
                     oid_filters,
                     index: row.get("ROW_INDEX")?,
                     cells

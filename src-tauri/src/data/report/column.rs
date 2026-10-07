@@ -1,9 +1,38 @@
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
-use crate::util::db::{RowWrapper, sql_collect, sql_execute, sql_one};
+use crate::util::channel::Sender;
+use crate::util::db::{RowWrapper, sql_collect, sql_execute, sql_one, sql_iter};
 use crate::util::db;
 use crate::util::error::Error;
 use crate::data::report::column_type::ReportColumnType;
+
+
+#[derive(Serialize, Clone)]
+pub struct ReportColumnListItem {
+    pub oid: i64,
+    pub name: String
+}
+
+impl ReportColumnListItem {
+    /// Send a basic list of all columns directly owned by or inherited by a table.
+    pub fn send_all(mut sender: Sender<Self>, report_oid: i64) -> Result<(), Error> {
+        let conn = db::open()?;
+        sql_iter(
+            &conn, 
+            "SELECT OID, NAME FROM METADATA_REPORT_COLUMN WHERE REPORT_OID = ?1 ORDER BY ORDERING", 
+            params![report_oid], 
+            |row| {
+                sender.send(Self {
+                    oid: row.get::<_, i64>("OID")?,
+                    name: row.get::<_, String>("NAME")?
+                })?;
+                Ok(None::<()>)
+            }
+        )?;
+        Ok(())
+    }
+}
+
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct ReportColumnMetadata {
@@ -140,7 +169,7 @@ INSERT INTO __METADATA_REPORT_COLUMN (
 
     /// Sets the metadata for the column.
     /// Ignores column type and ordering.
-    /// Returns the OID of the owning table.
+    /// Returns the OID of the owning report.
     pub fn set_metadata(&self) -> Result<i64, Error> {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
@@ -179,41 +208,54 @@ WHERE OID = ?5
     }
 
     /// Sets the ordering for the column.
-    /// Returns the OID of the owning table.
-    pub fn set_ordering(&self, ordering: i64) -> Result<i64, Error> {
+    /// Returns the old ordering that was overwritten.
+    pub fn set_ordering(&self, ordering: Option<i64>) -> Result<i64, Error> {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
 
-        // Query for the OID of the report that owns the column being replaced
-        let report_oid: i64 = sql_one(
-            &trans, 
-            "SELECT REPORT_OID FROM METADATA_REPORT_COLUMN WHERE OID = ?1", 
-            params![self.oid], 
-            |row| row.get("REPORT_OID")
+        // Query for the old ordering of the column
+        let old_ordering: i64 = sql_one(
+            &trans,
+            "SELECT ORDERING FROM METADATA_REPORT_COLUMN WHERE OID = ?1",
+            params![self.oid],
+            |row| row.get("ORDERING")
         )?;
 
-        // Make space for the inserted ordering
-        sql_execute(
-            &trans, 
-            "UPDATE __METADATA_REPORT_COLUMN SET ORDERING = -ORDERING WHERE ORDERING >= ?1",
-            params![ordering]
-        )?;
-        // Set the specified column's ordering
-        sql_execute(
-            &trans, 
-            "UPDATE __METADATA_REPORT_COLUMN SET ORDERING = ?1 WHERE OID = ?2", 
-            params![ordering, self.oid]
-        )?;
-        // Shift all greater orderings to ensure there is space
-        sql_execute(
-            &trans, 
-            "UPDATE __METADATA_REPORT_COLUMN SET ORDERING = 1-ORDERING WHERE ORDERING < 0", 
-            []
-        )?;
+        if let Some(ordering) = ordering {
+            // Make space for the inserted ordering
+            sql_execute(
+                &trans, 
+                "UPDATE __METADATA_REPORT_COLUMN SET ORDERING = -ORDERING WHERE ORDERING >= ?1",
+                params![ordering]
+            )?;
+            // Set the specified column's ordering
+            sql_execute(
+                &trans, 
+                "UPDATE __METADATA_REPORT_COLUMN SET ORDERING = ?1 WHERE OID = ?2", 
+                params![ordering, self.oid]
+            )?;
+            // Shift all greater orderings to ensure there is space
+            sql_execute(
+                &trans, 
+                "UPDATE __METADATA_REPORT_COLUMN SET ORDERING = 1-ORDERING WHERE ORDERING < 0", 
+                []
+            )?;
+        } else {
+            // Set the specified column's ordering to 1 + the maximum ordering of any other column
+            sql_execute(
+                &trans, 
+                "
+UPDATE __METADATA_REPORT_COLUMN SET 
+    ORDERING = (SELECT COALESCE(MAX(c.ORDERING) + 1, 1) FROM __METADATA_REPORT_COLUMN c) 
+WHERE OID = ?1
+                ", 
+                params![self.oid]
+            )?;
+        }
 
         // Commit the transaction
         trans.commit()?;
-        Ok(report_oid)
+        Ok(old_ordering)
     }
 
     /// Replaces a column.

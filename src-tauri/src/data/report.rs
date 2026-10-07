@@ -9,7 +9,7 @@ use std::hash::{Hash, Hasher};
 
 mod column_type;
 pub mod column;
-mod row;
+pub mod row;
 
 
 #[derive(Serialize, Clone)]
@@ -40,7 +40,7 @@ impl ReportListItem {
 
 
 
-/// Data structure representing the table metadata
+/// Data structure representing the report metadata
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ReportMetadata {
@@ -130,14 +130,14 @@ ORDER BY OID
         })
     }
 
-    /// Creates a new table.
+    /// Creates a new report.
     pub fn create(&mut self) -> Result<(), Error> {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
 
-        // Create row in table metadata
+        // Create row in report metadata
         trans.execute(
-            "INSERT INTO __METADATA_TABLE (NAME, FILTER) VALUES (?1, ?2)", 
+            "INSERT INTO __METADATA_REPORT (NAME, FILTER) VALUES (?1, ?2)", 
             params![self.name, self.filter_formula]
         )?;
         self.oid = trans.last_insert_rowid();
@@ -150,15 +150,15 @@ ORDER BY OID
         Ok(())
     }
 
-    /// Overwrites the metadata for the table.
+    /// Overwrites the metadata for the report.
     pub fn set_metadata(&self) -> Result<(), Error> {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
 
-        // Create row in table metadata
+        // Create row in report metadata
         trans.execute(
             "
-UPDATE __METADATA_TABLE SET 
+UPDATE __METADATA_REPORT SET 
     NAME = ?1, 
     FILTER = ?2 
 WHERE OID = ?3
@@ -175,7 +175,7 @@ WHERE OID = ?3
     }
 
     fn conn_set_groupby_orderby(&self, conn: &Connection) -> Result<(), Error> {
-        // Delete prior rows in __METADATA_REPORT_GROUPBY table
+        // Delete prior rows in __METADATA_REPORT_GROUPBY report
         sql_execute(
             conn, 
             "
@@ -219,6 +219,56 @@ WHERE c.OID = o.COLUMN_OID
             )?;
         }
 
+        Ok(())
+    }
+
+
+
+    /// Trash the report.
+    pub fn trash(report_oid: i64) -> Result<(), Error> {
+        let mut conn = db::open()?;
+        let trans = conn.transaction()?;
+
+        // Trash the report
+        Self::conn_trash(&trans, report_oid)?;
+
+        // Commit the transaction
+        trans.commit()?;
+        Ok(())
+    }
+
+    /// Trash the report.
+    /// Uses the given connection.
+    pub fn conn_trash(conn: &Connection, oid: i64) -> Result<(), Error> {
+        sql_execute(
+            conn, 
+            "UPDATE __METADATA_REPORT SET TRASH = TRUE WHERE OID = ?1", 
+            params![oid]
+        )?;
+        Ok(())
+    }
+
+    /// Untrash the report.
+    pub fn untrash(report_oid: i64) -> Result<(), Error> {
+        let mut conn = db::open()?;
+        let trans = conn.transaction()?;
+
+        // Untrash the report
+        Self::conn_untrash(&trans, report_oid)?;
+
+        // Commit the transaction
+        trans.commit()?;
+        Ok(())
+    }
+
+    /// Untrash the column.
+    /// Uses the given connection.
+    pub fn conn_untrash(conn: &Connection, oid: i64) -> Result<(), Error> {
+        sql_execute(
+            conn, 
+            "UPDATE __METADATA_REPORT SET TRASH = FALSE WHERE OID = ?1", 
+            params![oid]
+        )?;
         Ok(())
     }
 }
