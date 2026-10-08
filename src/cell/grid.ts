@@ -1,6 +1,6 @@
 import { Menu } from "@tauri-apps/api/menu";
 import { SchemaRow } from "../api/model/cell";
-import { FullMetadata as ColumnFullMetadata } from "../api/model/column";
+import { FullMetadata as ColumnFullMetadata } from "../api/model/tableColumn";
 import { executeAsync } from "../api/action";
 import { LogicalPosition } from "@tauri-apps/api/dpi";
 

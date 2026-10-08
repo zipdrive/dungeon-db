@@ -1,5 +1,11 @@
-import { FullMetadata as SchemaFullMetadata } from "./schema";
+export type TableListItem = {
+    oid: number,
+    name: string,
+    disabled: boolean
+};
 
-export type FullMetadata = {
-    schema: SchemaFullMetadata
+export type TableMetadata = {
+    oid: number,
+    name: string,
+    masterOids: number[]
 }

@@ -1,20 +1,20 @@
-import { Schema } from "./api/model/schema";
-
-export type SchemaPageBreadcrumb = {
+export type TablePageBreadcrumb = {
+    key: 'table',
     name: string,
-    schema: Schema,
-    oidFilters: [string, number][],
-    customFilters: string[],
+    tableOid: number 
+};
+
+export type ReportPageBreadcrumb = {
+    key: 'report',
+    name: string,
+    reportOid: number
 };
 
 export type ObjectPageBreadcrumb = {
+    key: 'object',
     name: string,
-    schema: Schema,
-    oidFilters: [string, number][],
+    tableOid: number,
+    rowOid: number
 };
 
-export type PageBreadcrumb = {
-    schema: SchemaPageBreadcrumb
-} | {
-    object: ObjectPageBreadcrumb
-};
+export type PageBreadcrumb = TablePageBreadcrumb | ReportPageBreadcrumb | ObjectPageBreadcrumb;

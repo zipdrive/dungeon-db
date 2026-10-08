@@ -1,7 +1,7 @@
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DropdownValue, getCellAsync, getImageSrcAsync, queryAsync } from "./api/query";
 import { Channel } from "@tauri-apps/api/core";
-import { FullMetadata as ColumnFullMetadata } from "./api/model/column";
+import { FullMetadata as ColumnFullMetadata } from "./api/model/tableColumn";
 import { SchemaRow, CellContent, CellStream, AddNewRowButton, CellIdentifier, CellDependency, File } from "./api/model/cell";
 import { useExtraColumnTypes, useBaseColumnTypes, cellDataRef, createRowProxy } from "./cell/Cell";
 import { executeAsync } from "./api/action";

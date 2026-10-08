@@ -1,23 +1,28 @@
-import { FullMetadata as SchemaFullMetadata } from "./schema";
-
 export type Primitive = 
-    'plainText' 
-    | 'markdownText' 
-    | 'jsonText' 
-    | 'xmlText' 
+    'text' 
+    | 'textMarkdown' 
+    | 'textBBCode'
+    | 'textJson' 
+    | 'textXml' 
     | 'integer' 
     | 'number' 
     | 'boolean' 
     | 'date' 
     | 'datetime' 
-    | 'file' 
-    | 'image'
 ;
 
 
 
-export type ColumnType = {
-    primitive: Primitive
+export type TableColumnType = {
+    primitive: {
+        oid: number,
+        primitive: Primitive,
+        defaultValue: string | null
+    }
+} | {
+    file: {
+        oid: number
+    }
 } | {
     object: {
         oid: number,
@@ -34,34 +39,26 @@ export type ColumnType = {
         tableOid: number 
     }
 } | {
-    formula: {
-        oid: number,
-        formula: string 
-    }
-} | {
     subreport: {
         oid: number,
         reportOid: number
     }
 };
 
-export type ColumnBaseType = Primitive
+export type TableColumnBaseType = Primitive
+    | 'file'
     | 'object'
     | 'select'
     | 'multiselect'
-    | 'formula'
     | 'subreport';
 
 
 
-export type FullMetadata = {
+export type TableColumnMetadata = {
     oid: number,
-    schema: SchemaFullMetadata,
     name: string,
-    columnType: ColumnType,
+    columnType: TableColumnType,
     size: number,
     style: string,
-    ordering: number,
-    defaultValue: string | null,
     isPrimaryKey: boolean
 };

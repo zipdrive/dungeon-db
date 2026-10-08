@@ -1,64 +1,104 @@
 import { invoke } from "@tauri-apps/api/core";
-import { FullMetadata as TableFullMetadata } from "./model/table";
-import { FullMetadata as ReportFullMetadata } from "./model/report";
-import { FullMetadata as ColumnFullMetadata } from "./model/column";
-import { DataCellEntry } from "./model/cell";
+import { TableMetadata } from "./model/table";
+import { ReportMetadata } from "./model/report";
+import { TableColumnMetadata } from "./model/tableColumn";
+import { TableCell } from "./model/tableRow";
+import { ReportColumnMetadata } from "./model/reportColumn";
 
 export type Action = {
-    createTable: TableFullMetadata
+    createTable: TableMetadata
 } | {
-    editTable: TableFullMetadata
+    editTable: TableMetadata
 } | {
-    createReport: ReportFullMetadata
+    trashTable: number
 } | {
-    editReport: ReportFullMetadata
+    createReport: ReportMetadata
 } | {
-    trashSchema: number
+    editReport: ReportMetadata
 } | {
-    createColumn: ColumnFullMetadata
+    trashReport: number
 } | {
-    replaceColumn: ColumnFullMetadata
-} | {
-    editColumn: {
-        metadata: ColumnFullMetadata,
-        newColumnSize: number | null,
-        newColumnStyle: string | null 
+    createTableColumn: {
+        tableOid: number,
+        metadata: TableColumnMetadata,
+        ordering: number | null
     }
 } | {
-    editColumnOrdering: {
-        metadata: ColumnFullMetadata,
-        newColumnOrdering: number | null
+    replaceTableColumn: {
+        oldMetadata: TableColumnMetadata,
+        newMetadata: TableColumnMetadata
     }
 } | {
-    trashColumn: {
-        schemaOid: number,
+    editTableColumnMetadata: {
+        metadata: TableColumnMetadata
+    }
+} | {
+    editTableColumnOrdering: {
+        metadata: TableColumnMetadata,
+        ordering: number | null
+    }
+} | {
+    trashTableColumn: {
+        tableOid: number,
         columnOid: number
     }
 } | {
-    createRow: {
+    createReportColumn: {
         tableOid: number,
-        rowOid: number | null,
-        fixedParentDatasource: [number, number, ColumnFullMetadata] | null
+        metadata: ReportColumnMetadata,
+        ordering: number | null
     }
 } | {
-    editRowOid: {
+    replaceReportColumn: {
+        oldMetadata: ReportColumnMetadata,
+        newMetadata: ReportColumnMetadata
+    }
+} | {
+    editReportColumnMetadata: {
+        metadata: ReportColumnMetadata
+    }
+} | {
+    editReportColumnOrdering: {
+        metadata: ReportColumnMetadata,
+        ordering: number | null
+    }
+} | {
+    trashReportColumn: {
+        reportOid: number,
+        columnOid: number
+    }
+} | {
+    createTableRow: {
+        tableOid: number,
+        rowOid: number | null,
+        fixedParentDatasource: [number, number, TableColumnMetadata] | null
+    }
+} | {
+    editTableRowOid: {
         tableOid: number,
         rowOid: number,
         newRowOid: number | null
     }
 } | {
-    trashRow: {
+    trashTableRow: {
         tableOid: number,
         rowOid: number
     }
 } | {
-    editRowSubtype: {
+    editTableRowSubtype: {
         tableOid: number,
         rowOid: number,
         inheritorTableOid: number
     }
 } | {
-    editCellContents: DataCellEntry
+    editTableCellContents: TableCell
+} | {
+    createObject: {
+        tableOid: number,
+        columnOid: number,
+        rowOid: number,
+        objectTableOid: number
+    }
 };
 
 /**

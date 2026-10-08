@@ -301,7 +301,8 @@ export function FormFormulaField(props: FormFormulaFieldProps): React.JSX.Elemen
 
 
 export interface FormCustomFieldProps extends React.PropsWithChildren {
-    label: string
+    label: string,
+    tooltip?: string
 };
 
 /**

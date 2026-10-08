@@ -1,81 +1,43 @@
 import { Dialog } from "@material-tailwind/react";
-import { CreateColumnPopup, CreateColumnPopupProps } from "./CreateColumnPopup";
-import { CreateSchemaPopup, CreateSchemaPopupProps } from "./CreateSchemaPopup";
-import { EditColumnPopup, EditColumnPopupProps } from "./EditColumnPopup";
-import { EditSchemaPopup, EditSchemaPopupProps } from "./EditSchemaPopup";
+import { CreateTableColumnPopup, CreateTableColumnPopupProps } from "./CreateTableColumnPopup";
+import { EditTableColumnPopup, EditTableColumnPopupProps } from "./EditTableColumnPopup";
 import { useState, useEffect } from "react";
 import { FilePopup, FilePopupProps } from "./FilePopup";
+import { CreateTablePopup, CreateTablePopupProps } from "./CreateTablePopup";
+import { CreateReportPopup, CreateReportPopupProps } from "./CreateReportPopup";
+import { EditTablePopup, EditTablePopupProps } from "./EditTablePopup";
+import { EditReportPopup, EditReportPopupProps } from "./EditReportPopup";
 
-export type PopupProps = 
-{ popup: 'none' }
-| { popup: 'createSchema' } & CreateSchemaPopupProps
-| { popup: 'editSchema' } & EditSchemaPopupProps
-| { popup: 'createColumn' } & CreateColumnPopupProps
-| { popup: 'editColumn' } & EditColumnPopupProps
-| { popup: 'uploadFile' } & FilePopupProps;
+export type PopupBreadcrumb = 
+    { popup: 'createTable' } & CreateTablePopupProps
+    | { popup: 'createReport' } & CreateReportPopupProps
+    | { popup: 'editTable' } & EditTablePopupProps
+    | { popup: 'editReport' } & EditReportPopupProps
+    | { popup: 'createTableColumn' } & CreateTableColumnPopupProps
+    | { popup: 'editTableColumn' } & EditTableColumnPopupProps
+    | { popup: 'uploadFile' } & FilePopupProps
+;
+
+export type PopupProps = {
+    popups: PopupBreadcrumb[]
+};
 
 export function Popup(props: PopupProps): React.JSX.Element {
-    const [lastKnownCreateSchemaPopupProps, setCreateSchemaPopupProps] = useState<CreateSchemaPopupProps | null>(null);
-    const [lastKnownEditSchemaPopupProps, setEditSchemaPopupProps] = useState<EditSchemaPopupProps | null>(null);
-    const [lastKnownCreateColumnPopupProps, setCreateColumnPopupProps] = useState<CreateColumnPopupProps | null>(null);
-    const [lastKnownEditColumnPopupProps, setEditColumnPopupProps] = useState<EditColumnPopupProps | null>(null);
-    const [lastKnownFilePopupProps, setFilePopupProps] = useState<FilePopupProps | null>(null);
-
-    useEffect(() => {
-        switch (props.popup) {
-            case 'createSchema':
-                setCreateSchemaPopupProps(props);
-                break;
-            case 'editSchema':
-                setEditSchemaPopupProps(props);
-                break;
-            case 'createColumn':
-                setCreateColumnPopupProps(props);
-                break;
-            case 'editColumn':
-                setEditColumnPopupProps(props);
-                break;
-            case 'uploadFile':
-                setFilePopupProps(props);
-                break;
-        }
-    }, [props.popup]);
-
     return (<>
-        {lastKnownCreateSchemaPopupProps && <Dialog open={props.popup === 'createSchema'}>
-            <Dialog.Overlay>
-                <Dialog.Content>
-                    <CreateSchemaPopup {...lastKnownCreateSchemaPopupProps} isOpen={props.popup === 'createSchema'} />
-                </Dialog.Content>
-            </Dialog.Overlay>
-        </Dialog>}
-        {lastKnownEditSchemaPopupProps && <Dialog open={props.popup === 'editSchema'}>
-            <Dialog.Overlay>
-                <Dialog.Content>
-                    <EditSchemaPopup {...lastKnownEditSchemaPopupProps} />
-                </Dialog.Content>
-            </Dialog.Overlay>
-        </Dialog>}
-        {lastKnownCreateColumnPopupProps && <Dialog open={props.popup === 'createColumn'}>
-            <Dialog.Overlay>
-                <Dialog.Content>
-                    <CreateColumnPopup {...lastKnownCreateColumnPopupProps} isOpen={props.popup === 'createColumn'} />    
-                </Dialog.Content>
-            </Dialog.Overlay>
-        </Dialog>}
-        {lastKnownEditColumnPopupProps && <Dialog open={props.popup === 'editColumn'}>
-            <Dialog.Overlay>
-                <Dialog.Content>
-                    <EditColumnPopup {...lastKnownEditColumnPopupProps} />   
-                </Dialog.Content>
-            </Dialog.Overlay>
-        </Dialog>}
-        {lastKnownFilePopupProps && <Dialog open={props.popup === 'uploadFile'}>
-            <Dialog.Overlay>
-                <Dialog.Content>
-                    <FilePopup {...lastKnownFilePopupProps} />
-                </Dialog.Content>
-            </Dialog.Overlay>    
-        </Dialog>}
+        {props.popups.map((popup, index) => {
+            return (<Dialog key={`popup-${popup.popup}${index}`} open={true}>
+                <Dialog.Overlay>
+                    <Dialog.Content>
+                        {popup.popup === 'createTable' && <CreateTablePopup {...popup} />}
+                        {popup.popup === 'createReport' && <CreateReportPopup {...popup} />}
+                        {popup.popup === 'editTable' && <EditTablePopup {...popup} />}
+                        {popup.popup === 'editReport' && <EditReportPopup {...popup} />}
+                        {popup.popup === 'createTableColumn' && <CreateTableColumnPopup {...popup} />}
+                        {popup.popup === 'editTableColumn' && <EditTableColumnPopup {...popup} />}
+                        {popup.popup === 'uploadFile' && <FilePopup {...popup} />}
+                    </Dialog.Content>
+                </Dialog.Overlay>
+            </Dialog>)
+        })}
     </>);
 }

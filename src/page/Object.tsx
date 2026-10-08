@@ -1,26 +1,24 @@
 import { Channel } from "@tauri-apps/api/core";
-import { DropdownValue, getCellAsync, getImageSrcAsync, queryAsync, SelectedHierarchicalListItemMetadata } from "./api/query";
-import { SchemaPageBreadcrumb, ObjectPageBreadcrumb } from "./breadcrumb";
-import { CellContent, CellDependency, CellIdentifier, File, SchemaRow } from "./api/model/cell";
-import { FullMetadata as ColumnFullMetadata } from "./api/model/column";
-import { Schema } from "./api/model/schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import classNames from "classnames";
 import { RevoGrid, ColumnRegular as RevoGridColumn } from "@revolist/react-datagrid";
-import { createRowProxy, useBaseColumnTypes, useExtraColumnTypes } from "./cell/Cell";
+import { createRowProxy, useBaseColumnTypes, useExtraColumnTypes } from "../cell/Cell";
 import './Grid.css';
-import { columnContextMenu } from "./cell/grid";
+import { columnContextMenu } from "../cell/grid";
 import { AgGridReact } from "ag-grid-react";
-import { cellPropertyEntry } from "./grid/DataRows";
+import { cellPropertyEntry } from "../grid/DataRows";
 import { AutoSizeStrategy, CellEditRequestEvent, ColDef, ColumnResizedEvent, RowDataTransaction, themeBalham } from "ag-grid-community";
-import { selectRenderer } from "./grid/RendererSelector";
-import { selectEditor } from "./grid/EditorSelector";
-import { getValue } from "./grid/ValueGetter";
-import { editCellContents } from "./grid/CellEditRequest";
-import { SubtypeRenderer } from "./grid/renderer/SubtypeRenderer";
-import { SubtypeEditor } from "./grid/editor/SubtypeEditor";
-import { executeAsync } from "./api/action";
+import { selectRenderer } from "../grid/RendererSelector";
+import { selectEditor } from "../grid/EditorSelector";
+import { getValue } from "../grid/ValueGetter";
+import { editCellContents } from "../grid/CellEditRequest";
+import { SubtypeRenderer } from "../grid/renderer/SubtypeRenderer";
+import { SubtypeEditor } from "../grid/editor/SubtypeEditor";
+import { executeAsync } from "../api/action";
+import { ObjectPageBreadcrumb, ReportPageBreadcrumb } from "../breadcrumb";
+import { TableColumnMetadata } from "../api/model/tableColumn";
+import { TableRow } from "../api/model/tableRow";
 
 
 type ObjectGridProps = {
@@ -31,9 +29,9 @@ type ObjectGridProps = {
     dropdownValues: {[tableOid: string]: DropdownValue[]},
     onUpdateTableSubtype: (newSubtypeTableOid: number) => void,
     onRequestUpdateSchema: () => Promise<void>,
-    onRequestEditColumn: (columnMetadata: ColumnFullMetadata) => void,
+    onRequestEditTableColumn: (columnMetadata: TableColumnMetadata) => void,
     onRequestUploadFile: (absolutePath: string, relativePath: string, onUploadFile: (fileOid: number) => Promise<any>) => void,
-    onRequestOpenSchema: (schema: SchemaPageBreadcrumb) => void,
+    onRequestOpenDrillDownReport: (report: ReportPageBreadcrumb) => void,
     onRequestOpenObject: (object: ObjectPageBreadcrumb) => void,
     onError: (e: unknown) => void,
 };
@@ -394,22 +392,22 @@ function ObjectGrid(props: ObjectGridProps): React.JSX.Element {
 
 
 type ObjectProps = {
-    schema: Schema,
-    oidFilters: [string, number][],
-    onRequestEditColumn: (columnMetadata: ColumnFullMetadata, isTableColumn: boolean) => void,
+    tableOid: number,
+    rowOid: number,
+    onRequestEditTableColumn: (columnMetadata: TableColumnMetadata) => void,
     onRequestUploadFile: (absolutePath: string, relativePath: string, onUploadFile: (fileOid: number) => Promise<any>) => void,
-    onRequestOpenSchema: (schema: SchemaPageBreadcrumb) => void,
+    onRequestOpenDrillDownReport: (report: ReportPageBreadcrumb) => void,
     onRequestOpenObject: (object: ObjectPageBreadcrumb) => void,
     onError: (e: unknown) => void,
 };
 
 export function ObjectPage(props: ObjectProps): React.JSX.Element {
-    const [columns, setColumns] = useState<ColumnFullMetadata[]>([]);
-    const [row, setRow] = useState<[SchemaRow, CellContent[]] | null>(null);
+    const [columns, setColumns] = useState<TableColumnMetadata[]>([]);
+    const [row, setRow] = useState<TableRow | null>(null);
     const [inheritorTables, setInheritorTables] = useState<DropdownValue[]>([]);
 
     useEffect(() => {
-        const unlistenSchema = listen<number[]>('schema', (e) => {
+        const unlistenSchema = listen<number[]>('table', (e) => {
             const updatedSchemas = e.payload;
             if (updatedSchemas.indexOf('table' in props.schema ? props.schema.table.schema.oid : props.schema.report.schema.oid) >= 0) {
                 updateSchemaAsync();
@@ -568,9 +566,9 @@ export function ObjectPage(props: ObjectProps): React.JSX.Element {
             dropdownValues={dropdownValues}
             onUpdateTableSubtype={onUpdateTableSubtype}
             onRequestUpdateSchema={updateSchemaAsync}
-            onRequestEditColumn={(columnMetadata) => props.onRequestEditColumn(columnMetadata, 'table' in props.schema)}
+            onRequestEditColumn={(columnMetadata) => props.onRequestEditTableColumn(columnMetadata, 'table' in props.schema)}
             onRequestUploadFile={props.onRequestUploadFile}
-            onRequestOpenSchema={props.onRequestOpenSchema}
+            onRequestOpenSchema={props.onRequestOpenDrillDownReport}
             onRequestOpenObject={props.onRequestOpenObject}
             onError={props.onError}
         />}

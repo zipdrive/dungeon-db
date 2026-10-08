@@ -1,7 +1,12 @@
-import { FullMetadata as SchemaFullMetadata } from "./schema";
+export type ReportListItem = {
+    oid: number,
+    name: string
+};
 
-export type FullMetadata = {
-    schema: SchemaFullMetadata,
+export type ReportMetadata = {
+    oid: number,
+    name: string,
     filterFormula: string | null,
-    groupByColumnOids: number[]
+    groupByColumnOids: number[],
+    orderByColumnOids: number[]
 }

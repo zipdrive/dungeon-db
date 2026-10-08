@@ -1,7 +1,7 @@
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use crate::util::channel::Sender;
-use crate::util::db::{RowWrapper, sql_collect, sql_execute, sql_one, sql_iter};
+use crate::util::db::{RowWrapper, sql_collect, sql_execute, sql_iter, sql_one, sql_zero_or_one};
 use crate::util::db;
 use crate::util::encode::json_encode_string;
 use crate::util::error::Error;
@@ -246,6 +246,14 @@ impl TableColumnMetadata {
         // Create row in column type metadata
         self.column_type.create(conn)?;
 
+        // Determine ordering
+        let ordering: i64 = sql_zero_or_one(
+            conn, 
+            "SELECT COALESCE(MAX(ORDERING), 0) + 1 FROM __METADATA_TABLE_COLUMN", 
+            [], 
+            |row| row.get(0)
+        )?.unwrap_or(1);
+
         // Create row in column metadata
         sql_execute(
             conn,
@@ -256,14 +264,16 @@ INSERT INTO __METADATA_TABLE_COLUMN (
     COLUMNTYPE_OID,
     SIZE,
     STYLE,
-    IS_PRIMARY_KEY 
+    IS_PRIMARY_KEY,
+    ORDERING
 ) VALUES (
     ?1,
     ?2,
     ?3,
     ?4,
     ?5,
-    ?6
+    ?6,
+    ?7
 )
             ", 
             params![

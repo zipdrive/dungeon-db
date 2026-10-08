@@ -2,11 +2,14 @@ import { useEffect, useState } from "react";
 import "./App.css";
 import { Sidebar } from './Sidebar';
 import { Page } from './Page';
-import { Popup, PopupProps } from "./popup/Popup";
+import { Popup, PopupBreadcrumb, PopupProps } from "./popup/Popup";
 import { Button, Dialog, Typography } from "@material-tailwind/react";
 import "choices.js/public/assets/styles/choices.css";
 import { Menu, MenuItem, Submenu } from "@tauri-apps/api/menu";
 import { loadAsync, newAsync, saveAsAsync, saveAsync } from "./api/dbfile";
+import { TableMetadata } from "./api/model/table";
+import { ReportMetadata } from "./api/model/report";
+import { TableColumnMetadata } from "./api/model/tableColumn";
 
 
 function App() {
@@ -49,15 +52,107 @@ function App() {
     })();
   }, []);
 
-  const [selectedSchema, setSelectedSchema] = useState<{ oid: number, name: string } | null>(null);
-  const [popup, setPopup] = useState<PopupProps>({ popup: 'none' });
+  const [selectedSchema, setSelectedSchema] = useState<['table' | 'report', number, string] | null>(null);
+  const [popups, setPopups] = useState<PopupBreadcrumb[]>([]);
   const [err, setErr] = useState<{ message: string, stack: string | undefined } | null>(null);
+
+  /**
+   * Opens a popup.
+   */
+  function onOpenPopup(popup: PopupBreadcrumb) {
+    setPopups((oldPopups) => oldPopups.concat([popup]));
+  }
+
+  /**
+   * Opens a popup to create a new table.
+   */
+  function onRequestCreateTable() {
+    onOpenPopup({ 
+      popup: 'createTable',
+      onClosePopup,
+      onError,
+    }); 
+  }
+
+  /**
+   * Opens a popup to create a new report.
+   */
+  function onRequestCreateReport() {
+    onOpenPopup({ 
+      popup: 'createReport',
+      onClosePopup,
+      onError,
+    }); 
+  }
+
+  /**
+   * Opens a popup to edit an existing table.
+   */
+  function onRequestEditTable(metadata: TableMetadata) {
+    onOpenPopup({ 
+      popup: 'editTable',
+      metadata,
+      onClosePopup,
+      onError,
+    }); 
+  }
+
+  /**
+   * Opens a popup to edit an existing report.
+   */
+  function onRequestEditReport(metadata: ReportMetadata) {
+    onOpenPopup({ 
+      popup: 'editReport',
+      metadata,
+      onClosePopup,
+      onError,
+    }); 
+  }
+
+  /**
+   * Opens a popup to create a new table column.
+   */
+  function onRequestCreateTableColumn(tableOid: number, ordering: number | null) {
+    onOpenPopup({ 
+      popup: 'createTableColumn',
+      tableOid,
+      ordering,
+      onClosePopup,
+      onError,
+    }); 
+  }
+
+  /**
+   * Opens a popup to edit an existing table column.
+   */
+  function onRequestEditTableColumn(columnMetadata: TableColumnMetadata) {
+    onOpenPopup({ 
+      popup: 'editTableColumn',
+      columnMetadata,
+      onClosePopup,
+      onError,
+    }); 
+  }
+
+  /**
+   * Opens a popup to manage how a file is uploaded.
+   */
+  function onRequestUploadFile(absoluteLink: string, relativeLink: string, onUploadFileCallback: (fileOid: number) => Promise<any>) {
+    onOpenPopup({
+      popup: 'uploadFile',
+      absoluteLink,
+      relativeLink,
+      onUploadFileCallback,
+      onClosePopup,
+      onError,
+    });
+  }
 
   /**
    * Closes the current popup.
    */
   function onClosePopup() {
-    setPopup({ popup: 'none' });
+    setPopups((oldPopups) => oldPopups.splice(oldPopups.length - 1, 1));
   }
 
   /**
@@ -81,77 +176,24 @@ function App() {
     <main>
       <div className="fixed left-0 right-0 top-0 bottom-0 grid grid-cols-[auto_1fr]">
         <Sidebar 
-          selectedSchemaOid={selectedSchema?.oid ?? null} 
-          onSelectSchema={(schemaOid, schemaName) => { setSelectedSchema({ oid: schemaOid, name: schemaName }); }}
-          onRequestCreateSchema={(defaultSchemaType) => { 
-            setPopup({ 
-              popup: 'createSchema', 
-              defaultSchemaType,
-              onClosePopup,
-              onError,
-            }); 
-          }} 
-          onRequestEditSchema={(schema) => {
-            if ('table' in schema) {
-              setPopup({
-                popup: 'editSchema',
-                schemaType: 'table',
-                schemaOid: schema.table.schema.oid,
-                schemaName: schema.table.schema.name,
-                masterSchemaOids: schema.table.schema.masterSchemaOids,
-                onClosePopup,
-                onError
-              });
-            } else {
-              setPopup({
-                popup: 'editSchema',
-                schemaType: 'report',
-                schemaOid: schema.report.schema.oid,
-                schemaName: schema.report.schema.name,
-                masterSchemaOids: schema.report.schema.masterSchemaOids,
-                onClosePopup,
-                onError
-              });
-            }
-          }}
+          selectedSchema={selectedSchema ? [selectedSchema[0], selectedSchema[1]] : null} 
+          onSelectTable={(tableOid, tableName) => { setSelectedSchema(['table', tableOid, tableName]); }}
+          onSelectReport={(reportOid, reportName) => { setSelectedSchema(['report', reportOid, reportName]); }}
+          onRequestCreateTable={onRequestCreateTable} 
+          onRequestCreateReport={onRequestCreateReport}
+          onRequestEditTable={onRequestEditTable}
+          onRequestEditReport={onRequestEditReport}
           onError={onError}
         />
         <Page
           schema={selectedSchema}
-          onRequestCreateColumn={(schema, isTableColumn, ordering) => { 
-            setPopup({ 
-              popup: 'createColumn',
-              schema,
-              isTableColumn, 
-              ordering,
-              onClosePopup,
-              onError,
-            }); 
-          }}
-          onRequestEditColumn={(columnMetadata, isTableColumn) => { 
-            setPopup({ 
-              popup: 'editColumn',
-              columnMetadata,
-              isTableColumn,
-              onClosePopup,
-              onError,
-            });
-          }}
-          onRequestUploadFile={(absoluteLink, relativeLink, onUploadFileCallback) => {
-            console.log(relativeLink);
-            setPopup({
-              popup: 'uploadFile',
-              absoluteLink,
-              relativeLink,
-              onUploadFileCallback,
-              onClosePopup,
-              onError,
-            });
-          }}
+          onRequestCreateTableColumn={onRequestCreateTableColumn}
+          onRequestEditTableColumn={onRequestEditTableColumn}
+          onRequestUploadFile={onRequestUploadFile}
           onError={onError}
         />
       </div>
-      <Popup {...popup} />
+      <Popup popups={popups} />
       <Dialog open={err !== null} onOpenChange={(isOpen) => {
         if (!isOpen) {
           setErr(null);

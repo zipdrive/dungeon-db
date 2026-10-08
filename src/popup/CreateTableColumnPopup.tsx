@@ -4,114 +4,121 @@ import {
     Alert,
     Tabs,
 } from "@material-tailwind/react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useTransition } from "react";
 import { executeAsync } from "../api/action";
-import { FullMetadata as SchemaFullMetadata } from "../api/model/schema";
-import { ColumnBaseType, ColumnType } from "../api/model/column";
+import { TableColumnBaseType, TableColumnType } from "../api/model/tableColumn";
 import { listen } from "@tauri-apps/api/event";
-import { DropdownValue, queryAsync } from "../api/query";
+import { queryAsync } from "../api/query";
 import { Channel } from "@tauri-apps/api/core";
 import Form from "./form/Form";
+import { TableListItem } from "../api/model/table";
+import { ReportListItem } from "../api/model/report";
 
-export type CreateColumnPopupProps = {
-    schema: SchemaFullMetadata,
-    isTableColumn: boolean,
+export type CreateTableColumnPopupProps = {
+    tableOid: number,
     ordering: number | null,
     onClosePopup: () => void,
     onError: (e: unknown) => void,
 };
 
-export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: boolean }): React.JSX.Element {
+export function CreateTableColumnPopup(props: CreateTableColumnPopupProps): React.JSX.Element {
     const [columnName, setColumnName] = useState<string>('');
-    const [columnBaseType, setColumnBaseType] = useState<ColumnBaseType>(props.isTableColumn ? 'plainText' : 'formula');
+    const [columnBaseType, setColumnBaseType] = useState<TableColumnBaseType>('text');
     const [isPrimaryKey, setPrimaryKey] = useState<boolean>(false);
     const [defaultValue, setDefaultValue] = useState<string>('');
     const [columnSize, setColumnSize] = useState<number>(150);
     const [columnStyle, setColumnStyle] = useState<string>('');
 
-    const [formula, setFormula] = useState<string>('');
-    const [refTableList, setRefTableList] = useState<{ oid: number, name: string }[]>([]);
+    const [refTableList, setRefTableList] = useState<TableListItem[]>([]);
     const [refTable, setRefTable] = useState<string | undefined>(undefined);
-    const [refReportList, setRefReportList] = useState<{ oid: number, name: string }[]>([]);
+    const [isRefTableListPending, startRefTableListTransition] = useTransition();
+    const [refReportList, setRefReportList] = useState<ReportListItem[]>([]);
     const [refReport, setRefReport] = useState<string | undefined>(undefined);
+    const [isRefReportListPending, startRefReportListTransition] = useTransition();
 
     const [confirmAlert, setConfirmAlert] = useState<string | null>(null);
 
     useEffect(() => {
-        async function updateRefTableList() {
-            const queriedRefTableList: { oid: number, name: string }[] = [];
-            await queryAsync({
-                columnAssociatedTables: {
-                    channel: new Channel<DropdownValue>(({ value, label }) => {
-                        queriedRefTableList.push({ oid: value, name: label });
-                    })
-                }
+        function updateRefTableList() {
+            startRefTableListTransition(async () => {
+                const queriedRefTableList: TableListItem[] = [];
+                await queryAsync({
+                    tables: {
+                        channel: new Channel<TableListItem>((item) => {
+                            queriedRefTableList.push(item);
+                        })
+                    }
+                });
+                startRefTableListTransition(() => {
+                    setRefTableList(queriedRefTableList);
+                });
             });
-            setRefTableList(queriedRefTableList);
         }
 
-        async function updateRefReportList() {
-            const queriedRefReportList: { oid: number, name: string }[] = [];
-            await queryAsync({
-                columnAssociatedReports: {
-                    channel: new Channel<DropdownValue>(({ value, label }) => {
-                        queriedRefReportList.push({ oid: value, name: label });
-                    })
-                }
+        function updateRefReportList() {
+            startRefReportListTransition(async () => {
+                const queriedRefReportList: ReportListItem[] = [];
+                await queryAsync({
+                    reports: {
+                        channel: new Channel<ReportListItem>((item) => {
+                            queriedRefReportList.push(item);
+                        })
+                    }
+                });
+                startRefReportListTransition(() => {
+                    setRefReportList(queriedRefReportList);
+                });
             });
-            setRefReportList(queriedRefReportList);
         }
 
         updateRefTableList();
         updateRefReportList();
 
-        const unlistenSchemas = listen<number[]>('schema', async (_updatedSchemas) => {
-            await Promise.all([
-                updateRefTableList(),
-                updateRefReportList()
-            ]);
+        const unlistenTables = listen<number[]>('table', async () => {
+            updateRefTableList();
+        });
+        const unlistenReports = listen<number>('report', async () => {
+            updateRefReportList();
         });
 
         return () => {
-            unlistenSchemas.then(f => f());
+            unlistenTables.then(f => f());
+            unlistenReports.then(f => f());
         }
     }, []);
-
-    useEffect(() => {
-        if (props.isOpen) {
-            setColumnName('');
-            setColumnBaseType(props.isTableColumn ? 'plainText' : 'formula');
-            setPrimaryKey(false);
-            setDefaultValue('');
-            setColumnSize(150);
-            setColumnStyle('');
-            setFormula('');
-            setRefTable(undefined);
-            setRefReport(undefined);
-            setConfirmAlert(null);
-        }
-    }, [props.isOpen]);
 
     /**
      * Creates the column.
      */
-    async function createColumnAsync(): Promise<boolean> {
+    async function createTableColumnAsync(): Promise<boolean> {
         setConfirmAlert(null);
 
-        let columnType: ColumnType;
+        let columnType: TableColumnType;
         switch (columnBaseType) {
-            case 'plainText':
-            case 'jsonText':
-            case 'xmlText':
-            case 'markdownText':
+            case 'text':
+            case 'textJson':
+            case 'textXml':
+            case 'textMarkdown':
+            case 'textBBCode':
             case 'boolean':
             case 'integer':
             case 'number':
             case 'date':
             case 'datetime':
+                columnType = { 
+                    primitive: {
+                        oid: 0,
+                        primitive: columnBaseType,
+                        defaultValue: defaultValue === '' ? null : defaultValue
+                    } 
+                };
+                break;
             case 'file':
-            case 'image':
-                columnType = { primitive: columnBaseType };
+                columnType = {
+                    file: {
+                        oid: 0
+                    }
+                };
                 break;
             case 'object':
                 if (refTable !== undefined) {
@@ -137,9 +144,6 @@ export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: bool
                     return false;
                 }
                 break;
-            case 'formula':
-                columnType = { formula: { oid: 0, formula }};
-                break;
             case 'subreport':
                 if (refReport !== undefined) {
                     columnType = { subreport: { oid: 0, reportOid: parseInt(refReport) }};
@@ -152,16 +156,17 @@ export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: bool
 
         try {
             await executeAsync({
-                createColumn: {
-                    oid: 0,
-                    name: columnName,
-                    columnType,
-                    schema: props.schema,
-                    isPrimaryKey,
-                    defaultValue: defaultValue === '' ? null : defaultValue,
-                    size: columnSize,
-                    style: columnStyle,
-                    ordering: props.ordering ?? 0,
+                createTableColumn: {
+                    tableOid: props.tableOid,
+                    metadata: {
+                        oid: 0,
+                        name: columnName,
+                        columnType,
+                        isPrimaryKey,
+                        size: columnSize,
+                        style: columnStyle,
+                    },
+                    ordering: props.ordering
                 }
             });
             return true;
@@ -184,28 +189,27 @@ export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: bool
                             label="Column Type"
                             value={columnBaseType}
                             possibleValues={[
-                                { value: 'plainText', label: "Plain Text", disabled: !props.isTableColumn },
-                                { value: 'integer', label: "Integer", disabled: !props.isTableColumn },
-                                { value: 'number', label: "Number", disabled: !props.isTableColumn },
-                                { value: 'boolean', label: "Checkbox", disabled: !props.isTableColumn },
-                                { value: 'date', label: "Date", disabled: !props.isTableColumn },
-                                { value: 'datetime', label: "Datetime", disabled: !props.isTableColumn },
-                                { value: 'object', label: "Object", disabled: !props.isTableColumn || refTableList.length == 0 },
-                                { value: 'select', label: "Single-Select Dropdown", disabled: !props.isTableColumn || refTableList.length == 0 },
-                                { value: 'multiselect', label: "Multi-Select Dropdown", disabled: !props.isTableColumn || refTableList.length == 0 },
-                                { value: 'file', label: "File", disabled: !props.isTableColumn },
-                                { value: 'image', label: "Image", disabled: !props.isTableColumn },
-                                { value: 'jsonText', label: "JSON", disabled: !props.isTableColumn },
-                                { value: 'formula', label: "Formula" },
+                                { value: 'text', label: "Plain Text", disabled: false },
+                                { value: 'integer', label: "Integer", disabled: false },
+                                { value: 'number', label: "Number", disabled: false },
+                                { value: 'boolean', label: "Checkbox", disabled: false },
+                                { value: 'date', label: "Date", disabled: false },
+                                { value: 'datetime', label: "Datetime", disabled: false },
+                                { value: 'object', label: "Object", disabled: refTableList.length == 0 },
+                                { value: 'select', label: "Single-Select Dropdown", disabled: refTableList.length == 0 },
+                                { value: 'multiselect', label: "Multi-Select Dropdown", disabled: refTableList.length == 0 },
+                                { value: 'file', label: "File", disabled: false },
+                                { value: 'textJson', label: "JSON", disabled: false },
                                 { value: 'subreport', label: "Drill-Down Report", disabled: refReportList.length == 0 },
                             ]}
                             onSetValue={setColumnBaseType}
                         />
                         <Form.CheckboxField label="Is Primary Key?" value={isPrimaryKey} onSetValue={setPrimaryKey} />
-                        {(columnBaseType === 'plainText' 
-                            || columnBaseType === 'jsonText' 
-                            || columnBaseType === 'xmlText' 
-                            || columnBaseType === 'markdownText' 
+                        {(columnBaseType === 'text' 
+                            || columnBaseType === 'textJson' 
+                            || columnBaseType === 'textXml' 
+                            || columnBaseType === 'textMarkdown' 
+                            || columnBaseType === 'textBBCode'
                             || columnBaseType === 'integer' 
                             || columnBaseType === 'number' 
                             || columnBaseType === 'date' 
@@ -230,11 +234,6 @@ export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: bool
                             value={refReport} 
                             possibleValues={refReportList.map(({ oid, name }) => { return { value: oid.toString(), label: name }; })} 
                             onSetValue={setRefReport} 
-                        />)}
-                        {columnBaseType === 'formula' && (<Form.FormulaField
-                            label="Formula"
-                            value={formula}
-                            onSetValue={setFormula}
                         />)}
                     </>)
                 },
@@ -273,7 +272,7 @@ export function CreateColumnPopup(props: CreateColumnPopupProps & { isOpen: bool
             <Button
                 variant="gradient" 
                 onClick={async () => {
-                    if (await createColumnAsync()) {
+                    if (await createTableColumnAsync()) {
                         props.onClosePopup();
                     }
                 }}

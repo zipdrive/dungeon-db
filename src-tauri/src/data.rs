@@ -300,7 +300,8 @@ pub enum Action {
 
     CreateTableColumn {
         table_oid: i64,
-        metadata: table::column::TableColumnMetadata
+        metadata: table::column::TableColumnMetadata,
+        ordering: Option<i64>
     },
     ReplaceTableColumn {
         old_metadata: table::column::TableColumnMetadata,
@@ -329,7 +330,8 @@ pub enum Action {
 
     CreateReportColumn {
         report_oid: i64,
-        metadata: report::column::ReportColumnMetadata
+        metadata: report::column::ReportColumnMetadata,
+        ordering: Option<i64>
     },
     ReplaceReportColumn {
         old_metadata: report::column::ReportColumnMetadata,
@@ -380,7 +382,7 @@ pub enum Action {
         inheritor_table_oid: i64,
     },
 
-    EditCellContents(table::row::TableCell),
+    EditTableCellContents(table::row::TableCell),
     CreateObject {
         table_oid: i64,
         column_oid: i64,
@@ -481,7 +483,8 @@ impl Action {
 
             Self::CreateTableColumn { 
                 table_oid,
-                mut metadata
+                mut metadata,
+                ordering
             } => {
                 // Create the column
                 metadata.create(table_oid.clone())?;
@@ -492,6 +495,18 @@ impl Action {
                     },
                     is_forward,
                 );
+
+                // Adjust the ordering of the column
+                if let Some(ordering) = ordering {
+                    let old_ordering = metadata.set_ordering(Some(ordering))?;
+                    record_action(
+                        Self::EditTableColumnOrdering { 
+                            metadata, 
+                            ordering: Some(old_ordering)
+                        }, 
+                        is_forward
+                    );
+                }
 
                 // Send signal to update schema
                 //schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
@@ -606,7 +621,11 @@ impl Action {
             }
 
 
-            Self::CreateReportColumn { report_oid, mut metadata } => {
+            Self::CreateReportColumn { 
+                report_oid, 
+                mut metadata,
+                ordering
+            } => {
                 // Create the column
                 metadata.create(report_oid.clone())?;
                 record_action(
@@ -616,6 +635,18 @@ impl Action {
                     },
                     is_forward,
                 );
+
+                // Adjust the ordering of the column
+                if let Some(ordering) = ordering {
+                    let old_ordering = metadata.set_ordering(Some(ordering))?;
+                    record_action(
+                        Self::EditReportColumnOrdering { 
+                            metadata, 
+                            ordering: Some(old_ordering)
+                        }, 
+                        is_forward
+                    );
+                }
 
                 // Emit signal to update report
             }
@@ -777,12 +808,12 @@ impl Action {
                 //schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
             }
 
-            Self::EditCellContents(cell) => {
+            Self::EditTableCellContents(cell) => {
                 let execution_result: Result<(), Error> = {
                     // Update the contents of the cell
                     match cell.set() {
                         Ok(old_cell) => {
-                            record_action(Self::EditCellContents(old_cell), is_forward);
+                            record_action(Self::EditTableCellContents(old_cell), is_forward);
                             Ok(())
                         }
                         Err(e) => Err(e),
@@ -809,7 +840,7 @@ impl Action {
                     }
                 };
                 let old_cell = cell.set()?;
-                record_action(Self::EditCellContents(old_cell), is_forward);
+                record_action(Self::EditTableCellContents(old_cell), is_forward);
 
                 // Send signal to update that cell + any dependent cells
                 //cell::Cell::emit_affected_cells(app, cell.table_oid, cell.column_oid, cell.row_oid)?;

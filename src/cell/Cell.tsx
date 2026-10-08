@@ -1,7 +1,7 @@
 import { CellContent, CellDependency, CellIdentifier, ClipboardCellData, DataCellEntry, SchemaRow, TextEntryCellContent } from "../api/model/cell";
 import { ColumnGrouping, ColumnProp, ColumnRegular as RevoGridColumn, ColumnType as RevoGridColumnType, DataType, RevoGrid } from "@revolist/react-datagrid";
 import { TextEntryEditor } from "./TextEntry";
-import { FullMetadata as ColumnFullMetadata } from "../api/model/column";
+import { FullMetadata as ColumnFullMetadata } from "../api/model/tableColumn";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { downloadFileAsync, getCellAsync, getColumnAsync, getSchemaMetadataAsync, queryAsync } from "../api/query";
 import { Channel } from "@tauri-apps/api/core";

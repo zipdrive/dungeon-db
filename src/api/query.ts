@@ -1,36 +1,11 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { FullMetadata as TableFullMetadata } from "./model/table";
-import { FullMetadata as ReportFullMetadata } from "./model/report";
-import { FullMetadata as ColumnFullMetadata } from "./model/column";
-import { CellContent, File, CellIdentifier, CellStream } from "./model/cell";
+import { TableListItem, TableMetadata } from "./model/table";
+import { ReportListItem, ReportMetadata } from "./model/report";
+import { TableColumnMetadata } from "./model/tableColumn";
 import { message } from "@tauri-apps/plugin-dialog";
-import { Datasource } from "./model/datasource";
-import { Schema } from "./model/schema";
-
-export type FlatListItemMetadata = {
-    oid: number,
-    name: string
-};
-export type HierarchicalListItemMetadata = FlatListItemMetadata & {
-    masterOid: number | null,
-    level: number
-};
-export type SelectedHierarchicalListItemMetadata = HierarchicalListItemMetadata & { selected: boolean };
-export type ToggledHierarchicalListItemMetadata = HierarchicalListItemMetadata & { disabled: boolean };
-
-export type DropdownValue = {
-    value: number,
-    label: string
-};
-
-export type DatasourceDropdownValue = {
-    value: Datasource,
-    label: string 
-};
-export type ParameterDropdownValue = {
-    value: string,
-    label: string
-};
+import { ReportColumnMetadata } from "./model/reportColumn";
+import { TableRow, TableRowLabel } from "./model/tableRow";
+import { ReportRow } from "./model/reportRow";
 
 export type Limit = {
     page: {
@@ -43,109 +18,76 @@ export type Limit = {
 
 export type Query = {
     tables: {
-        channel: Channel<HierarchicalListItemMetadata>
+        channel: Channel<TableListItem>
     }
 } | {
     reports: {
-        channel: Channel<HierarchicalListItemMetadata>
+        channel: Channel<ReportListItem>
     }
 } | {
-    inheritorTables: {
+    tableMasters: {
+        tableOid: number | null,
+        channel: Channel<TableListItem>
+    }
+} | {
+    tableColumns: {
         tableOid: number,
-        channel: Channel<DropdownValue>
+        channel: Channel<TableColumnMetadata>
     }
 } | {
-    masterSchemas: {
-        schemaOid: number | null,
-        isTable: boolean,
-        channel: Channel<ToggledHierarchicalListItemMetadata>
+    reportColumns: {
+        reportOid: number,
+        channel: Channel<ReportColumnMetadata>
     }
 } | {
-    columns: {
-        schemaOid: number,
-        channel: Channel<ColumnFullMetadata>
+    tableCells: {
+        tableOid: number,
+        columnChannel: Channel<TableColumnMetadata>,
+        rowChannel: Channel<TableRow>
     }
 } | {
-    rootDatasources: {
-        channel: Channel<DatasourceDropdownValue>
-    }
-} | {
-    linkedDatasources: {
-        parentDatasource: Datasource,
-        channel: Channel<DatasourceDropdownValue>
-    }
-} | {
-    parameters: {
-        parentDatasource: Datasource,
-        channel: Channel<ParameterDropdownValue>
-    }
-} | {
-    columnAssociatedTables: {
-        channel: Channel<DropdownValue>
-    }
-} | {
-    columnAssociatedReports: {
-        channel: Channel<DropdownValue>
+    reportCells: {
+        reportOid: number,
+        columnChannel: Channel<ReportColumnMetadata>,
+        rowChannel: Channel<ReportRow>
     }
 } | {
     tableRowLabels: {
         tableOid: number,
-        channel: Channel<DropdownValue>
-    }
-} | {
-    cells: {
-        schemaOid: number,
-        oidFilters: [string, number][],
-        customFilters: string[],
-        limit: Limit,
-        columnChannel: Channel<ColumnFullMetadata>,
-        cellChannel: Channel<CellStream>
-    }
-} | {
-    object: {
-        schemaOid: number,
-        oidFilters: [string, number][],
-        columnChannel: Channel<ColumnFullMetadata>,
-        cellChannel: Channel<CellStream>
+        channel: Channel<TableRowLabel>
     }
 };
 
 export async function queryAsync(query: Query): Promise<void> {
-    await invoke('query', { query: query })
-        .catch(async (e) => {
-            await message(`Query: ${JSON.stringify(query)}\n\n${e}`, {
-                title: `An error occurred while querying database.`,
-                kind: 'error'
-            })
-        });
+    await invoke('query', { query: query });
 }
 
-export async function getTableMetadataAsync(oid: number): Promise<TableFullMetadata> {
+export async function getTableMetadataAsync(oid: number): Promise<TableMetadata> {
     return await invoke('get_table_metadata', { tableOid: oid });
 }
 
-export async function getReportMetadataAsync(oid: number): Promise<ReportFullMetadata> {
+export async function getReportMetadataAsync(oid: number): Promise<ReportMetadata> {
     return await invoke('get_report_metadata', { reportOid: oid });
 }
 
-export async function getSchemaMetadataAsync(oid: number): Promise<Schema> {
-    return await invoke('get_schema_metadata', { schemaOid: oid });
+export async function getTableColumnMetadataAsync(oid: number): Promise<TableColumnMetadata> {
+    return await invoke('get_table_column_metadata', { columnOid: oid });
 }
 
-export async function getColumnAsync(oid: number): Promise<ColumnFullMetadata> {
-    return await invoke('get_column', { columnOid: oid });
+export async function getObjectLabelAsync(tableOid: number, rowOid: number): Promise<string> {
+    return await invoke('get_object_label', { tableOid, rowOid });
 }
 
-export async function getCellAsync(cellIdentifier: CellIdentifier): Promise<CellContent> {
-    return await invoke('get_cell', { cellIdentifier: cellIdentifier });
+export async function getTableRow(tableOid: number, rowOid: number): Promise<TableRow> {
+    return await invoke('get_row', { tableOid, rowOid });
 }
 
-export async function getProcessidAsync(): Promise<number> {
-    return await invoke('get_processid', {});
+export async function getObjectRow(tableOid: number, rowOid: number): Promise<TableRow> {
+    return await invoke('get_object_row', { tableOid, rowOid });
 }
 
-export async function getImageSrcAsync(data: { file: File }): Promise<string> {
-    return await invoke('get_image_src', data);
+export async function getSrcAsync(data: { file: File }): Promise<string> {
+    return await invoke('get_src', data);
 }
 
 export async function downloadFileAsync(data: { fileOid: number, downloadToPath: string }): Promise<void> {

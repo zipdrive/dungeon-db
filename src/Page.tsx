@@ -1,21 +1,20 @@
 import { useEffect, useState } from "react";
-import { PageBreadcrumb, SchemaPageBreadcrumb, ObjectPageBreadcrumb } from "./breadcrumb";
+import { PageBreadcrumb, TablePageBreadcrumb, ReportPageBreadcrumb, ObjectPageBreadcrumb } from "./breadcrumb";
 import { 
     Typography,
     Breadcrumb,
 } from "@material-tailwind/react";
 import { SchemaPage } from "./Schema";
-import { ObjectPage } from "./Object";
-import { FullMetadata as ColumnFullMetadata } from "./api/model/column";
-import { FullMetadata as SchemaFullMetadata } from "./api/model/schema";
-import { getSchemaMetadataAsync } from "./api/query";
+import { ObjectPage } from "./page/Object";
 import { AgGridProvider } from "ag-grid-react";
 import { AllCommunityModule, enableDevValidations } from 'ag-grid-community';
+import { TableColumnMetadata } from "./api/model/tableColumn";
+import { getTableMetadataAsync } from "./api/query";
 
 type PageProps = {
-    schema: { oid: number, name: string } | null,
-    onRequestCreateColumn: (schema: SchemaFullMetadata, isTableColumn: boolean, ordering: number | null) => void,
-    onRequestEditColumn: (columnMetadata: ColumnFullMetadata, isTableColumn: boolean) => void,
+    schema: ['table' | 'report', number, string] | null,
+    onRequestCreateTableColumn: (tableOid: number, ordering: number | null) => void,
+    onRequestEditTableColumn: (columnMetadata: TableColumnMetadata) => void,
     onRequestUploadFile: (absolutePath: string, relativePath: string, onUploadFile: (fileOid: number) => Promise<any>) => void,
     onError: (e: unknown) => void,
 };
@@ -28,32 +27,36 @@ export function Page(props: PageProps): React.JSX.Element {
     const [pageBreadcrumbs, setPageBreadcrumbs] = useState<PageBreadcrumb[]>([]);
 
     /**
-     * Opens a schema page.
+     * Opens a drill-down report page.
      */
-    function openSchemaPage(schema: SchemaPageBreadcrumb) {
-        setPageBreadcrumbs(pageBreadcrumbs.concat([{ schema }]));
+    function openDrillDownReportPage(report: ReportPageBreadcrumb) {
+        setPageBreadcrumbs((oldPageBreadcrumbs) => oldPageBreadcrumbs.concat([report]));
     }
 
     /**
      * Opens an object page.
      */
     function openObjectPage(object: ObjectPageBreadcrumb) {
-        setPageBreadcrumbs(pageBreadcrumbs.concat([{ object }]));
+        setPageBreadcrumbs((oldPageBreadcrumbs) => oldPageBreadcrumbs.concat([object]));
     }
 
     useEffect(() => {
         if (props.schema !== null) {
-            getSchemaMetadataAsync(props.schema.oid)
-                .then((schema) => {
-                    setPageBreadcrumbs([{
-                        schema: {
-                            name: 'table' in schema ? schema.table.schema.name : schema.report.schema.name,
-                            schema,
-                            oidFilters: [],
-                            customFilters: [],
-                        }
-                    }]);
-                });
+            if (props.schema[0] === 'table') {
+                setPageBreadcrumbs([{
+                    key: 'table',
+                    tableOid: props.schema[1],
+                    name: props.schema[2]
+                }]);
+            } else {
+                setPageBreadcrumbs([{
+                    key: 'report',
+                    reportOid: props.schema[1],
+                    name: props.schema[2]
+                }]);
+            }
+        } else {
+            setPageBreadcrumbs([]);
         }
     }, [props.schema]);
 
@@ -73,40 +76,21 @@ export function Page(props: PageProps): React.JSX.Element {
                                     setPageBreadcrumbs(newPageBreadcrumbs);
                                 }}
                             >
-                                {('schema' in breadcrumb ? breadcrumb.schema.name : breadcrumb.object.name)}
+                                {breadcrumb.name}
                             </Breadcrumb.Link>
                         </>);
                     })}
                 </Breadcrumb>
-                {'schema' in lastPageBreadcrumb ?
-                    <SchemaPage 
-                        {...lastPageBreadcrumb.schema}
-                        onChangeCustomFilters={(newCustomFilters) => {
-                            setPageBreadcrumbs([...pageBreadcrumbs.slice(0, pageBreadcrumbs.length - 1), {
-                                schema: {
-                                    schema: lastPageBreadcrumb.schema.schema,
-                                    name: lastPageBreadcrumb.schema.name,
-                                    oidFilters: lastPageBreadcrumb.schema.oidFilters,
-                                    customFilters: newCustomFilters
-                                }
-                            }]);
-                        }}
-                        onRequestCreateColumn={props.onRequestCreateColumn}
-                        onRequestEditColumn={props.onRequestEditColumn}
-                        onRequestUploadFile={props.onRequestUploadFile}
-                        onRequestOpenSchema={openSchemaPage}
-                        onRequestOpenObject={openObjectPage}
-                        onError={props.onError}
-                    /> :
-                    <ObjectPage 
-                        {...lastPageBreadcrumb.object}
-                        onRequestEditColumn={props.onRequestEditColumn}
-                        onRequestUploadFile={props.onRequestUploadFile}
-                        onRequestOpenSchema={openSchemaPage}
-                        onRequestOpenObject={openObjectPage}
-                        onError={props.onError}
-                    />
-                }
+                {lastPageBreadcrumb.key === 'table'}
+                {lastPageBreadcrumb.key === 'report'}
+                {lastPageBreadcrumb.key === 'object' && (<ObjectPage 
+                    {...lastPageBreadcrumb}
+                    onRequestEditTableColumn={props.onRequestEditTableColumn}
+                    onRequestUploadFile={props.onRequestUploadFile}
+                    onRequestOpenDrillDownReport={openDrillDownReportPage}
+                    onRequestOpenObject={openObjectPage}
+                    onError={props.onError}
+                />)}
             </div>
         </AgGridProvider>);
     }
