@@ -4,9 +4,9 @@ use crate::util::error::Error;
 use base64::{prelude::BASE64_STANDARD as base64standard, Engine};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::fs::File as FilesystemFile;
 use std::io::{BufReader, Read, Write};
-use std::os::windows::fs::MetadataExt;
 use std::path::Path;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -127,7 +127,7 @@ impl File {
             Self::Path { path, .. } => {
                 match std::fs::metadata(path) {
                     Ok(metadata) => {
-                        let true_file_size = metadata.file_size();
+                        let true_file_size = metadata.len();
                         if true_file_size > i64::MAX as u64 {
                             Err(Error::adhoc("File size is greater than 9,223,372,036,854,775,807 bytes."))
                         } else {
