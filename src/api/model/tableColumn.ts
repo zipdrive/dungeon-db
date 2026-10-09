@@ -29,12 +29,12 @@ export type TableColumnType = {
         tableOid: number 
     }
 } | {
-    select: {
+    singleSelect: {
         oid: number,
         tableOid: number 
     }
 } | {
-    multiselect: {
+    multiSelect: {
         oid: number,
         tableOid: number 
     }
@@ -48,8 +48,8 @@ export type TableColumnType = {
 export type TableColumnBaseType = Primitive
     | 'file'
     | 'object'
-    | 'select'
-    | 'multiselect'
+    | 'singleSelect'
+    | 'multiSelect'
     | 'subreport';
 
 

@@ -1,11 +1,11 @@
 import { CellEditorSelectorResult } from 'ag-grid-community';
-import { CellContent } from "../api/model/cell";
 import { AdhocSingleSelectCellEditor } from './editor/AdhocSingleSelectCellEditor';
 import { AdhocMultiSelectCellEditor } from './editor/AdhocMultiSelectCellEditor';
-import { DropdownValue } from '../api/query';
+import { TableCell, TableCellContent, TableRowLabel } from '../../api/model/tableRow';
 
-export function selectEditor(content: CellContent, dropdownValues: {[tableOid: string]: DropdownValue[]}, onError: (e: unknown) => void): CellEditorSelectorResult {
-    if ('textEntry' in content) {
+export function selectEditor(cell: TableCell, dropdownValues: {[tableOid: string]: TableRowLabel[]}, onError: (e: unknown) => void): CellEditorSelectorResult {
+    const content: TableCellContent = cell.content;
+    if ('text' in content) {
         return {
             component: 'agLargeTextCellEditor',
             params: {
@@ -13,19 +13,19 @@ export function selectEditor(content: CellContent, dropdownValues: {[tableOid: s
             },
             popup: true,
         };
-    } else if ('integerEntry' in content || 'numberEntry' in content) {
+    } else if ('integer' in content || 'number' in content) {
         return {
             component: 'agNumberCellEditor'
         };
-    } else if ('checkboxEntry' in content) {
+    } else if ('boolean' in content) {
         return {
             component: 'agCheckboxCellEditor'
         };
-    } else if ('dateEntry' in content || 'datetimeEntry' in content) {
+    } else if ('date' in content || 'datetime' in content) {
         return {
             component: 'agDateCellEditor',
             params: {
-                includeTime: 'datetimeEntry' in content
+                includeTime: 'datetime' in content
             }
         };
     } else if ('singleSelectDropdown' in content) {
@@ -33,7 +33,7 @@ export function selectEditor(content: CellContent, dropdownValues: {[tableOid: s
             component: AdhocSingleSelectCellEditor,
             params: {
                 singleSelectDropdown: content.singleSelectDropdown,
-                dropdownValues: content.singleSelectDropdown.dropdownTableOid.toString() in dropdownValues ? dropdownValues[content.singleSelectDropdown.dropdownTableOid.toString()] : [],
+                dropdownValues: content.singleSelectDropdown.tableOid.toString() in dropdownValues ? dropdownValues[content.singleSelectDropdown.tableOid.toString()] : [],
                 onError,
             }
         };
@@ -42,7 +42,7 @@ export function selectEditor(content: CellContent, dropdownValues: {[tableOid: s
             component: AdhocMultiSelectCellEditor,
             params: {
                 multiSelectDropdown: content.multiSelectDropdown,
-                dropdownValues: content.multiSelectDropdown.dropdownTableOid.toString() in dropdownValues ? dropdownValues[content.multiSelectDropdown.dropdownTableOid.toString()] : [],
+                dropdownValues: content.multiSelectDropdown.tableOid.toString() in dropdownValues ? dropdownValues[content.multiSelectDropdown.tableOid.toString()] : [],
                 onError,
             }
         };

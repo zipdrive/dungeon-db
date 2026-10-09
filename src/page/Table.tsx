@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { TableColumnMetadata } from "../api/model/tableColumn";
 import { ObjectPageBreadcrumb, ReportPageBreadcrumb, TablePageBreadcrumb } from "../breadcrumb"
-import { TableCellContent, TableRow } from "../api/model/tableRow";
+import { TableCell, TableCellContent, TableRow, TableRowLabel } from "../api/model/tableRow";
 import { queryAsync } from "../api/query";
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -9,10 +9,15 @@ import { Button, Spinner } from "@material-tailwind/react";
 import { executeAsync } from "../api/action";
 import { gridTheme } from "./Grid";
 import { AgGridReact } from "ag-grid-react";
-import { ColDef, ColumnResizedEvent } from "ag-grid-community";
+import { CellEditRequestEvent, ColDef, ColumnResizedEvent } from "ag-grid-community";
 import classNames from "classnames";
 import { Menu, MenuItem } from "@tauri-apps/api/menu";
 import { ColumnHeaderRenderer } from "./grid/renderer/ColumnHeaderRenderer";
+import { AddNewColumnButton } from "./grid/ColDef";
+import { selectRenderer } from "./grid/RendererSelector";
+import { selectEditor } from "./grid/EditorSelector";
+import { getValue } from "./grid/ValueGetter";
+import { editCellContents } from "./grid/CellEditRequest";
 
 type TablePageProps = Omit<TablePageBreadcrumb, 'key' | 'name'> & {
     onRequestCreateTableColumn: (tableOid: number, ordering: number | null) => void,
@@ -28,7 +33,7 @@ type TableGridRowData = {
     index: number;
     blank: null;
 } & {
-    [key: `column${number}`]: TableCellContent;
+    [key: `column${number}`]: TableCell;
 };
 
 export function TablePage(props: TablePageProps): React.JSX.Element {
@@ -112,6 +117,14 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
         }
     }, [props.tableOid, props.onError]);
 
+    const onCellEditRequest = useCallback((event: CellEditRequestEvent<TableGridRowData>) => {
+        if (event.colDef.colId?.startsWith('column')) {
+            const key: `column${number}` = event.colDef.colId as `column${number}`;
+            const cell: TableCell = event.data[key];
+            editCellContents(cell, event.newValue, props.onError);
+        }
+    }, []);
+
     // Refresh table on initialization and on signal emitted from backend
     useEffect(() => {
         updateTable();
@@ -127,6 +140,10 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
         };
     }, [props.tableOid, props.onError]);
 
+    
+    // Load in dropdown values
+    const [dropdownValues, setDropdownValues] = useState<{[tableOid: string]: TableRowLabel[]}>({});
+    // TODO
 
 
     // Construct column definitions for AgGrid
@@ -184,10 +201,10 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
                 const key: `column${number}` = `column${columnMetadata.oid}`;
 
                 let columnType: string;
-                if ('select' in columnMetadata.columnType) {
-                    columnType = `singleSelectDropdown${columnMetadata.columnType.select.tableOid}`;
-                } else if ('multiselect' in columnMetadata.columnType) {
-                    columnType = `multiSelectDropdown${columnMetadata.columnType.multiselect.tableOid}`;
+                if ('singleSelect' in columnMetadata.columnType) {
+                    columnType = `singleSelectDropdown${columnMetadata.columnType.singleSelect.tableOid}`;
+                } else if ('multiSelect' in columnMetadata.columnType) {
+                    columnType = `multiSelectDropdown${columnMetadata.columnType.multiSelect.tableOid}`;
                 } else {
                     columnType = 'any';
                 }
@@ -201,7 +218,7 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
                     },
                     cellClass({ data }) {
                         if (data) {
-                            const content: TableCellContent = data[key];
+                            const content: TableCellContent = data[key].content;
                             return classNames(
                                 key,
                                 { 'ag-allow-overflow': 'singleSelectDropdown' in content || 'multiSelectDropdown' in content }
@@ -216,8 +233,8 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
                     editable({ data }) {
                         if (data) {
                             if (key in data) {
-                                const content: TableCellContent = data[key];
-                                return !('schemaLink' in content || 'readonly' in content);
+                                const content: TableCellContent = data[key].content;
+                                return !('subreport' in content);
                             }
                         }
                         return false;
@@ -225,8 +242,8 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
                     cellRendererSelector({ data }) {
                         if (data) {
                             if (key in data) {
-                                const content: CellContent = data[key];
-                                return selectRenderer(content, props.onRequestOpenSchema, props.onRequestOpenObject);
+                                const cell: TableCell = data[key];
+                                return selectRenderer(cell, props.onRequestOpenDrillDownReport, props.onRequestOpenObject);
                             }
                         }
                         return undefined;
@@ -234,8 +251,8 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
                     cellEditorSelector({ data }) {
                         if (data) {
                             if (key in data) {
-                                const content: CellContent = data[key];
-                                return selectEditor(content, props.dropdownValues, props.onError);
+                                const cell: TableCell = data[key];
+                                return selectEditor(cell, dropdownValues, props.onError);
                             }
                         }
                         return {
@@ -245,7 +262,7 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
                     valueGetter({ data }) {
                         if (data) {
                             if (key in data) {
-                                const content: CellContent = data[key];
+                                const content: TableCellContent = data[key].content;
                                 return getValue(content);
                             }
                         }
@@ -255,7 +272,7 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
             }),
             addNewColumn
         ];
-    }, [columnList, props.tableOid, props.onError]);
+    }, [columnList, props.tableOid, dropdownValues, props.onError]);
 
     // Construct row data for AgGrid
     const rowData = useMemo<TableGridRowData[]>(() => {
@@ -266,13 +283,14 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
                     ['index', row.index],
                     ['blank', null]
                 ] as {[K in keyof TableGridRowData]: [K, TableGridRowData[K]]}[keyof TableGridRowData][])
-                .concat(row.cells.map<[`column${number}`, TableCellContent]>((cell) => [`column${cell.columnOid}`, cell.content]))
+                .concat(row.cells.map<[`column${number}`, TableCell]>((cell) => [`column${cell.columnOid}`, cell]))
             );
         });
     }, [rowList]);
 
 
     // Correct for subpixels
+    const grid = useRef<AgGridReact | null>(null);
     const subPixelCorrectionDiv = useRef<HTMLDivElement | null>(null);
     useEffect(() => {
         if (subPixelCorrectionDiv.current) {
@@ -312,6 +330,7 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
                 </Button>
             </div>
         </div>
+        {/*
         <div className="h-10 border-t-1 border-t-[rgb(var(--color-surface-dark)/1)] bg-[rgb(var(--color-surface)/1)] flex flex-row gap-x-4 justify-center items-center">
             {pageNum == 1 ? (<div className="cursor-default">1</div>) : (<a href="#"
                 className="text-[rgb(var(--color-info)/1)]"
@@ -343,5 +362,6 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
                 {maxPageNum}
             </a>))}
         </div>
+        */}
     </div>);
 }

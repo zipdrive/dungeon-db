@@ -1,143 +1,98 @@
-import { executeAsync } from "../api/action";
-import { CellContent, CellIdentifier } from "../api/model/cell";
+import { TableCell, TableCellContent } from "../../api/model/tableRow";
+import { executeAsync } from "../../api/action";
 
-export function editCellContents(content: CellContent, value: any, onError: (e: unknown) => void) {
-    let promise: Promise<void>;
-    let cellIdentifier: CellIdentifier;
-    if ('textEntry' in content) {
-        // Text cell
-        promise = executeAsync({
-            editCellContents: {
-                tableOid: content.textEntry.dataTableOid,
-                columnOid: content.textEntry.dataColumnOid,
-                rowOid: content.textEntry.dataRowOid,
-                value: {
-                    text: typeof value === 'string' ? (value ?? null) : null
+export function editCellContents(cell: TableCell, value: any, onError: (e: unknown) => void) {
+    try {
+        const oldContent: TableCellContent = cell.content;
+        let newContent: TableCellContent;
+        if ('text' in oldContent) {
+            newContent = {
+                text: {
+                    value: typeof value === 'string' ? (value ?? null) : null,
+                    format: oldContent.text.format
                 }
-            }
-        });
-        cellIdentifier = content.textEntry.cellIdentifier;
-    } else if ('integerEntry' in content) {
-        // Integer cell
-        promise = executeAsync({
-            editCellContents: {
-                tableOid: content.integerEntry.dataTableOid,
-                columnOid: content.integerEntry.dataColumnOid,
-                rowOid: content.integerEntry.dataRowOid,
-                value: {
-                    integer: typeof value === 'number' ? Math.floor(value) : (typeof value === 'string' && Number.isFinite(parseInt(value)) ? parseInt(value) : null)
+            };
+        } else if ('boolean' in oldContent) {
+            newContent = {
+                boolean: {
+                    value: typeof value === 'boolean' ? value : false
                 }
-            }
-        });
-        cellIdentifier = content.integerEntry.cellIdentifier;
-    } else if ('numberEntry' in content) {
-        // Number cell
-        promise = executeAsync({
-            editCellContents: {
-                tableOid: content.numberEntry.dataTableOid,
-                columnOid: content.numberEntry.dataColumnOid,
-                rowOid: content.numberEntry.dataRowOid,
-                value: {
-                    number: typeof value === 'number' ? value : (typeof value === 'string' && Number.isFinite(parseFloat(value)) ? parseFloat(value) : null)
+            };
+        } else if ('integer' in oldContent) {
+            newContent = {
+                integer: {
+                    value: typeof value === 'number' ? Math.floor(value) : (typeof value === 'string' && Number.isFinite(parseInt(value)) ? parseInt(value) : null)
                 }
-            }
-        });
-        cellIdentifier = content.numberEntry.cellIdentifier;
-    } else if ('dateEntry' in content) {
-        // Date cell
-        const date: Date | null = typeof value === 'string' ? (new Date(value) ?? null) : (value instanceof Date ? value : null);
-        promise = executeAsync({
-            editCellContents: {
-                tableOid: content.dateEntry.dataTableOid,
-                columnOid: content.dateEntry.dataColumnOid,
-                rowOid: content.dateEntry.dataRowOid,
-                value: {
-                    date: {
-                        label: date?.toISOString() ?? null
-                    }
+            };
+        } else if ('number' in oldContent) {
+            newContent = {
+                number: {
+                    value: typeof value === 'number' ? value : (typeof value === 'string' && !Number.isNaN(parseFloat(value)) ? parseFloat(value) : null)
                 }
-            }
-        });
-        cellIdentifier = content.dateEntry.cellIdentifier;
-    } else if ('datetimeEntry' in content) {
-        // Datetime cell
-        const datetime: Date | null = typeof value === 'string' ? (new Date(value) ?? null) : (value instanceof Date ? value : null);
-        promise = executeAsync({
-            editCellContents: {
-                tableOid: content.datetimeEntry.dataTableOid,
-                columnOid: content.datetimeEntry.dataColumnOid,
-                rowOid: content.datetimeEntry.dataRowOid,
-                value: {
-                    datetime: {
-                        label: datetime?.toISOString() ?? null
-                    }
+            };
+        } else if ('date' in oldContent) {
+            newContent = {
+                date: {
+                    value: 0,
+                    label: value instanceof Date ? value.toUTCString() : (typeof value === 'string' ? (value ?? null) : null)
                 }
-            }
-        });
-        cellIdentifier = content.datetimeEntry.cellIdentifier;
-    } else if ('checkboxEntry' in content) {
-        // Checkbox cell
-        promise = executeAsync({
-            editCellContents: {
-                tableOid: content.checkboxEntry.dataTableOid,
-                columnOid: content.checkboxEntry.dataColumnOid,
-                rowOid: content.checkboxEntry.dataRowOid,
-                value: {
-                    boolean: typeof value === 'boolean' ? value : null
+            };
+        } else if ('datetime' in oldContent) {
+            newContent = {
+                datetime: {
+                    value: 0,
+                    label: value instanceof Date ? value.toUTCString() : (typeof value === 'string' ? (value ?? null) : null)
                 }
-            }
-        });
-        cellIdentifier = content.checkboxEntry.cellIdentifier;
-    } else if ('objectLink' in content) {
-        // Object link cell
-        promise = executeAsync({
-            editCellContents: {
-                tableOid: content.objectLink.dataTableOid,
-                columnOid: content.objectLink.dataColumnOid,
-                rowOid: content.objectLink.dataRowOid,
-                value: {
-                    object: {
-                        linkedRowOid: 'new'
-                    }
+            };
+        } else if ('file' in oldContent) {
+            newContent = {
+                file: {
+                    value: typeof value === 'object' && (
+                        ('path' in value && 'oid' in value.path && typeof value.path.oid === 'number' && 'name' in value.path && typeof value.path.name === 'string' && 'path' in value.path && typeof value.path.path === 'string') 
+                        || ('blob' in value && 'oid' in value.blob && typeof value.blob.oid === 'number' && 'name' in value.blob && typeof value.blob.name === 'string' && 'size' in value.blob && typeof value.blob.size === 'number')) ? value : null
                 }
-            }
-        });
-        cellIdentifier = content.objectLink.cellIdentifier;
-    } else if ('singleSelectDropdown' in content) {
-        // Single-Select Dropdown cell
-        promise = executeAsync({
-            editCellContents: {
-                tableOid: content.singleSelectDropdown.dataTableOid,
-                columnOid: content.singleSelectDropdown.dataColumnOid,
-                rowOid: content.singleSelectDropdown.dataRowOid,
-                value: {
-                    select: {
-                        linkedRowOid: typeof value === 'number' ? value : null
-                    }
+            };
+        } else if ('object' in oldContent) {
+            newContent = {
+                object: {
+                    tableOid: oldContent.object.tableOid,
+                    value: typeof value === 'number' ? value : (typeof value === 'string' && Number.isFinite(parseInt(value)) ? parseInt(value) : null)
                 }
-            }
-        });
-        cellIdentifier = content.singleSelectDropdown.cellIdentifier;
-    } else if ('multiSelectDropdown' in content) {
-        // Multi-Select Dropdown cell
-        console.log(value);
-        promise = executeAsync({
-            editCellContents: {
-                tableOid: content.multiSelectDropdown.dataTableOid,
-                columnOid: content.multiSelectDropdown.dataColumnOid,
-                rowOid: content.multiSelectDropdown.dataRowOid,
-                value: {
-                    multiselect: {
-                        linkedRowOid: Array.isArray(value) && value.every((item) => typeof item === 'number') ? value : (typeof value === 'number' ? [value] : [])
-                    }
+            };
+        } else if ('singleSelectDropdown' in oldContent) {
+            newContent = {
+                singleSelectDropdown: {
+                    tableOid: oldContent.singleSelectDropdown.tableOid,
+                    value: typeof value === 'number' ? value : (typeof value === 'string' && Number.isFinite(parseInt(value)) ? parseInt(value) : null)
                 }
+            };
+        } else if ('multiSelectDropdown' in oldContent) {
+            newContent = {
+                multiSelectDropdown: {
+                    tableOid: oldContent.multiSelectDropdown.tableOid,
+                    value: (
+                        Array.isArray(value) 
+                        ? value.map((n) => typeof n === 'number' ? n : (typeof n === 'string' && Number.isFinite(parseInt(n)) ? parseInt(n) : null)) 
+                        : (typeof value === 'string' ? value.split(',').map((n) => Number.isFinite(parseInt(n)) ? parseInt(n) : null) : [])
+                    ).filter((oid) => oid !== null)
+                }
+            };
+        } else {
+            // Cell cannot be edited normally
+            return;
+        }
+        
+        // Edit the cell
+        executeAsync({
+            editTableCellContents: {
+                tableOid: cell.tableOid,
+                columnOid: cell.columnOid,
+                rowOid: cell.rowOid,
+                content: newContent
             }
-        });
-        cellIdentifier = content.multiSelectDropdown.cellIdentifier;
-    } else {
-        // Cell cannot be edited normally
-        return;
+        }).catch(onError);
+
+    } catch (e) {
+        onError(e);
     }
-
-    promise.catch(onError);
 }

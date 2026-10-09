@@ -109,12 +109,12 @@ export function EditTableColumnPopup(props: EditTableColumnPopupProps): React.JS
         } else if ('select' in props.columnMetadata.columnType) {
             setColumnBaseType('select');
             setDefaultValue('');
-            setRefTable(props.columnMetadata.columnType.select.tableOid.toString());
+            setRefTable(props.columnMetadata.columnType.singleSelect.tableOid.toString());
             setRefReport(undefined);
         } else if ('multiselect' in props.columnMetadata.columnType) {
             setColumnBaseType('multiselect');
             setDefaultValue('');
-            setRefTable(props.columnMetadata.columnType.multiselect.tableOid.toString());
+            setRefTable(props.columnMetadata.columnType.multiSelect.tableOid.toString());
             setRefReport(undefined);
         } else if ('subreport' in props.columnMetadata.columnType) {
             setColumnBaseType('subreport');
@@ -173,21 +173,21 @@ export function EditTableColumnPopup(props: EditTableColumnPopupProps): React.JS
                     return false;
                 }
                 break;
-            case 'select':
+            case 'singleSelect':
                 if (refTable !== undefined) {
-                    columnType = { select: { oid: 0, tableOid: parseInt(refTable) }};
+                    columnType = { singleSelect: { oid: 0, tableOid: parseInt(refTable) }};
                     hasColumnTypeChanged = !('select' in props.columnMetadata.columnType)
-                        || props.columnMetadata.columnType.select.tableOid !== columnType.select.tableOid;
+                        || props.columnMetadata.columnType.singleSelect.tableOid !== columnType.singleSelect.tableOid;
                 } else {
                     setConfirmAlert('"Table" is a required field if column type "Single-Select Dropdown" is selected!');
                     return false;
                 }
                 break;
-            case 'multiselect':
+            case 'multiSelect':
                 if (refTable !== undefined) {
-                    columnType = { multiselect: { oid: 0, tableOid: parseInt(refTable) }};
+                    columnType = { multiSelect: { oid: 0, tableOid: parseInt(refTable) }};
                     hasColumnTypeChanged = !('multiselect' in props.columnMetadata.columnType)
-                        || props.columnMetadata.columnType.multiselect.tableOid !== columnType.multiselect.tableOid;
+                        || props.columnMetadata.columnType.multiSelect.tableOid !== columnType.multiSelect.tableOid;
                 } else {
                     setConfirmAlert('"Table" is a required field if column type "Multi-Select Dropdown" is selected!');
                     return false;

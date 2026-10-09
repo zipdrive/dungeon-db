@@ -128,17 +128,17 @@ export function CreateTableColumnPopup(props: CreateTableColumnPopupProps): Reac
                     return false;
                 }
                 break;
-            case 'select':
+            case 'singleSelect':
                 if (refTable !== undefined) {
-                    columnType = { select: { oid: 0, tableOid: parseInt(refTable) }};
+                    columnType = { singleSelect: { oid: 0, tableOid: parseInt(refTable) }};
                 } else {
                     setConfirmAlert('"Table" is a required field if column type "Single-Select Dropdown" is selected!');
                     return false;
                 }
                 break;
-            case 'multiselect':
+            case 'multiSelect':
                 if (refTable !== undefined) {
-                    columnType = { multiselect: { oid: 0, tableOid: parseInt(refTable) }};
+                    columnType = { multiSelect: { oid: 0, tableOid: parseInt(refTable) }};
                 } else {
                     setConfirmAlert('"Table" is a required field if column type "Multi-Select Dropdown" is selected!');
                     return false;

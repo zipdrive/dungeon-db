@@ -1,16 +1,17 @@
 import { CellRendererSelectorResult } from 'ag-grid-community';
-import { CellContent } from "../api/model/cell";
 import { PlainTextCellRenderer } from './renderer/PlainTextCellRenderer';
 import { CheckboxCellRenderer } from './renderer/CheckboxCellRenderer';
 import { DateCellRenderer } from './renderer/DateCellRenderer';
 import { DatetimeCellRenderer } from './renderer/DatetimeCellRenderer';
 import { ObjectCellRenderer } from './renderer/ObjectCellRenderer';
-import { ObjectPageBreadcrumb, SchemaPageBreadcrumb } from '../breadcrumb';
 import { SchemaCellRenderer } from './renderer/SchemaCellRenderer';
+import { TableCell, TableCellContent } from '../../api/model/tableRow';
+import { ObjectPageBreadcrumb, ReportPageBreadcrumb } from '../../breadcrumb';
 
-export function selectRenderer(content: CellContent, onRequestOpenSchema: (schema: SchemaPageBreadcrumb) => void, onRequestOpenObject: (object: ObjectPageBreadcrumb) => void,): CellRendererSelectorResult | undefined {
-    if ('textEntry' in content) {
-        switch (content.textEntry.format) {
+export function selectRenderer(cell: TableCell, onRequestOpenDrillDownReport: (report: ReportPageBreadcrumb) => void, onRequestOpenObject: (object: ObjectPageBreadcrumb) => void,): CellRendererSelectorResult | undefined {
+    const content: TableCellContent = cell.content;
+    if ('text' in content) {
+        switch (content.text.format) {
             default: 
                 return {
                     component: PlainTextCellRenderer,
@@ -19,28 +20,28 @@ export function selectRenderer(content: CellContent, onRequestOpenSchema: (schem
                     }
                 };
         }
-    } else if ('checkboxEntry' in content) {
+    } else if ('boolean' in content) {
         return {
             component: CheckboxCellRenderer,
             params: {
                 deferRender: true
             }
         };
-    } else if ('dateEntry' in content) {
+    } else if ('date' in content) {
         return {
             component: DateCellRenderer,
             params: {
                 deferRender: true
             }
         };
-    } else if ('datetimeEntry' in content) {
+    } else if ('datetime' in content) {
         return {
             component: DatetimeCellRenderer,
             params: {
                 deferRender: true
             }
         };
-    } else if ('objectLink' in content) {
+    } else if ('object' in content) {
         return {
             component: ObjectCellRenderer,
             params: {
@@ -48,12 +49,12 @@ export function selectRenderer(content: CellContent, onRequestOpenSchema: (schem
                 onRequestOpenObject
             }
         };
-    } else if ('schemaLink' in content) {
+    } else if ('subreport' in content) {
         return {
             component: SchemaCellRenderer,
             params: {
                 deferRender: true,
-                onRequestOpenSchema
+                onRequestOpenSchema: onRequestOpenDrillDownReport
             }
         };
     }
