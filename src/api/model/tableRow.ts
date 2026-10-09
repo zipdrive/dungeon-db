@@ -1,5 +1,22 @@
 import { File } from "./file"
 
+export type ObjectTableCellContent = {
+    tableOid: number,
+    value: number | null 
+};
+export type SingleSelectDropdownTableCellContent = {
+    tableOid: number,
+    value: number | null 
+};
+export type MultiSelectDropdownTableCellContent = {
+    tableOid: number,
+    value: number[]
+};
+export type SubreportTableCellContent = {
+    reportOid: number,
+    oidFilters: [string, number[]][]
+};
+
 export type TableCellContent = {
     boolean: {
         value: boolean 
@@ -32,25 +49,13 @@ export type TableCellContent = {
         value: File | null
     }
 } | {
-    object: {
-        tableOid: number,
-        value: number | null 
-    }
+    object: ObjectTableCellContent
 } | {
-    singleSelectDropdown: {
-        tableOid: number,
-        value: number | null 
-    }
+    singleSelectDropdown: SingleSelectDropdownTableCellContent
 } | {
-    multiSelectDropdown: {
-        tableOid: number,
-        value: number[]
-    }
+    multiSelectDropdown: MultiSelectDropdownTableCellContent
 } | {
-    subreport: {
-        reportOid: number,
-        oidFilters: [string, number[]][]
-    }
+    subreport: SubreportTableCellContent
 };
 
 export type TableCell = {

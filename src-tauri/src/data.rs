@@ -315,11 +315,9 @@ pub enum Action {
         ordering: Option<i64>
     },
     TrashTableColumn {
-        table_oid: i64,
         column_oid: i64,
     },
     UntrashTableColumn {
-        table_oid: i64,
         column_oid: i64,
     },
     RestoreTableColumn {
@@ -490,7 +488,6 @@ impl Action {
                 metadata.create(table_oid.clone())?;
                 record_action(
                     Self::TrashTableColumn {
-                        table_oid: table_oid.clone(),
                         column_oid: metadata.oid,
                     },
                     is_forward,
@@ -563,14 +560,12 @@ impl Action {
                 //schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
             }
             Self::TrashTableColumn {
-                table_oid,
                 column_oid,
             } => {
                 // Flag the column for garbage collection
-                table::column::TableColumnMetadata::trash(table_oid.clone(), column_oid.clone())?;
+                table::column::TableColumnMetadata::trash(column_oid.clone())?;
                 record_action(
                     Self::UntrashTableColumn {
-                        table_oid: table_oid.clone(),
                         column_oid,
                     },
                     is_forward,
@@ -580,14 +575,12 @@ impl Action {
                 //schema::FullMetadata::emit_affected_schema(app, vec![schema_oid])?;
             }
             Self::UntrashTableColumn {
-                table_oid,
                 column_oid,
             } => {
                 // Unflag the column for garbage collection
-                table::column::TableColumnMetadata::untrash(table_oid.clone(), column_oid.clone())?;
+                table::column::TableColumnMetadata::untrash(column_oid.clone())?;
                 record_action(
                     Self::TrashTableColumn {
-                        table_oid: table_oid.clone(),
                         column_oid,
                     },
                     is_forward,

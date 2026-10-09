@@ -1,10 +1,8 @@
 import { ICellRendererComp, ICellRendererParams } from 'ag-grid-community';
 import classNames from 'classnames';
-import { ObjectPageBreadcrumb } from '../../breadcrumb';
-import { ObjectLinkCellContent } from '../../api/model/cell';
-import { Schema } from '../../api/model/schema';
-import { getColumnAsync, getSchemaMetadataAsync } from '../../api/query';
-import { executeAsync } from '../../api/action';
+import { ObjectPageBreadcrumb } from '../../../breadcrumb';
+import { ObjectTableCellContent } from '../../../api/model/tableRow';
+import { getTableColumnMetadataAsync } from '../../../api/query';
 
 type ObjectCellRendererParams = ICellRendererParams<any, any, any> & {
     onRequestOpenObject: (object: ObjectPageBreadcrumb) => void,
@@ -50,17 +48,16 @@ export class ObjectCellRenderer implements ICellRendererComp {
             );
             this.gui.appendChild(link);
 
-            const content: ObjectLinkCellContent | null = params.getValue ? params.getValue() : null;
+            const content: ObjectTableCellContent | null = params.getValue ? params.getValue() : null;
             link.innerText = content?.label ?? '';
             link.onclick = async (_e) => {
                 if (content) {
-                    if (content.linkRowOid) {
-                        const schema = await getSchemaMetadataAsync(content.linkSchemaOid);
-                        const columnMetadata = await getColumnAsync(content.cellIdentifier.columnOid);
+                    if (content.value) {
                         onRequestOpenObject({
-                            schema,
-                            name: columnMetadata.name,
-                            oidFilters: [['OID', content.linkRowOid]]
+                            key: 'object',
+                            name: '',
+                            tableOid: content.tableOid,
+                            rowOid: content.value
                         });
                     } else {
                         await executeAsync({

@@ -1,12 +1,12 @@
 import { AgPromise, IHeaderParams, IInnerHeaderComponent } from 'ag-grid-community';
-import { FullMetadata as ColumnFullMetadata } from '../../api/model/tableColumn';
 import { Menu } from '@tauri-apps/api/menu';
-import { executeAsync } from '../../api/action';
 import classNames from 'classnames';
+import { executeAsync } from '../../../api/action';
+import { TableColumnMetadata } from '../../../api/model/tableColumn';
 
 type ColumnHeaderParams = IHeaderParams & {
-    columnMetadata: ColumnFullMetadata,
-    onRequestEditColumn: (columnMetadata: ColumnFullMetadata) => void,
+    columnMetadata: TableColumnMetadata,
+    onRequestEditColumn: (columnMetadata: TableColumnMetadata) => void,
     onError: (e: unknown) => void,
 };
 
@@ -43,8 +43,7 @@ export class ColumnHeaderRenderer implements IInnerHeaderComponent {
                         action: async () => {
                             try {
                                 await executeAsync({
-                                    trashColumn: {
-                                        schemaOid: params.columnMetadata.schema.oid,
+                                    trashTableColumn: {
                                         columnOid: params.columnMetadata.oid,
                                     }
                                 });

@@ -518,19 +518,27 @@ WHERE OID = ?1
 
 
     /// Trash the column.
-    pub fn trash(table_oid: i64, column_oid: i64) -> Result<(), Error> {
+    pub fn trash(oid: i64) -> Result<i64, Error> {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
 
+        // Determine the OID of the owning table
+        let table_oid: i64 = sql_one(
+            &trans, 
+            "SELECT TABLE_OID FROM __METADATA_TABLE_COLUMN WHERE OID = ?1", 
+            params![oid], 
+            |row| row.get(0)
+        )?;
+
         // Trash the column
-        Self::conn_trash(&trans, column_oid)?;
+        Self::conn_trash(&trans, oid)?;
 
         // Rebuild the table views
         view::rebuild(&trans, table_oid)?;
 
         // Commit the transaction
         trans.commit()?;
-        Ok(())
+        Ok(table_oid)
     }
 
     /// Trash the column.
@@ -546,19 +554,27 @@ WHERE OID = ?1
     }
 
     /// Untrash the column.
-    pub fn untrash(table_oid: i64, column_oid: i64) -> Result<(), Error> {
+    pub fn untrash(oid: i64) -> Result<i64, Error> {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
 
+        // Determine the OID of the owning table
+        let table_oid: i64 = sql_one(
+            &trans, 
+            "SELECT TABLE_OID FROM __METADATA_TABLE_COLUMN WHERE OID = ?1", 
+            params![oid], 
+            |row| row.get(0)
+        )?;
+
         // Untrash the column
-        Self::conn_untrash(&trans, column_oid)?;
+        Self::conn_untrash(&trans, oid)?;
 
         // Rebuild the table views
         view::rebuild(&trans, table_oid)?;
 
         // Commit the transaction
         trans.commit()?;
-        Ok(())
+        Ok(table_oid)
     }
 
     /// Untrash the column.

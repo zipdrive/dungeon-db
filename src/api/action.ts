@@ -39,7 +39,6 @@ export type Action = {
     }
 } | {
     trashTableColumn: {
-        tableOid: number,
         columnOid: number
     }
 } | {
