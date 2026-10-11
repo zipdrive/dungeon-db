@@ -254,7 +254,7 @@ WHERE TABLE{}_OID = ?1
                         format!(
                             "
 INSERT INTO __MULTISELECT{} (TABLE{table_oid}_OID, TABLE{}_OID) VALUES (?1, ?2)
-ON CONFLICT SET TRASH = FALSE
+ON CONFLICT DO UPDATE SET TRASH = FALSE
                             ",
                             self.column_oid,
                             self.table_oid
@@ -368,7 +368,7 @@ impl TableRow {
             columns.clone(),
             sql_one(
                 conn, 
-                format!("SELECT ROW_NUMBER() AS ROW_INDEX, * FROM TABLE{table_oid} WHERE OID = ?1"), 
+                format!("SELECT ROW_NUMBER() OVER () AS ROW_INDEX, * FROM TABLE{table_oid} WHERE OID = ?1"), 
                 params![row_oid], 
                 |row| {
                     Self::new(row, &table_oid, &columns)
@@ -420,7 +420,7 @@ impl TableRow {
         sql_iter(
             &conn, 
             format!(
-                "SELECT ROW_NUMBER() AS ROW_INDEX, * FROM TABLE{table_oid} {}",
+                "SELECT ROW_NUMBER() OVER () AS ROW_INDEX, * FROM TABLE{table_oid} {}",
                 "" // todo limits
             ), 
             [], 
@@ -492,17 +492,16 @@ WHERE INHERITOR_TABLE_OID = ?1
         sql_iter(
             conn,
             "
-SELECT c.OID, typ.DEFAULT_VALUE 
+SELECT c.OID, c.COLUMNTYPE_DEFAULT_VALUE 
 FROM METADATA_TABLE_COLUMN c
-INNER JOIN METADATA_COLUMN_TYPE__PRIMITIVE typ ON typ.OID = c.TYPE_OID
 WHERE c.TABLE_OID = ?1 
-    AND typ.DEFAULT_VALUE IS NOT NULL 
             ",
             params![table_oid],
             |row| {
                 let column_oid: i64 = row.get::<_, i64>("OID")?;
-                let default_value: String = row.get::<_, String>("DEFAULT_VALUE")?;
-                cols.push((format!("COLUMN{column_oid}"), default_value));
+                if let Some(default_value) = row.get::<_, Option<String>>("COLUMNTYPE_DEFAULT_VALUE")? {
+                    cols.push((format!("COLUMN{column_oid}"), default_value));
+                }
                 Ok(None::<()>)
             }
         )?;

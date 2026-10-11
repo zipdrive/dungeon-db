@@ -72,7 +72,7 @@ export function EditTableColumnPopup(props: EditTableColumnPopupProps): React.JS
         updateRefTableList();
         updateRefReportList();
 
-        const unlistenTables = listen<number[]>('table', async () => {
+        const unlistenTables = listen<TableListItem>('table', async () => {
             updateRefTableList();
         });
         const unlistenReports = listen<number>('report', async () => {

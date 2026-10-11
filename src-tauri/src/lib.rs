@@ -10,7 +10,14 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|_| {
-            let _ = util::db::init_new();
+            let result = util::db::init_new();
+            match result {
+                Err(e) => { 
+                    let estr: String = e.into();
+                    println!("{estr}"); 
+                }
+                _ => {}
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

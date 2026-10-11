@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS __METADATA_REPORT (
     TRASH BOOLEAN NOT NULL DEFAULT FALSE,
     NAME TEXT NOT NULL,
 
-    FILTER TEXT NOT NULL
+    FILTER TEXT
         -- A formula applied to filter the rows of the report
 );
 
@@ -192,6 +192,9 @@ CREATE TABLE IF NOT EXISTS __METADATA_REPORT_COLUMN (
         ON UPDATE CASCADE
         ON DELETE SET DEFAULT,
 
+    ORDERING INTEGER NOT NULL,
+        -- The ordering of the columns, from left to right
+
     SIZE INTEGER NOT NULL,
         -- Column pixel width
     
@@ -214,6 +217,7 @@ CREATE VIEW METADATA_REPORT_COLUMN AS
         ct.TYPE AS COLUMNTYPE,
         ct.FORMULA AS COLUMNTYPE_FORMULA,
         ct.REPORT_OID AS COLUMNTYPE_REPORT_OID,
+        c.ORDERING,
         c.SIZE,
         c.STYLE,
         c.IS_PRIMARY_KEY 
@@ -311,7 +315,7 @@ CREATE TABLE IF NOT EXISTS __METADATA_TABLE_INHERITANCE (
     TRASH BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (INHERITOR_TABLE_OID, MASTER_TABLE_OID)
 );
-CREATE INDEX IF NOT EXISTS METADATA_TABLE_INHERITANCE_INDEX_BY_MASTER_TABLE_OID ON METADATA_TABLE_INHERITANCE (MASTER_TABLE_OID);
+CREATE INDEX IF NOT EXISTS __METADATA_TABLE_INHERITANCE_INDEX_BY_MASTER_TABLE_OID ON __METADATA_TABLE_INHERITANCE (MASTER_TABLE_OID);
 
 -- METADATA_TABLE_INHERITANCE provides access only to inheritance relationships that have not been deleted.
 CREATE VIEW METADATA_TABLE_INHERITANCE AS 
@@ -399,7 +403,7 @@ INSERT OR IGNORE INTO __METADATA_TABLE_COLUMNTYPE_PRIMITIVE (OID, MODE, DEFAULT_
 CREATE TABLE IF NOT EXISTS __METADATA_TABLE_COLUMNTYPE_FILE (
     OID INTEGER PRIMARY KEY REFERENCES __METADATA_TABLE_COLUMNTYPE (OID)
         ON UPDATE CASCADE
-        ON DELETE CASCADE,
+        ON DELETE CASCADE
 );
 
 -- __METADATA_TABLE_COLUMNTYPE_OBJECT stores all Object column types.
@@ -682,6 +686,8 @@ COMMIT;
 
 /// Closes any previous database connection, and opens a new temporary file.
 pub fn init_new() -> Result<(), Error> {
+    println!("Initializing new file...");
+
     // Reset static variables
     let mut database_path = DATABASE_PATH.lock().unwrap();
     let mut database_autosave_tempfile = DATABASE_AUTOSAVE_PATH.lock().unwrap();
@@ -739,8 +745,8 @@ pub fn open() -> Result<Connection, Error> {
             let conn = Connection::open(tempfile.path())?;
             conn.execute_batch(
                 "
-            PRAGMA foreign_keys = ON;
-            PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+PRAGMA journal_mode = WAL;
             ",
             )?;
             rusqlite::vtab::array::load_module(&conn)?;

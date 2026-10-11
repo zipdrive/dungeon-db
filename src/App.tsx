@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import "./App.css";
 import { Sidebar } from './Sidebar';
 import { Page } from './Page';
@@ -59,60 +59,67 @@ function App() {
   /**
    * Opens a popup.
    */
-  function onOpenPopup(popup: PopupBreadcrumb) {
+  const onOpenPopup = useCallback((popup: PopupBreadcrumb) => {
     setPopups((oldPopups) => oldPopups.concat([popup]));
-  }
+  }, []);
+
+  /**
+   * Closes the current popup.
+   */
+  const onClosePopup = useCallback(() => {
+    setPopups((oldPopups) => oldPopups.slice(0, oldPopups.length - 1));
+  }, []);
 
   /**
    * Opens a popup to create a new table.
    */
-  function onRequestCreateTable() {
+  const onRequestCreateTable = useCallback(() => {
     onOpenPopup({ 
       popup: 'createTable',
       onClosePopup,
       onError,
     }); 
-  }
+  }, []);
 
   /**
    * Opens a popup to create a new report.
    */
-  function onRequestCreateReport() {
+  const onRequestCreateReport = useCallback(() => {
     onOpenPopup({ 
       popup: 'createReport',
       onClosePopup,
       onError,
     }); 
-  }
+  }, []);
 
   /**
    * Opens a popup to edit an existing table.
    */
-  function onRequestEditTable(metadata: TableMetadata) {
+  const onRequestEditTable = useCallback((metadata: TableMetadata) => {
     onOpenPopup({ 
       popup: 'editTable',
       metadata,
       onClosePopup,
       onError,
     }); 
-  }
+  }, []);
 
   /**
    * Opens a popup to edit an existing report.
    */
-  function onRequestEditReport(metadata: ReportMetadata) {
+  const onRequestEditReport = useCallback((metadata: ReportMetadata) => {
     onOpenPopup({ 
       popup: 'editReport',
       metadata,
       onClosePopup,
       onError,
     }); 
-  }
+  }, []);
 
   /**
    * Opens a popup to create a new table column.
    */
-  function onRequestCreateTableColumn(tableOid: number, ordering: number | null) {
+  const onRequestCreateTableColumn = useCallback((tableOid: number, ordering: number | null) => {
     onOpenPopup({ 
       popup: 'createTableColumn',
       tableOid,
@@ -120,24 +127,24 @@ function App() {
       onClosePopup,
       onError,
     }); 
-  }
+  }, []);
 
   /**
    * Opens a popup to edit an existing table column.
    */
-  function onRequestEditTableColumn(columnMetadata: TableColumnMetadata) {
+  const onRequestEditTableColumn = useCallback((columnMetadata: TableColumnMetadata) => {
     onOpenPopup({ 
       popup: 'editTableColumn',
       columnMetadata,
       onClosePopup,
       onError,
     }); 
-  }
+  }, []);
 
   /**
    * Opens a popup to manage how a file is uploaded.
    */
-  function onRequestUploadFile(absoluteLink: string, relativeLink: string, onUploadFileCallback: (fileOid: number) => Promise<any>) {
+  const onRequestUploadFile = useCallback((absoluteLink: string, relativeLink: string, onUploadFileCallback: (fileOid: number) => Promise<any>) => {
     onOpenPopup({
       popup: 'uploadFile',
       absoluteLink,
@@ -146,19 +153,12 @@ function App() {
       onClosePopup,
       onError,
     });
-  }
-
-  /**
-   * Closes the current popup.
-   */
-  function onClosePopup() {
-    setPopups((oldPopups) => oldPopups.splice(oldPopups.length - 1, 1));
-  }
+  }, []);
 
   /**
    * Displays a popup for an error.
    */
-  function onError(e: unknown) {
+  const onError = useCallback((e: unknown) => {
     if (e instanceof Error) {
       setErr({ message: e.message, stack: e.stack });
     } else {
@@ -170,7 +170,7 @@ function App() {
         setErr({ message: components[0], stack: undefined });
       }
     }
-  }
+  }, []);
 
   return (
     <main>

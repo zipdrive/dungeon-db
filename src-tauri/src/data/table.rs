@@ -76,6 +76,43 @@ impl TableListItem {
             Self::send_all(sender)
         }
     }
+
+    /// Send a list of all tables that are the inheritors of the given table.
+    pub fn send_inheritors(mut sender: Sender<Self>, table_oid: i64) -> Result<(), Error> {
+        let conn = db::open()?;
+        sql_iter(
+            &conn, 
+            "
+SELECT 
+    t.OID,
+    t.NAME
+FROM METADATA_TABLE t 
+WHERE OID = ?1
+
+UNION ALL 
+
+SELECT 
+    t.OID, 
+    t.NAME
+FROM METADATA_TABLE t 
+LEFT JOIN METADATA_TABLE_INHERITANCE_PATH inh 
+    ON inh.INHERITOR_TABLE_OID = t.OID
+        AND inh.MASTER_TABLE_OID = ?1
+        
+ORDER BY t.NAME
+            ", 
+            params![table_oid], 
+            |row| {
+                sender.send(Self {
+                    oid: row.get("OID")?,
+                    name: row.get("NAME")?,
+                    disabled: false
+                })?;
+                Ok(None::<()>)
+            }
+        )?;
+        Ok(())
+    }
 }
 
 
@@ -255,7 +292,7 @@ WHERE OID = ?2
 
         let master_columns: HashSet<String> = HashSet::from_iter(sql_collect(
             conn, 
-            format!("SELECT name FROM pragma_table_info(__TABLE{}) WHERE name LIKE 'MASTER%'", self.oid), 
+            format!("SELECT name FROM pragma_table_info(\"__TABLE{}\") WHERE name LIKE 'MASTER%'", self.oid), 
             [], 
             |row| row.get::<_, String>("name")
         )?);
@@ -265,7 +302,7 @@ WHERE OID = ?2
             conn.execute(
                 "
 INSERT INTO __METADATA_TABLE_INHERITANCE (MASTER_TABLE_OID, INHERITOR_TABLE_OID) VALUES (?1, ?2)
-ON CONFLICT SET TRASH = FALSE
+ON CONFLICT DO UPDATE SET TRASH = FALSE
                 ", 
                 params![master_oid, self.oid]
             )?;

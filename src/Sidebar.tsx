@@ -1,4 +1,4 @@
-import { useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useState, useTransition } from "react";
 import {
   Accordion,
   Button,
@@ -37,7 +37,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
         loadTables();
         loadReports();
 
-        const unlistenForTables = listen<number[]>('table', () => {
+        const unlistenForTables = listen<TableListItem>('table', () => {
             loadTables();
         });
         const unlistenForReports = listen<number>('report', () => {
@@ -53,40 +53,48 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
     /**
      * Loads a basic list of tables.
      */
-    function loadTables() {
+    const loadTables = useCallback(() => {
         startTableListTransition(async () => {
             const temp: TableListItem[] = [];
-            await queryAsync({
-                tables: {
-                    channel: new Channel<TableListItem>((item) => {
-                        temp.push(item);
-                    })
-                }
-            });
+            try {
+                await queryAsync({
+                    tables: {
+                        channel: new Channel<TableListItem>((item) => {
+                            temp.push(item);
+                        })
+                    }
+                });
+            } catch (e) {
+                props.onError(e);
+            }
             startTableListTransition(() => {
                 setTableList(temp);
             });
         });
-    }
+    }, []);
 
     /**
      * Loads a basic list of reports.
      */
-    function loadReports() {
+    const loadReports = useCallback(() => {
         startReportListTransition(async () => {
             const temp: ReportListItem[] = [];
-            await queryAsync({
-                reports: {
-                    channel: new Channel<ReportListItem>((item) => {
-                        temp.push(item);
-                    })
-                }
-            });
+            try {
+                await queryAsync({
+                    reports: {
+                        channel: new Channel<ReportListItem>((item) => {
+                            temp.push(item);
+                        })
+                    }
+                });
+            } catch (e) {
+                props.onError(e);
+            }
             startReportListTransition(() => {
                 setReportList(temp);
             });
         });
-    }
+    }, []);
 
     return (
         <div className="w-sm py-4 border-r-2 border-r-[rgb(var(--color-primary)/1)] bg-[rgb(var(--color-secondary-light)/1)] flex flex-col gap-y-6 overflow-y-auto">

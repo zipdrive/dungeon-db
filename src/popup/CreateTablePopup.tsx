@@ -29,7 +29,9 @@ export function CreateTablePopup(props: CreateTablePopupProps): React.JSX.Elemen
     const [selectedTableMasters, setSelectedTableMasters] = useState<string[]>([]);
 
     useEffect(() => {
-        const unlistenTableMasters = listen<number[]>('table', () => {
+        loadTableMasters();
+
+        const unlistenTableMasters = listen<TableListItem>('table', () => {
             loadTableMasters();
         });
 
@@ -42,6 +44,7 @@ export function CreateTablePopup(props: CreateTablePopupProps): React.JSX.Elemen
      * Loads the list of master schemas.
      */
     function loadTableMasters() {
+        console.log('Reloading tables...');
         startTableMastersListTransition(async () => {
             const temp: TableListItem[] = [];
             try {
@@ -93,7 +96,7 @@ export function CreateTablePopup(props: CreateTablePopupProps): React.JSX.Elemen
             ) : (tableMastersList.length == 0 ? (
                 <Form.CustomField label="Inherit Columns From">
                     <Typography variant="small" className="text-center">
-                        No schemas to inherit columns from.
+                        No tables to inherit columns from.
                     </Typography>
                 </Form.CustomField>
             ) : (<Form.MultiselectField

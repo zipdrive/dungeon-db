@@ -221,6 +221,7 @@ impl QueryStream {
 #[tauri::command]
 /// Sends data through a channel from the backend to the frontend.
 pub async fn query(app: AppHandle, webview: Webview, query: QueryStream) -> Result<(), Error> {
+    println!("Querying...");
     query.send(app, webview)
 }
 
@@ -418,7 +419,7 @@ impl Action {
                 record_action(Self::TrashTable(metadata.oid), is_forward);
 
                 // Send signal to update table
-                //schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
+                table::TableListItem::send_inheritors(Sender::Event(app, "table"), metadata.oid)?;
             }
             Self::EditTable(metadata) => {
                 // Update the table
@@ -427,7 +428,7 @@ impl Action {
                 record_action(Self::EditTable(old_metadata), is_forward);
 
                 // Send signal to update table
-                //schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
+                table::TableListItem::send_inheritors(Sender::Event(app, "table"), metadata.oid)?;
             }
             Self::TrashTable(table_oid) => {
                 // Trash the table
@@ -435,6 +436,7 @@ impl Action {
                 record_action(Self::UntrashTable(table_oid), is_forward);
 
                 // Send signal to update table
+                table::TableListItem::send_inheritors(Sender::Event(app, "table"), table_oid)?;
             }
             Self::UntrashTable(table_oid) => {
                 // Trash the table
@@ -442,6 +444,7 @@ impl Action {
                 record_action(Self::TrashTable(table_oid), is_forward);
 
                 // Send signal to update table
+                table::TableListItem::send_inheritors(Sender::Event(app, "table"), table_oid)?;
             }
 
 
@@ -451,7 +454,7 @@ impl Action {
                 record_action(Self::TrashReport(metadata.oid), is_forward);
 
                 // Send signal to update report
-                //schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
+                app.emit("report", metadata.oid)?;
             }
             Self::EditReport(metadata) => {
                 // Update the report
@@ -460,7 +463,7 @@ impl Action {
                 record_action(Self::EditReport(old_metadata), is_forward);
 
                 // Send signal to update report
-                //schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
+                app.emit("report", metadata.oid)?;
             }
             Self::TrashReport(report_oid) => {
                 // Trash the table
@@ -468,13 +471,15 @@ impl Action {
                 record_action(Self::UntrashReport(report_oid), is_forward);
 
                 // Send signal to update report
+                app.emit("report", report_oid)?;
             }
-            Self::UntrashReport(table_oid) => {
+            Self::UntrashReport(report_oid) => {
                 // Trash the table
-                report::ReportMetadata::untrash(table_oid)?;
-                record_action(Self::TrashReport(table_oid), is_forward);
+                report::ReportMetadata::untrash(report_oid)?;
+                record_action(Self::TrashReport(report_oid), is_forward);
 
                 // Send signal to update report
+                app.emit("report", report_oid)?;
             }
             
 
@@ -495,7 +500,7 @@ impl Action {
 
                 // Adjust the ordering of the column
                 if let Some(ordering) = ordering {
-                    let old_ordering = metadata.set_ordering(Some(ordering))?;
+                    let (_, old_ordering) = metadata.set_ordering(Some(ordering))?;
                     record_action(
                         Self::EditTableColumnOrdering { 
                             metadata, 
@@ -505,8 +510,8 @@ impl Action {
                     );
                 }
 
-                // Send signal to update schema
-                //schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
+                // Send signal to update table
+                table::TableListItem::send_inheritors(Sender::Event(app, "table"), table_oid)?;
             }
             Self::ReplaceTableColumn { 
                 old_metadata,
@@ -523,8 +528,8 @@ impl Action {
                     is_forward,
                 );
 
-                // Send signal to update schema
-                //schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
+                // Send signal to update table
+                table::TableListItem::send_inheritors(Sender::Event(app, "table"), table_oid)?;
             }
             Self::EditTableColumnMetadata { 
                 metadata 
@@ -539,15 +544,15 @@ impl Action {
                     is_forward,
                 );
 
-                // Send signal to update schema
-                //schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
+                // Send signal to update table
+                table::TableListItem::send_inheritors(Sender::Event(app, "table"), table_oid)?;
             }
             Self::EditTableColumnOrdering {
-                mut metadata,
+                metadata,
                 ordering,
             } => {
-                // Update the column style
-                let old_column_ordering = metadata.set_ordering(ordering)?;
+                // Update the column ordering
+                let (table_oid, old_column_ordering) = metadata.set_ordering(ordering)?;
                 record_action(
                     Self::EditTableColumnOrdering {
                         metadata: metadata.clone(),
@@ -556,14 +561,14 @@ impl Action {
                     is_forward,
                 );
 
-                // Send signal to update schema
-                //schema::FullMetadata::emit_affected_schema(app, vec![metadata.schema.oid])?;
+                // Send signal to update table
+                table::TableListItem::send_inheritors(Sender::Event(app, "table"), table_oid)?;
             }
             Self::TrashTableColumn {
                 column_oid,
             } => {
                 // Flag the column for garbage collection
-                table::column::TableColumnMetadata::trash(column_oid.clone())?;
+                let table_oid: i64 = table::column::TableColumnMetadata::trash(column_oid.clone())?;
                 record_action(
                     Self::UntrashTableColumn {
                         column_oid,
@@ -571,14 +576,14 @@ impl Action {
                     is_forward,
                 );
 
-                // Send signal to update schema
-                //schema::FullMetadata::emit_affected_schema(app, vec![schema_oid])?;
+                // Send signal to update table
+                table::TableListItem::send_inheritors(Sender::Event(app, "table"), table_oid)?;
             }
             Self::UntrashTableColumn {
                 column_oid,
             } => {
                 // Unflag the column for garbage collection
-                table::column::TableColumnMetadata::untrash(column_oid.clone())?;
+                let table_oid: i64 = table::column::TableColumnMetadata::untrash(column_oid.clone())?;
                 record_action(
                     Self::TrashTableColumn {
                         column_oid,
@@ -586,8 +591,8 @@ impl Action {
                     is_forward,
                 );
 
-                // Send signal to update schema
-                //schema::FullMetadata::emit_affected_schema(app, vec![schema_oid])?;
+                // Send signal to update table
+                table::TableListItem::send_inheritors(Sender::Event(app, "table"), table_oid)?;
             }
             Self::RestoreTableColumn {
                 table_oid,
@@ -609,8 +614,8 @@ impl Action {
                     is_forward,
                 );
 
-                // Send signal to update schema
-                //schema::FullMetadata::emit_affected_schema(app, vec![schema_oid])?;
+                // Send signal to update table
+                table::TableListItem::send_inheritors(Sender::Event(app, "table"), table_oid)?;
             }
 
 
@@ -746,7 +751,7 @@ impl Action {
                 );
 
                 // Send signal to update table
-                //schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
+                table::TableListItem::send_inheritors(Sender::Event(app, "table"), table_oid)?;
             }
             Self::EditTableRowOid {
                 table_oid,
@@ -764,14 +769,14 @@ impl Action {
                 );
 
                 // Send signal to update table
-                //schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
+                table::TableListItem::send_inheritors(Sender::Event(app, "table"), table_oid)?;
             }
             Self::TrashTableRow { table_oid, row_oid } => {
                 if let Some((table_oid, row_oid)) = table::row::TableRow::trash(table_oid, row_oid)? {
                     record_action(Self::UntrashTableRow { table_oid, row_oid }, is_forward);
 
                     // Send signal to update table
-                    //schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
+                    table::TableListItem::send_inheritors(Sender::Event(app, "table"), table_oid)?;
                 }
             }
             Self::UntrashTableRow { table_oid, row_oid } => {
@@ -779,7 +784,7 @@ impl Action {
                 record_action(Self::TrashTableRow { table_oid, row_oid }, is_forward);
 
                 // Send signal to update table
-                //schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
+                table::TableListItem::send_inheritors(Sender::Event(app, "table"), table_oid)?;
             }
             Self::EditTableRowSubtype {
                 table_oid,
@@ -796,30 +801,14 @@ impl Action {
                     },
                     is_forward,
                 );
-
-                // Send signal to update table
-                //schema::FullMetadata::emit_affected_schema(app, vec![table_oid])?;
             }
 
             Self::EditTableCellContents(cell) => {
-                let execution_result: Result<(), Error> = {
-                    // Update the contents of the cell
-                    match cell.set() {
-                        Ok(old_cell) => {
-                            record_action(Self::EditTableCellContents(old_cell), is_forward);
-                            Ok(())
-                        }
-                        Err(e) => Err(e),
-                    }
-                };
+                let old_cell: table::row::TableCell = cell.set()?;
+                record_action(Self::EditTableCellContents(old_cell), is_forward);
 
                 // Send signal to update that cell + any dependent cells
-                //cell::Cell::emit_affected_cells(app, cell.table_oid, cell.column_oid, cell.row_oid)?;
-
-                // Throw error if execution failed
-                if let Err(e) = execution_result {
-                    return Err(e);
-                }
+                app.emit("tableCell", cell)?;
             }
             Self::CreateObject { table_oid, column_oid, row_oid, object_table_oid } => {
                 let object_row_oid: i64 = table::row::TableRow::insert(object_table_oid, None)?;
@@ -836,7 +825,7 @@ impl Action {
                 record_action(Self::EditTableCellContents(old_cell), is_forward);
 
                 // Send signal to update that cell + any dependent cells
-                //cell::Cell::emit_affected_cells(app, cell.table_oid, cell.column_oid, cell.row_oid)?;
+                app.emit("tableCell", cell)?;
             }
         }
         Ok(())

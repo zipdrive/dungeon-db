@@ -4,11 +4,13 @@ import { CheckboxCellRenderer } from './renderer/CheckboxCellRenderer';
 import { DateCellRenderer } from './renderer/DateCellRenderer';
 import { DatetimeCellRenderer } from './renderer/DatetimeCellRenderer';
 import { ObjectCellRenderer } from './renderer/ObjectCellRenderer';
-import { SchemaCellRenderer } from './renderer/SchemaCellRenderer';
-import { TableCell, TableCellContent } from '../../api/model/tableRow';
+import { SubreportCellRenderer } from './renderer/SubreportCellRenderer';
+import { TableCell, TableCellContent, TableRowLabel } from '../../api/model/tableRow';
 import { ObjectPageBreadcrumb, ReportPageBreadcrumb } from '../../breadcrumb';
+import { SingleSelectCellRenderer } from './renderer/SingleSelectCellRenderer';
+import { MultiSelectCellRenderer } from './renderer/MultiSelectCellRenderer';
 
-export function selectRenderer(cell: TableCell, onRequestOpenDrillDownReport: (report: ReportPageBreadcrumb) => void, onRequestOpenObject: (object: ObjectPageBreadcrumb) => void,): CellRendererSelectorResult | undefined {
+export function selectRenderer(cell: TableCell, dropdownValues: {[tableOid: number]: TableRowLabel[]}, onRequestOpenDrillDownReport: (report: ReportPageBreadcrumb) => void, onRequestOpenObject: (object: ObjectPageBreadcrumb) => void, onError: (e: unknown) => void): CellRendererSelectorResult | undefined {
     const content: TableCellContent = cell.content;
     if ('text' in content) {
         switch (content.text.format) {
@@ -46,12 +48,31 @@ export function selectRenderer(cell: TableCell, onRequestOpenDrillDownReport: (r
             component: ObjectCellRenderer,
             params: {
                 deferRender: true,
-                onRequestOpenObject
+                onRequestOpenObject,
+                onError
+            }
+        };
+    } else if ('singleSelectDropdown' in content) {
+        return {
+            component: SingleSelectCellRenderer,
+            params: {
+                deferRender: true,
+                dropdownValues,
+                onError 
+            }
+        };
+    } else if ('multiSelectDropdown' in content) {
+        return {
+            component: MultiSelectCellRenderer,
+            params: {
+                deferRender: true,
+                dropdownValues,
+                onError 
             }
         };
     } else if ('subreport' in content) {
         return {
-            component: SchemaCellRenderer,
+            component: SubreportCellRenderer,
             params: {
                 deferRender: true,
                 onRequestOpenSchema: onRequestOpenDrillDownReport

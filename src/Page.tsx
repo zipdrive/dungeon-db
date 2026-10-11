@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { PageBreadcrumb, TablePageBreadcrumb, ReportPageBreadcrumb, ObjectPageBreadcrumb } from "./breadcrumb";
 import { 
     Typography,
@@ -9,7 +9,10 @@ import { ObjectPage } from "./page/Object";
 import { AgGridProvider } from "ag-grid-react";
 import { AllCommunityModule, enableDevValidations } from 'ag-grid-community';
 import { TableColumnMetadata } from "./api/model/tableColumn";
-import { getTableMetadataAsync } from "./api/query";
+import { getTableMetadataAsync, queryAsync } from "./api/query";
+import { TablePage } from "./page/Table";
+import { TableRowLabel } from "./api/model/tableRow";
+import { Channel } from "@tauri-apps/api/core";
 
 type PageProps = {
     schema: ['table' | 'report', number, string] | null,
@@ -29,16 +32,16 @@ export function Page(props: PageProps): React.JSX.Element {
     /**
      * Opens a drill-down report page.
      */
-    function openDrillDownReportPage(report: ReportPageBreadcrumb) {
+    const openDrillDownReportPage = useCallback((report: ReportPageBreadcrumb) => {
         setPageBreadcrumbs((oldPageBreadcrumbs) => oldPageBreadcrumbs.concat([report]));
-    }
+    }, []);
 
     /**
      * Opens an object page.
      */
-    function openObjectPage(object: ObjectPageBreadcrumb) {
+    const openObjectPage = useCallback((object: ObjectPageBreadcrumb) => {
         setPageBreadcrumbs((oldPageBreadcrumbs) => oldPageBreadcrumbs.concat([object]));
-    }
+    }, []);
 
     useEffect(() => {
         if (props.schema !== null) {
@@ -52,7 +55,8 @@ export function Page(props: PageProps): React.JSX.Element {
                 setPageBreadcrumbs([{
                     key: 'report',
                     reportOid: props.schema[1],
-                    name: props.schema[2]
+                    name: props.schema[2],
+                    oidFilters: []
                 }]);
             }
         } else {
@@ -81,7 +85,15 @@ export function Page(props: PageProps): React.JSX.Element {
                         </>);
                     })}
                 </Breadcrumb>
-                {lastPageBreadcrumb.key === 'table'}
+                {lastPageBreadcrumb.key === 'table' && <TablePage
+                    {...lastPageBreadcrumb}
+                    onRequestCreateTableColumn={props.onRequestCreateTableColumn}
+                    onRequestEditTableColumn={props.onRequestEditTableColumn}
+                    onRequestUploadFile={props.onRequestUploadFile}
+                    onRequestOpenDrillDownReport={openDrillDownReportPage}
+                    onRequestOpenObject={openObjectPage}
+                    onError={props.onError}
+                />}
                 {lastPageBreadcrumb.key === 'report'}
                 {lastPageBreadcrumb.key === 'object' && (<ObjectPage 
                     {...lastPageBreadcrumb}

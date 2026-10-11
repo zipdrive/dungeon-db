@@ -7,7 +7,8 @@ export type TablePageBreadcrumb = {
 export type ReportPageBreadcrumb = {
     key: 'report',
     name: string,
-    reportOid: number
+    reportOid: number,
+    oidFilters: [string, number[]][]
 };
 
 export type ObjectPageBreadcrumb = {

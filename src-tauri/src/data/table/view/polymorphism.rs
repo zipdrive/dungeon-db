@@ -94,6 +94,7 @@ CTE{} AS (
         COALESCE({}) AS OBJECT_ROW_OID
     {}
     WHERE NOT t.TRASH
+)
                         ",
                         self.table_oid,
                         match master_oid {

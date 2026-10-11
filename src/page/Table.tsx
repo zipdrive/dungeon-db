@@ -18,6 +18,7 @@ import { selectRenderer } from "./grid/RendererSelector";
 import { selectEditor } from "./grid/EditorSelector";
 import { getValue } from "./grid/ValueGetter";
 import { editCellContents } from "./grid/CellEditRequest";
+import { TableListItem } from "../api/model/table";
 
 type TablePageProps = Omit<TablePageBreadcrumb, 'key' | 'name'> & {
     onRequestCreateTableColumn: (tableOid: number, ordering: number | null) => void,
@@ -37,7 +38,55 @@ type TableGridRowData = {
 };
 
 export function TablePage(props: TablePageProps): React.JSX.Element {
-    const [columnList, setColumnList] = useState<TableColumnMetadata[]>([]);
+    // Stores dropdown values used in single-select and multi-select columns
+    const [dropdownValues, setDropdownValues] = useState<{[tableOid: number]: TableRowLabel[]}>({});
+
+    /**
+     * Loads in dropdown values.
+     */
+    const loadDropdownValues = useCallback((tableOid: number) => {
+        (async () => {
+            const temp: TableRowLabel[] = [];
+            try {
+                await queryAsync({
+                    tableRowLabels: {
+                        tableOid,
+                        channel: new Channel<TableRowLabel>((item) => {
+                            temp.push(item);
+                        })
+                    }
+                });
+            } catch (e) {
+                props.onError(e);
+            }
+            return temp;
+        })().then((items) => {
+            setDropdownValues((oldDropdownValues) => {
+                return {
+                    ...oldDropdownValues,
+                    [tableOid]: items
+                };
+            });
+        });
+    }, [props.onError]);
+
+    // Automatically reload dropdown values on change to table
+    useEffect(() => {
+        const unlistenDropdownValues = listen<TableListItem>('table', (event) => {
+            if (event.payload.oid in dropdownValues) {
+                loadDropdownValues(event.payload.oid);
+            }
+        });
+
+        return () => {
+            unlistenDropdownValues.then(f => f());
+        };
+    }, [dropdownValues]);
+
+
+
+    // Stores the list of columns
+    const [columnList, setColumnList] = useState<(TableColumnMetadata & { tableOid: number })[]>([]);
 
     /**
      * Resizes a column of the table.
@@ -68,6 +117,7 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
     }, [columnList, props.onError]);
 
 
+    // Stores the list of rows
     const [rowList, setRowList] = useState<TableRow[]>([]);
     const [isRowListPending, startRowListTransition] = useTransition();
 
@@ -76,20 +126,31 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
      */
     const updateTable = useCallback(() => {
         startRowListTransition(async () => {
-            const tempColumnList: TableColumnMetadata[] = [];
+            const tempColumnList: (TableColumnMetadata & { tableOid: number })[] = [];
             const tempRowList: TableRow[] = [];
             try {
+                const dropdownTableOid: Set<number> = new Set();
                 await queryAsync({
                     tableCells: {
                         tableOid: props.tableOid,
-                        columnChannel: new Channel<TableColumnMetadata>((item) => {
-                            tempColumnList.push(item);
+                        columnChannel: new Channel<[number, TableColumnMetadata]>((item) => {
+                            tempColumnList.push(Object.assign(item[1], { tableOid: item[0] }));
+                            if ('singleSelect' in item[1].columnType) {
+                                dropdownTableOid.add(item[1].columnType.singleSelect.tableOid);
+                            } else if ('multiSelect' in item[1].columnType) {
+                                dropdownTableOid.add(item[1].columnType.multiSelect.tableOid);
+                            }
                         }),
                         rowChannel: new Channel<TableRow>((item) => {
                             tempRowList.push(item);
                         })
                     }
                 });
+
+                // Load dropdown values
+                for (const tableOid of dropdownTableOid) {
+                    loadDropdownValues(tableOid);
+                }
             } catch (e) {
                 props.onError(e);
             }
@@ -98,7 +159,7 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
                 setRowList(tempRowList);
             });
         });
-    }, [props.tableOid, props.onError]);
+    }, [props.tableOid, props.onError, dropdownValues]);
 
     /**
      * Creates a new row in the table.
@@ -117,6 +178,9 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
         }
     }, [props.tableOid, props.onError]);
 
+    /**
+     * Edits a cell.
+     */
     const onCellEditRequest = useCallback((event: CellEditRequestEvent<TableGridRowData>) => {
         if (event.colDef.colId?.startsWith('column')) {
             const key: `column${number}` = event.colDef.colId as `column${number}`;
@@ -129,8 +193,8 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
     useEffect(() => {
         updateTable();
         
-        const unlistenTable = listen<number[]>('table', (event) => {
-            if (event.payload.indexOf(props.tableOid) >= 0) {
+        const unlistenTable = listen<TableListItem>('table', (event) => {
+            if (event.payload.oid == props.tableOid) {
                 updateTable();
             }
         });
@@ -140,10 +204,31 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
         };
     }, [props.tableOid, props.onError]);
 
+    useEffect(() => {
+        const unlistenTableCell = listen<TableCell>('tableCell', (event) => {
+            const colIndex: number = columnList.findIndex((col) => col.oid == event.payload.columnOid);
+            if (colIndex >= 0) {
+                setRowList((oldRowList) => {
+                    return oldRowList.map((row) => {
+                        if (row.cells[colIndex].tableOid == event.payload.tableOid && row.cells[colIndex].rowOid == event.payload.rowOid) {
+                            return {
+                                ...row,
+                                cells: row.cells.slice(0, colIndex).concat([event.payload]).concat(row.cells.slice(colIndex + 1))
+                            };
+                        } else {
+                            return row;
+                        }
+                    });
+                });
+            }
+        });
+
+        return () => {
+            unlistenTableCell.then(f => f());
+        };
+    }, [columnList]);
+
     
-    // Load in dropdown values
-    const [dropdownValues, setDropdownValues] = useState<{[tableOid: string]: TableRowLabel[]}>({});
-    // TODO
 
 
     // Construct column definitions for AgGrid
@@ -243,7 +328,7 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
                         if (data) {
                             if (key in data) {
                                 const cell: TableCell = data[key];
-                                return selectRenderer(cell, props.onRequestOpenDrillDownReport, props.onRequestOpenObject);
+                                return selectRenderer(cell, dropdownValues, props.onRequestOpenDrillDownReport, props.onRequestOpenObject, props.onError);
                             }
                         }
                         return undefined;
@@ -262,8 +347,8 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
                     valueGetter({ data }) {
                         if (data) {
                             if (key in data) {
-                                const content: TableCellContent = data[key].content;
-                                return getValue(content);
+                                const cell: TableCell = data[key];
+                                return getValue(cell);
                             }
                         }
                         return null;
@@ -272,7 +357,16 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
             }),
             addNewColumn
         ];
-    }, [columnList, props.tableOid, dropdownValues, props.onError]);
+    }, [
+        columnList, 
+        props.tableOid, 
+        dropdownValues, 
+        props.onRequestCreateTableColumn, 
+        props.onRequestEditTableColumn, 
+        props.onRequestOpenDrillDownReport,
+        props.onRequestOpenObject, 
+        props.onError
+    ]);
 
     // Construct row data for AgGrid
     const rowData = useMemo<TableGridRowData[]>(() => {

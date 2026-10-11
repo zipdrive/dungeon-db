@@ -42,7 +42,7 @@ export type Query = {
 } | {
     tableCells: {
         tableOid: number,
-        columnChannel: Channel<TableColumnMetadata>,
+        columnChannel: Channel<[number, TableColumnMetadata]>,
         rowChannel: Channel<TableRow>
     }
 } | {

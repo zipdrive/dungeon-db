@@ -1,17 +1,15 @@
 import { ICellRendererComp, ICellRendererParams } from 'ag-grid-community';
 import classNames from 'classnames';
-import { SchemaPageBreadcrumb } from '../../breadcrumb';
-import { SchemaLinkCellContent } from '../../api/model/cell';
-import { Schema } from '../../api/model/schema';
-import { getColumnAsync, getSchemaMetadataAsync } from '../../api/query';
-import { executeAsync } from '../../api/action';
+import { ReportPageBreadcrumb } from '../../../breadcrumb';
+import { SubreportTableCellContent, TableCell } from '../../../api/model/tableRow';
+import { getTableColumnMetadataAsync } from '../../../api/query';
 
-type SchemaCellRendererParams = ICellRendererParams<any, any, any> & {
-    onRequestOpenSchema: (schema: SchemaPageBreadcrumb) => void,
+type SubreportCellRendererParams = ICellRendererParams<any, any, any> & {
+    onRequestOpenDrillDownReport: (report: ReportPageBreadcrumb) => void,
     onError: (e: unknown) => void,
 };
 
-export class SchemaCellRenderer implements ICellRendererComp {
+export class SubreportCellRenderer implements ICellRendererComp {
     private gui: HTMLDivElement;
 
     constructor() {
@@ -19,7 +17,7 @@ export class SchemaCellRenderer implements ICellRendererComp {
         this.gui.className = classNames('flex', 'justify-center', 'h-full');
     }
 
-    init(params: SchemaCellRendererParams) {
+    init(params: SubreportCellRendererParams) {
         this.refresh(params);
     }
 
@@ -27,8 +25,8 @@ export class SchemaCellRenderer implements ICellRendererComp {
         return this.gui;
     }
 
-    refresh(params: SchemaCellRendererParams): boolean {
-        const onRequestOpenSchema = params.onRequestOpenSchema;
+    refresh(params: SubreportCellRendererParams): boolean {
+        const onRequestOpenDrillDownReport = params.onRequestOpenDrillDownReport;
         const onError: (e: unknown) => void = params.onError;
 
         try {
@@ -48,17 +46,18 @@ export class SchemaCellRenderer implements ICellRendererComp {
             );
             this.gui.appendChild(link);
 
-            const content: SchemaLinkCellContent | null = params.getValue ? params.getValue() : null;
-            link.innerText = content?.label ?? '';
+            const cell: TableCell<{ subreport: SubreportTableCellContent }> | null = params.getValue ? params.getValue() : null;
+            const content: SubreportTableCellContent | null = cell?.content.subreport ?? null;
+            // TODO link label?
+            //link.innerText = content?.label ?? '';
             link.onclick = async (_e) => {
-                if (content) {
-                    const schema = await getSchemaMetadataAsync(content.linkSchemaOid);
-                    const columnMetadata = await getColumnAsync(content.cellIdentifier.columnOid);
-                    onRequestOpenSchema({
-                        schema,
+                if (cell && content) {
+                    const columnMetadata = await getTableColumnMetadataAsync(cell.columnOid);
+                    onRequestOpenDrillDownReport({
+                        key: 'report',
                         name: columnMetadata.name,
-                        oidFilters: content.linkOidFilters,
-                        customFilters: []
+                        reportOid: content.reportOid,
+                        oidFilters: content.oidFilters
                     });
                 }
             };

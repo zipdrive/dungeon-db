@@ -28,13 +28,13 @@ export function EditTablePopup(props: EditTablePopupProps): React.JSX.Element {
     useEffect(() => {
         setTableName(props.metadata.name);
         
-        const unlistenTableMasters = listen<number[]>('table', () => {
+        const unlistenTableMasters = listen<TableListItem>('table', () => {
             loadTableMasters();
         });
 
         loadTableColumns();
-        const unlistenForTableColumns = listen<number[]>('table', (event) => {
-            if (event.payload.indexOf(props.metadata.oid) >= 0) {
+        const unlistenForTableColumns = listen<TableListItem>('table', (event) => {
+            if (event.payload.oid == props.metadata.oid) {
                 loadTableColumns();
             }
         });

@@ -58,11 +58,11 @@ export type TableCellContent = {
     subreport: SubreportTableCellContent
 };
 
-export type TableCell = {
+export type TableCell<Content extends TableCellContent = TableCellContent> = {
     tableOid: number,
     columnOid: number,
     rowOid: number,
-    content: TableCellContent
+    content: Content
 };
 
 export type TableRow = {

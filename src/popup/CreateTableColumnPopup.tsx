@@ -74,7 +74,7 @@ export function CreateTableColumnPopup(props: CreateTableColumnPopupProps): Reac
         updateRefTableList();
         updateRefReportList();
 
-        const unlistenTables = listen<number[]>('table', async () => {
+        const unlistenTables = listen<TableListItem>('table', async () => {
             updateRefTableList();
         });
         const unlistenReports = listen<number>('report', async () => {
@@ -196,8 +196,8 @@ export function CreateTableColumnPopup(props: CreateTableColumnPopupProps): Reac
                                 { value: 'date', label: "Date", disabled: false },
                                 { value: 'datetime', label: "Datetime", disabled: false },
                                 { value: 'object', label: "Object", disabled: refTableList.length == 0 },
-                                { value: 'select', label: "Single-Select Dropdown", disabled: refTableList.length == 0 },
-                                { value: 'multiselect', label: "Multi-Select Dropdown", disabled: refTableList.length == 0 },
+                                { value: 'singleSelect', label: "Single-Select Dropdown", disabled: refTableList.length == 0 },
+                                { value: 'multiSelect', label: "Multi-Select Dropdown", disabled: refTableList.length == 0 },
                                 { value: 'file', label: "File", disabled: false },
                                 { value: 'textJson', label: "JSON", disabled: false },
                                 { value: 'subreport', label: "Drill-Down Report", disabled: refReportList.length == 0 },
@@ -221,8 +221,8 @@ export function CreateTableColumnPopup(props: CreateTableColumnPopupProps): Reac
                             onSetValue={setDefaultValue} 
                         />)}
                         {(columnBaseType === 'object'
-                            || columnBaseType === 'select'
-                            || columnBaseType === 'multiselect'
+                            || columnBaseType === 'singleSelect'
+                            || columnBaseType === 'multiSelect'
                         ) && (<Form.SelectField 
                             label="Table" 
                             value={refTable} 

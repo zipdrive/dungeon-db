@@ -1,6 +1,7 @@
 import { Button, Checkbox, Chip, Dialog, Input, Radio, Select, Tabs, Textarea, Typography } from "@material-tailwind/react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Multiselect from "../../components/Multiselect";
+import Choices from "choices.js";
 
 interface FormRootPropsNoTabs extends React.PropsWithChildren {
     title?: string,
@@ -153,21 +154,46 @@ export type FormSelectFieldProps<S extends string> = {
  * A dropdown entry component on a form, where only one value can be selected.
  */
 export function FormSelectField<S extends string>(props: FormSelectFieldProps<S>): React.JSX.Element {
+    const [choices, setChoices] = useState<Choices | null>(null);
+
+    const selectContainer = useRef<HTMLDivElement | null>(null);
+    useEffect(() => {
+        if (selectContainer.current) {
+            // Reset inner DIV
+            selectContainer.current.innerHTML = '';
+
+            // Add choices to DIV
+            const select: HTMLSelectElement = document.createElement('select');
+            selectContainer.current.appendChild(select);
+
+            setChoices(new Choices(select, {
+                choices: props.possibleValues,
+                shouldSort: false,
+                itemSelectText: '',
+                searchResultLimit: -1,
+            }));
+        }
+    }, [selectContainer, props.possibleValues]);
+
+    useEffect(() => {
+        if (props.value !== undefined) {
+            choices?.setChoiceByValue(props.value);
+        }
+    }, [choices, props.value]);
+
+    useEffect(() => {
+        if (choices && props.onSetValue !== undefined) {
+            const onSetValue = props.onSetValue;
+            choices.passedElement.element.addEventListener('change', (e) => {
+                console.log(e);
+                onSetValue(e.detail.value as S);
+            });
+        }
+    }, [choices, props.onSetValue]);
+
     return (<div className="flex flex-col gap-y-2">
         <Typography type="h6">{props.label}</Typography>
-        <Select value={props.value} onValueChange={(s) => { props.onSetValue?.(s as S); }}>
-            <Select.Trigger placeholder={props.label}></Select.Trigger>
-            <Select.List>
-                {props.possibleValues.map(({ value: optionValue, label: optionLabel, disabled: optionDisabled }) => 
-                    (<Select.Option 
-                        value={optionValue as string}
-                        disabled={optionDisabled ?? false}
-                    >
-                        {optionLabel}
-                    </Select.Option>)
-                )}
-            </Select.List>
-        </Select>
+        <div ref={selectContainer} />
     </div>);
 }
 
@@ -185,21 +211,51 @@ export type FormMultiselectFieldProps<S extends string> = {
  * A dropdown entry component on a form, where multiple values can be selected.
  */
 export function FormMultiselectField<S extends string>(props: FormMultiselectFieldProps<S>): React.JSX.Element {
+    const [choices, setChoices] = useState<Choices | null>(null);
+
+    const selectContainer = useRef<HTMLDivElement | null>(null);
+    useEffect(() => {
+        if (selectContainer.current) {
+            // Reset inner DIV
+            selectContainer.current.innerHTML = '';
+
+            // Add choices to DIV
+            const select: HTMLSelectElement = document.createElement('select');
+            select.multiple = true;
+            selectContainer.current.appendChild(select);
+
+            setChoices(new Choices(select, {
+                choices: props.possibleValues,
+                shouldSort: false,
+                itemSelectText: '',
+                resetScrollPosition: false,
+                closeDropdownOnSelect: false,
+                searchResultLimit: -1,
+                renderSelectedChoices: 'always',
+                searchRenderSelectedChoices: true
+            }));
+        }
+    }, [selectContainer, props.possibleValues]);
+
+    useEffect(() => {
+        if (props.value !== undefined) {
+            choices?.setChoiceByValue(props.value);
+        }
+    }, [choices, props.value]);
+
+    useEffect(() => {
+        if (choices && props.onSetValue !== undefined) {
+            const onSetValue = props.onSetValue;
+            choices.passedElement.element.addEventListener('change', (e) => {
+                console.log(e);
+                onSetValue(props.value.concat([e.detail.value as S]));
+            });
+        }
+    }, [choices, props.value, props.onSetValue]);
+
     return (<div className="flex flex-col gap-y-2">
         <Typography type="h6">{props.label}</Typography>
-        <Multiselect onValueChange={(s) => { props.onSetValue?.(s as S[]); }}>
-            <Multiselect.Trigger placeholder={props.label}></Multiselect.Trigger>
-            <Multiselect.List>
-                {props.possibleValues.map(({ value: optionValue, label: optionLabel, disabled: optionDisabled }) => 
-                    (<Multiselect.Option 
-                        value={optionValue as string}
-                        disabled={optionDisabled ?? false}
-                    >
-                        {optionLabel}
-                    </Multiselect.Option>)
-                )}
-            </Multiselect.List>
-        </Multiselect>
+        <div ref={selectContainer} />
     </div>);
 }
 

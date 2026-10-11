@@ -39,6 +39,7 @@ impl TableColumnListItem {
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all="camelCase")]
 pub struct TableColumnMetadata {
     pub oid: i64,
     pub name: String,
@@ -60,52 +61,52 @@ impl TableColumnMetadata {
                     "Text" => TableColumnType::Primitive { 
                         oid: row.get("COLUMNTYPE_OID")?, 
                         primitive: Primitive::Text, 
-                        default_value: row.get("DEFAULT_VALUE")? 
+                        default_value: row.get("COLUMNTYPE_DEFAULT_VALUE")? 
                     },
                     "Text/Json" => TableColumnType::Primitive { 
                         oid: row.get("COLUMNTYPE_OID")?, 
                         primitive: Primitive::TextJson, 
-                        default_value: row.get("DEFAULT_VALUE")? 
+                        default_value: row.get("COLUMNTYPE_DEFAULT_VALUE")? 
                     },
                     "Text/Xml" => TableColumnType::Primitive { 
                         oid: row.get("COLUMNTYPE_OID")?, 
                         primitive: Primitive::TextXml, 
-                        default_value: row.get("DEFAULT_VALUE")? 
+                        default_value: row.get("COLUMNTYPE_DEFAULT_VALUE")? 
                     },
                     "Text/Markdown" => TableColumnType::Primitive { 
                         oid: row.get("COLUMNTYPE_OID")?, 
                         primitive: Primitive::TextMarkdown, 
-                        default_value: row.get("DEFAULT_VALUE")? 
+                        default_value: row.get("COLUMNTYPE_DEFAULT_VALUE")? 
                     },
                     "Text/BBCode" => TableColumnType::Primitive { 
                         oid: row.get("COLUMNTYPE_OID")?, 
                         primitive: Primitive::TextBBCode, 
-                        default_value: row.get("DEFAULT_VALUE")? 
+                        default_value: row.get("COLUMNTYPE_DEFAULT_VALUE")? 
                     },
                     "Boolean" => TableColumnType::Primitive { 
                         oid: row.get("COLUMNTYPE_OID")?, 
                         primitive: Primitive::Boolean, 
-                        default_value: row.get("DEFAULT_VALUE")? 
+                        default_value: row.get("COLUMNTYPE_DEFAULT_VALUE")? 
                     },
                     "Integer" => TableColumnType::Primitive { 
                         oid: row.get("COLUMNTYPE_OID")?, 
                         primitive: Primitive::Integer, 
-                        default_value: row.get("DEFAULT_VALUE")? 
+                        default_value: row.get("COLUMNTYPE_DEFAULT_VALUE")? 
                     },
                     "Number" => TableColumnType::Primitive { 
                         oid: row.get("COLUMNTYPE_OID")?, 
                         primitive: Primitive::Number, 
-                        default_value: row.get("DEFAULT_VALUE")? 
+                        default_value: row.get("COLUMNTYPE_DEFAULT_VALUE")? 
                     },
                     "Date" => TableColumnType::Primitive { 
                         oid: row.get("COLUMNTYPE_OID")?, 
                         primitive: Primitive::Date, 
-                        default_value: row.get("DEFAULT_VALUE")? 
+                        default_value: row.get("COLUMNTYPE_DEFAULT_VALUE")? 
                     },
                     "Datetime" => TableColumnType::Primitive { 
                         oid: row.get("COLUMNTYPE_OID")?, 
                         primitive: Primitive::Datetime, 
-                        default_value: row.get("DEFAULT_VALUE")? 
+                        default_value: row.get("COLUMNTYPE_DEFAULT_VALUE")? 
                     },
                     "File" => TableColumnType::File { 
                         oid: row.get("COLUMNTYPE_OID")?
@@ -282,7 +283,8 @@ INSERT INTO __METADATA_TABLE_COLUMN (
                 self.column_type.oid(),
                 self.size,
                 self.style,
-                self.is_primary_key
+                self.is_primary_key,
+                ordering
             ]
         )?;
         self.oid = conn.last_insert_rowid();
@@ -436,9 +438,17 @@ WHERE OID = ?5
 
     /// Sets the ordering for the column.
     /// Returns the old ordering of the column.
-    pub fn set_ordering(&self, ordering: Option<i64>) -> Result<i64, Error> {
+    pub fn set_ordering(&self, ordering: Option<i64>) -> Result<(i64, i64), Error> {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
+
+        // Query for the OID of the table that owns the column being replaced
+        let table_oid: i64 = sql_one(
+            &trans, 
+            "SELECT TABLE_OID FROM METADATA_TABLE_COLUMN WHERE OID = ?1", 
+            params![self.oid], 
+            |row| row.get("TABLE_OID")
+        )?;
 
         // Query for the old ordering of the column
         let old_ordering: i64 = sql_one(
@@ -482,7 +492,7 @@ WHERE OID = ?1
 
         // Commit the transaction
         trans.commit()?;
-        Ok(old_ordering)
+        Ok((table_oid, old_ordering))
     }
 
     /// Replaces a column.
