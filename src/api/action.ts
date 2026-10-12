@@ -43,7 +43,7 @@ export type Action = {
     }
 } | {
     createReportColumn: {
-        tableOid: number,
+        reportOid: number,
         metadata: ReportColumnMetadata,
         ordering: number | null
     }

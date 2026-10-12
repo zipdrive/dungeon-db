@@ -26,7 +26,7 @@ fn reset(app: &AppHandle) -> Result<(), Error> {
 
 #[tauri::command]
 /// Create a new DungeonDB database file.
-pub fn init_new(app: AppHandle) -> Result<(), Error> {
+pub async fn init_new(app: AppHandle) -> Result<(), Error> {
     // Create a new DungeonDB database file
     db::init_new()?;
 
@@ -37,7 +37,7 @@ pub fn init_new(app: AppHandle) -> Result<(), Error> {
 
 #[tauri::command]
 /// Initialize a connection to an existing DungeonDB database file.
-pub fn init_existing(app: AppHandle, path: String) -> Result<(), Error> {
+pub async fn init_existing(app: AppHandle, path: String) -> Result<(), Error> {
     // Initialize a connection to an existing DungeonDB database file.
     db::init_existing(path)?;
 
@@ -48,7 +48,7 @@ pub fn init_existing(app: AppHandle, path: String) -> Result<(), Error> {
 
 #[tauri::command]
 /// Save to the main file being worked on.
-pub fn save(app: AppHandle) -> Result<(), Error> {
+pub async fn save(app: AppHandle) -> Result<(), Error> {
     save_shortcut(&app)
 }
 
@@ -65,7 +65,7 @@ pub fn save_shortcut(app: &AppHandle) -> Result<(), Error> {
 
 #[tauri::command]
 /// Save to a prompted file.
-pub fn save_as(app: AppHandle) -> Result<(), Error> {
+pub async fn save_as(app: AppHandle) -> Result<(), Error> {
     // Save to prompted main file, then clean database
     if db::save_to_prompted_file(&app)? {
         // Record that there are no changes since the last save
@@ -77,21 +77,19 @@ pub fn save_as(app: AppHandle) -> Result<(), Error> {
 
 #[tauri::command]
 /// Prompt for a DungeonDB file to load, then load it.
-pub fn load(app: AppHandle) -> Result<(), Error> {
-    app
+pub async fn load(app: AppHandle) -> Result<(), Error> {
+    if let Some(path) = app
         .dialog()
         .file()
         .add_filter("DungeonDB File (*.dndb)", &["dndb"])
-        .pick_file(|path| {
-            if let Some(path) = path {
-                match init_existing(app, path.to_string()) {
-                    Ok(_) => {},
-                    Err(e) => {
-                        todo!("Do something with the error.")
-                    }
-                }
+        .blocking_pick_file() {
+        match init_existing(app, path.to_string()).await {
+            Ok(_) => {},
+            Err(e) => {
+                todo!("Do something with the error.")
             }
-        });
+        }
+    }
     Ok(())
 }
 

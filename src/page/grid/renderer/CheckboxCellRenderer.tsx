@@ -25,6 +25,9 @@ export class CheckboxCellRenderer implements ICellRendererComp {
     }
 
     refresh(params: ICellRendererParams<any, any, any>): boolean {
+        const value: boolean = params.getValue ? (params.getValue() ?? false) : false;
+        this.input.checked = value;
+        this.input.disabled = true;
         return true;
     }
 }

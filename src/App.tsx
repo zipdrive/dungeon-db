@@ -10,9 +10,29 @@ import { loadAsync, newAsync, saveAsAsync, saveAsync } from "./api/dbfile";
 import { TableMetadata } from "./api/model/table";
 import { ReportMetadata } from "./api/model/report";
 import { TableColumnMetadata } from "./api/model/tableColumn";
+import { ReportColumnMetadata } from "./api/model/reportColumn";
 
 
 function App() {
+  const [err, setErr] = useState<{ message: string, stack: string | undefined } | null>(null);
+
+  /**
+   * Displays a popup for an error.
+   */
+  const onError = useCallback((e: unknown) => {
+    if (e instanceof Error) {
+      setErr({ message: e.message, stack: e.stack });
+    } else {
+      const str: string = `${e}`;
+      let components: string[] = str.split('===== STACK =====', 2);
+      if (components.length > 1) {
+        setErr({ message: components[0], stack: components[1] });
+      } else if (components.length > 0) {
+        setErr({ message: components[0], stack: undefined });
+      }
+    }
+  }, []);
+
   useEffect(() => {
     (async () => {
       const menu = await Menu.new({
@@ -23,25 +43,41 @@ function App() {
               await MenuItem.new({
                 text: "New",
                 action: async () => {
-                  await newAsync();
+                  try {
+                    await newAsync();
+                  } catch (e) {
+                    onError(e);
+                  }
                 }
               }),
               await MenuItem.new({
                 text: "Open",
                 action: async () => {
-                  await loadAsync();
+                  try {
+                    await loadAsync();
+                  } catch (e) {
+                    onError(e);
+                  }
                 }
               }),
               await MenuItem.new({
                 text: "Save",
                 action: async () => {
-                  await saveAsync();
+                  try {
+                    await saveAsync();
+                  } catch (e) {
+                    onError(e);
+                  }
                 }
               }),
               await MenuItem.new({
                 text: "Save As...",
                 action: async () => {
-                  await saveAsAsync();
+                  try {
+                    await saveAsAsync();
+                  } catch (e) {
+                    onError(e);
+                  }
                 }
               })
             ]
@@ -50,11 +86,10 @@ function App() {
       });
       await menu.setAsAppMenu();
     })();
-  }, []);
+  }, [onError]);
 
   const [selectedSchema, setSelectedSchema] = useState<['table' | 'report', number, string] | null>(null);
   const [popups, setPopups] = useState<PopupBreadcrumb[]>([]);
-  const [err, setErr] = useState<{ message: string, stack: string | undefined } | null>(null);
 
   /**
    * Opens a popup.
@@ -142,6 +177,31 @@ function App() {
   }, []);
 
   /**
+   * Opens a popup to create a new report column.
+   */
+  const onRequestCreateReportColumn = useCallback((reportOid: number, ordering: number | null) => {
+    onOpenPopup({ 
+      popup: 'createReportColumn',
+      reportOid,
+      ordering,
+      onClosePopup,
+      onError,
+    }); 
+  }, []);
+
+  /**
+   * Opens a popup to edit an existing table column.
+   */
+  const onRequestEditReportColumn = useCallback((columnMetadata: ReportColumnMetadata) => {
+    onOpenPopup({ 
+      popup: 'editReportColumn',
+      columnMetadata,
+      onClosePopup,
+      onError,
+    }); 
+  }, []);
+
+  /**
    * Opens a popup to manage how a file is uploaded.
    */
   const onRequestUploadFile = useCallback((absoluteLink: string, relativeLink: string, onUploadFileCallback: (fileOid: number) => Promise<any>) => {
@@ -153,23 +213,6 @@ function App() {
       onClosePopup,
       onError,
     });
-  }, []);
-
-  /**
-   * Displays a popup for an error.
-   */
-  const onError = useCallback((e: unknown) => {
-    if (e instanceof Error) {
-      setErr({ message: e.message, stack: e.stack });
-    } else {
-      const str: string = `${e}`;
-      let components: string[] = str.split('===== STACK =====', 2);
-      if (components.length > 1) {
-        setErr({ message: components[0], stack: components[1] });
-      } else if (components.length > 0) {
-        setErr({ message: components[0], stack: undefined });
-      }
-    }
   }, []);
 
   return (
@@ -189,6 +232,8 @@ function App() {
           schema={selectedSchema}
           onRequestCreateTableColumn={onRequestCreateTableColumn}
           onRequestEditTableColumn={onRequestEditTableColumn}
+          onRequestCreateReportColumn={onRequestCreateReportColumn}
+          onRequestEditReportColumn={onRequestEditReportColumn}
           onRequestUploadFile={onRequestUploadFile}
           onError={onError}
         />

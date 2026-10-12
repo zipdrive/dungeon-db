@@ -23,9 +23,13 @@ type PageProps = {
 };
 
 export function Page(props: PageProps): React.JSX.Element {
+    /* 
     useEffect(() => {
+        // This enables warnings, etc. for AgGrid
+        // Unnecessary now that grid debugging is done
         enableDevValidations();
     }, []);
+    */
 
     const [pageBreadcrumbs, setPageBreadcrumbs] = useState<PageBreadcrumb[]>([]);
 

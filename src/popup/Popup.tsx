@@ -7,6 +7,8 @@ import { CreateTablePopup, CreateTablePopupProps } from "./CreateTablePopup";
 import { CreateReportPopup, CreateReportPopupProps } from "./CreateReportPopup";
 import { EditTablePopup, EditTablePopupProps } from "./EditTablePopup";
 import { EditReportPopup, EditReportPopupProps } from "./EditReportPopup";
+import { CreateReportColumnPopupProps } from "./CreateReportColumnPopup";
+import { EditReportColumnPopupProps } from "./EditReportColumnPopup";
 
 export type PopupBreadcrumb = 
     { popup: 'createTable' } & CreateTablePopupProps
@@ -15,6 +17,8 @@ export type PopupBreadcrumb =
     | { popup: 'editReport' } & EditReportPopupProps
     | { popup: 'createTableColumn' } & CreateTableColumnPopupProps
     | { popup: 'editTableColumn' } & EditTableColumnPopupProps
+    | { popup: 'createReportColumn' } & CreateReportColumnPopupProps
+    | { popup: 'editReportColumn' } & EditReportColumnPopupProps
     | { popup: 'uploadFile' } & FilePopupProps
 ;
 

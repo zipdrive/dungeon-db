@@ -1,4 +1,4 @@
-type ReportColumnType = {
+export type ReportColumnType = {
     formula: {
         oid: number,
         formula: string 

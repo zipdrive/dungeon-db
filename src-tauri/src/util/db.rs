@@ -811,8 +811,8 @@ fn save(app: &AppHandle, save_path: &String) -> Result<(), Error> {
             let mut conn = Connection::open(save_path)?;
             conn.execute_batch(
                 "
-            PRAGMA foreign_keys = ON;
-            PRAGMA journal_mode = WAL;
+PRAGMA foreign_keys = ON;
+PRAGMA journal_mode = WAL;
             ",
             )?;
             rusqlite::vtab::array::load_module(&conn)?;
@@ -820,77 +820,110 @@ fn save(app: &AppHandle, save_path: &String) -> Result<(), Error> {
             // Start transaction to clean database
             let trans = conn.transaction()?;
 
-            // Delete data columns
-            for row_result in trans.prepare("SELECT c.SCHEMA_OID, c.OID AS COLUMN_OID FROM METADATA_COLUMN c WHERE NOT EXISTS (SELECT OID FROM METADATA_COLUMN_VIEW WHERE OID = c.OID)")?.query_map([], |row| Ok((row.get::<_, i64>("SCHEMA_OID")?, row.get::<_, i64>("COLUMN_OID")?)))? {
-                let (schema_oid, column_oid) = row_result?;
-                let table_name: String = format!("TABLE{schema_oid}");
+            // Delete trashed data columns from tables
+            sql_map_then_iter(
+                &trans, 
+                "
+SELECT 
+    c.TABLE_OID, 
+    c.OID AS COLUMN_OID 
+FROM __METADATA_TABLE_COLUMN c 
+WHERE c.TRASH
+                ", 
+                [], 
+                |row| Ok((
+                    row.get::<_, i64>("TABLE_OID")?, 
+                    row.get::<_, i64>("COLUMN_OID")?
+                )), 
+                |(table_oid, column_oid)| {
+                    let table_name: String = format!("TABLE{table_oid}");
 
-                // Drop the multiselect *-to-* mapping table
-                let drop_multiselect_sql: String = format!("DROP TABLE IF EXISTS MULTISELECT{column_oid}");
-                sql_execute(&trans, &drop_multiselect_sql, [])?;
+                    // Drop the multiselect *-to-* mapping table
+                    sql_execute(
+                        &trans, 
+                        format!("DROP TABLE IF EXISTS MULTISELECT{column_oid}"), 
+                        []
+                    )?;
 
-                // Drop the column from its host table
-                if trans.table_exists(Some("main"), &table_name)? {
-                    let drop_sql: String = format!("ALTER TABLE {table_name} DROP COLUMN COLUMN{column_oid}");
-                    sql_execute(&trans, &drop_sql, [])?;
+                    // Drop the column from its host table
+                    sql_execute(
+                        &trans, 
+                        format!("ALTER TABLE {table_name} DROP COLUMN COLUMN{column_oid}"), 
+                        []
+                    )?;
+
+                    Ok(None::<()>)
                 }
-            }
+            )?;
 
             // Delete data inheritance columns
-            for row_result in trans.prepare("SELECT inh.MASTER_SCHEMA_OID, inh.INHERITOR_SCHEMA_OID FROM METADATA_SCHEMA_INHERITANCE inh INNER JOIN METADATA_SCHEMA m ON m.OID = inh.MASTER_SCHEMA_OID WHERE inh.TRASH OR m.TRASH")?.query_map([], |row| Ok((row.get::<_, i64>("MASTER_SCHEMA_OID")?, row.get::<_, i64>("INHERITOR_SCHEMA_OID")?)))? {
-                let (master_schema_oid, inheritor_schema_oid) = row_result?;
-                let inheritor_table_name: String = format!("TABLE{inheritor_schema_oid}");
+            sql_map_then_iter(
+                &trans, 
+                "
+SELECT 
+    inh.MASTER_TABLE_OID,
+    inh.INHERITOR_TABLE_OID
+FROM __METADATA_TABLE_INHERITANCE inh 
+INNER JOIN __METADATA_TABLE t1 ON t1.OID = inh.MASTER_TABLE_OID 
+INNER JOIN __METADATA_TABLE t2 ON t2.OID = inh.INHERITOR_TABLE_OID 
+WHERE inh.TRASH OR t1.TRASH OR t2.TRASH 
+                ", 
+                [], 
+                |row| Ok((
+                    row.get::<_, i64>("MASTER_TABLE_OID")?,
+                    row.get::<_, i64>("INHERITOR_TABLE_OID")?
+                )), 
+                |(master_table_oid, inheritor_table_oid)| {
+                    let inheritor_table_name: String = format!("TABLE{inheritor_table_oid}");
 
-                // Drop the inheritance definition column from the inheriting table
-                if trans.table_exists(Some("main"), &inheritor_table_name)? {
-                    let drop_sql: String = format!("ALTER TABLE {inheritor_table_name} DROP COLUMN MASTER{master_schema_oid}_OID");
-                    sql_execute(&trans, &drop_sql, [])?;
+                    // Drop the inheritance definition column from the inheriting table
+                    sql_execute(
+                        &trans, 
+                        format!("ALTER TABLE {inheritor_table_name} DROP COLUMN MASTER{master_table_oid}_OID"), 
+                        []
+                    )?;
+
+                    Ok(None::<()>)
                 }
-            }
+            )?;
 
             // Delete data tables
-            for row_result in trans
-                .prepare("SELECT s.OID FROM METADATA_SCHEMA s WHERE s.TRASH")?
-                .query_map([], |row| row.get("OID"))?
-            {
-                let schema_oid: i64 = row_result?;
+            sql_map_then_iter(
+                &trans, 
+                "SELECT t.OID FROM __METADATA_TABLE t WHERE t.TRASH", 
+                [], 
+                |row| row.get::<_, i64>("OID"), 
+                |table_oid| {
+                    sql_execute_batch(
+                        &trans, 
+                        format!(
+                            "
+DROP VIEW IF EXISTS TABLE{table_oid};
+DROP VIEW IF EXISTS OBJECT{table_oid};
+DROP TABLE IF EXISTS __TABLE{table_oid};
+                            "
+                        )
+                    )?;
 
-                // Drop the table and views related to the table
-                let drop_sql: String = format!(
-                    "
-                    DROP VIEW IF EXISTS REPORT{schema_oid}_VIEW;
-                    DROP VIEW IF EXISTS TABLE{schema_oid}_VIEW;
-                    DROP VIEW IF EXISTS TABLE{schema_oid}_LABEL_VIEW;
-                    DROP VIEW IF EXISTS TABLE{schema_oid}_POLYMORPHISM_VIEW;
-                    DROP TABLE IF EXISTS TABLE{schema_oid};
-                "
-                );
-                trans.execute_batch(&drop_sql)?;
-            }
+                    Ok(None::<()>)
+                }
+            )?;
 
-            // Finish cleaning metadata
-            trans.execute_batch(
+            // Clean up metadata
+            sql_execute_batch(
+                &trans,
                 "
-            DELETE FROM METADATA_COLUMN_TYPE AS ct WHERE ct.TRASH OR NOT EXISTS(
-                SELECT OID FROM METADATA_COLUMN_TYPE__FORMULA WHERE OID = ct.OID
-                UNION ALL
-                SELECT OID FROM METADATA_COLUMN_TYPE__SUBREPORT WHERE OID = ct.OID 
-                UNION ALL 
-                SELECT OID FROM METADATA_COLUMN_TYPE__PRIMITIVE WHERE OID = ct.OID
-                UNION ALL 
-                SELECT OID FROM METADATA_COLUMN_TYPE__OBJECT WHERE OID = ct.OID 
-                UNION ALL 
-                SELECT OID FROM METADATA_COLUMN_TYPE__SELECT WHERE OID = ct.OID
-                UNION ALL 
-                SELECT OID FROM METADATA_COLUMN_TYPE__MULTISELECT WHERE OID = ct.OID 
-            );
-            DELETE FROM METADATA_COLUMN WHERE TRASH;
-            DELETE FROM METADATA_SCHEMA WHERE TRASH;
-            DELETE FROM METADATA_SCHEMA_INHERITANCE WHERE TRASH;
-            DELETE FROM METADATA_SCHEMA_VALIDATION WHERE TRASH;
-            DELETE FROM METADATA_SCHEMA_ORDERBY WHERE TRASH;
-            DELETE FROM METADATA_REPORT_GROUPBY WHERE TRASH;
-            ",
+DELETE FROM __METADATA_TABLE_COLUMN WHERE TRASH;
+DELETE FROM __METADATA_TABLE_COLUMNTYPE WHERE TRASH;
+DELETE FROM __METADATA_TABLE_INHERITANCE WHERE TRASH;
+DELETE FROM __METADATA_TABLE WHERE TRASH;
+
+DELETE FROM __METADATA_REPORT_GROUPBY WHERE TRASH;
+DELETE FROM __METADATA_REPORT_ORDERBY WHERE TRASH;
+DELETE FROM __METADATA_REPORT_COLUMN WHERE TRASH;
+DELETE FROM __METADATA_REPORT_COLUMNTYPE WHERE TRASH;
+DELETE FROM __METADATA_REPORT WHERE TRASH;
+                "
             )?;
 
             return Ok(());
