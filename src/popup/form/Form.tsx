@@ -178,6 +178,8 @@ export function FormSelectField<S extends string>(props: FormSelectFieldProps<S>
     useEffect(() => {
         if (props.value !== undefined) {
             choices?.setChoiceByValue(props.value);
+        } else {
+            choices?.removeActiveItems();
         }
     }, [choices, props.value]);
 
@@ -240,6 +242,8 @@ export function FormMultiselectField<S extends string>(props: FormMultiselectFie
     useEffect(() => {
         if (props.value !== undefined) {
             choices?.setChoiceByValue(props.value);
+        } else {
+            choices?.removeActiveItems();
         }
     }, [choices, props.value]);
 

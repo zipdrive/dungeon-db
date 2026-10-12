@@ -6,14 +6,14 @@ export type TableCellReference = {
     rowOid: number
 };
 
-export type ReportCell = {
+export type ReportCell<Content extends TableCellContent = TableCellContent> = {
     columnOid: number,
     reference: TableCellReference | null,
-    content: TableCellContent
-}
+    content: Content
+};
 
 export type ReportRow = {
     oidFilters: [string, number[]][],
     index: number,
     cells: ReportCell[]
-}
+};

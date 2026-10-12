@@ -54,7 +54,7 @@ pub struct ReportRow {
 
 impl ReportRow {
     /// Queries for multiple rows from the given table.
-    pub fn send(mut column_sender: Sender<ReportColumnMetadata>, mut row_sender: Sender<Self>, report_oid: i64) -> Result<(), Error> {
+    pub fn send(mut column_sender: Sender<ReportColumnMetadata>, mut row_sender: Sender<Self>, report_oid: i64, oid_filters: Vec<(String, Vec<i64>)>) -> Result<(), Error> {
         let conn = db::open()?;
 
         let report: ReportMetadata = ReportMetadata::conn_get(&conn, report_oid)?;
@@ -173,11 +173,30 @@ FROM (
                 .unwrap_or(String::from("")),
 
             // Filters on the query, applied pre-grouping
-            if let Some(filter_func) = &filter_func {
-                let filter_sql = filter_func.sql()?;
-                format!("WHERE {}", filter_sql.value_expr)
-            } else {
-                String::from("")
+            {
+                let mut filters: Vec<String> = Vec::new();
+
+                // Report built-in filter
+                if let Some(filter_func) = &filter_func {
+                    filters.push(filter_func.sql()?.value_expr);
+                }
+
+                // OID filters
+                for (oid_ord, oid_values) in oid_filters {
+                    filters.push(if oid_values.len() == 0 {
+                        format!("{oid_ord} IS NULL")
+                    } else if oid_values.len() == 1 {
+                        format!("{oid_ord} = {}", oid_values[0])
+                    } else {
+                        format!("{oid_ord} IN ({})", oid_values.into_iter().map(|value| format!("{value}")).reduce(|acc, e| format!("{acc},{e}")).unwrap())
+                    });
+                }
+
+                // Compile into WHERE expression
+                match filters.into_iter().reduce(|acc, e| format!("({acc}) AND ({e})")) {
+                    Some(filters) => format!("WHERE {filters}"),
+                    None => String::from("")
+                }
             },
 
             // Grouping

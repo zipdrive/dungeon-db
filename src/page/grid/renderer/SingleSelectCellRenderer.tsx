@@ -1,6 +1,7 @@
 import { ICellRendererComp, ICellRendererParams } from 'ag-grid-community';
 import classNames from 'classnames';
 import { SingleSelectDropdownTableCellContent, TableCell, TableRowLabel } from '../../../api/model/tableRow';
+import { ReportCell } from '../../../api/model/reportRow';
 
 type SingleSelectCellRendererParams = ICellRendererParams<any, any, any> & {
     dropdownValues: {[tableOid: number]: TableRowLabel[]},
@@ -25,12 +26,14 @@ export class SingleSelectCellRenderer implements ICellRendererComp {
 
     refresh(params: SingleSelectCellRendererParams): boolean {
         const onError: (e: unknown) => void = params.onError;
+        if (!onError)
+            return false;
 
         try {
             this.gui.innerText = '';
 
             // Get the cell and the Single-Select Dropdown content
-            const cell: TableCell<{ singleSelectDropdown: SingleSelectDropdownTableCellContent }> | null = params.getValue ? params.getValue() : null;
+            const cell: TableCell<{ singleSelectDropdown: SingleSelectDropdownTableCellContent }> | ReportCell<{ singleSelectDropdown: SingleSelectDropdownTableCellContent }> | null = params.getValue ? params.getValue() : null;
             const content: SingleSelectDropdownTableCellContent | null = cell?.content.singleSelectDropdown ?? null;
 
             if (content && content.value && content.tableOid in params.dropdownValues) {

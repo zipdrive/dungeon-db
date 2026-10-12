@@ -202,8 +202,8 @@ function App() {
           <Typography variant="h6">Error</Typography>
           <Dialog.Overlay>
             <Dialog.Content>
-              <Typography variant="small">{err?.message}</Typography>
-              <Typography variant="small">{err?.stack}</Typography>
+              {err?.message && err.message.split('\n').map((m, idx) => (<Typography key={`err-${idx}`} variant="small">{m}</Typography>))}
+              {err?.stack && (<><br />{err.stack.split('\n').map((s, idx) => (<Typography key={`err-${idx}`} variant="small">{s}</Typography>))}</>)}
             </Dialog.Content>
             <div className="mb-1 flex items-center justify-end gap-2">
               <Dialog.DismissTrigger as={Button} color="error">

@@ -1,4 +1,5 @@
 import { File } from "../../api/model/file";
+import { ReportCell } from "../../api/model/reportRow";
 import { MultiSelectDropdownTableCellContent, ObjectTableCellContent, SingleSelectDropdownTableCellContent, SubreportTableCellContent, TableCell, TableCellContent } from "../../api/model/tableRow";
 import { PageBreadcrumb } from "../../breadcrumb";
 
@@ -11,7 +12,7 @@ export type BreadcrumbData = {
     breadcrumb: PageBreadcrumb
 };
 
-export function getValue(cell: TableCell): string | number | boolean | Date | File | TableCell | null {
+export function getValue(cell: TableCell | ReportCell): string | number | boolean | Date | File | TableCell | ReportCell | null {
     if ('text' in cell.content) {
         return cell.content.text.value;
     } else if ('integer' in cell.content) {

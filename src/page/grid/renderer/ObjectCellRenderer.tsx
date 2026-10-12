@@ -2,9 +2,11 @@ import { ICellRendererComp, ICellRendererParams } from 'ag-grid-community';
 import classNames from 'classnames';
 import { ObjectPageBreadcrumb } from '../../../breadcrumb';
 import { ObjectTableCellContent, TableCell } from '../../../api/model/tableRow';
-import { getObjectLabelAsync, getTableColumnMetadataAsync } from '../../../api/query';
+import { getObjectLabelAsync, getReportColumnMetadataAsync, getTableColumnMetadataAsync } from '../../../api/query';
 import { TableColumnMetadata } from '../../../api/model/tableColumn';
 import { executeAsync } from '../../../api/action';
+import { ReportCell, TableCellReference } from '../../../api/model/reportRow';
+import { ReportColumnMetadata } from '../../../api/model/reportColumn';
 
 type ObjectCellRendererParams = ICellRendererParams<any, any, any> & {
     onRequestOpenObject: (object: ObjectPageBreadcrumb) => void,
@@ -38,10 +40,13 @@ export class ObjectCellRenderer implements ICellRendererComp {
             }
 
             // Get the cell and the Object content
-            const cell: TableCell<{ object: ObjectTableCellContent }> | null = params.getValue ? params.getValue() : null;
+            const cell: TableCell<{ object: ObjectTableCellContent }> | ReportCell<{ object: ObjectTableCellContent }> | null = params.getValue ? params.getValue() : null;
             const content: ObjectTableCellContent | null = cell?.content.object ?? null;
             
-            if (content?.value) {
+            if (cell && content?.value) {
+                const columnOid: number = cell.columnOid;
+                const objectRowOid: number = content.value;
+
                 // Create a link to the Object page
                 const link: HTMLAnchorElement = document.createElement('a');
                 link.className = classNames(
@@ -64,54 +69,49 @@ export class ObjectCellRenderer implements ICellRendererComp {
                 
                 link.onclick = async (_e) => {
                     try {
-                        if (cell && content) {
-                            if (content.value) {
-                                const columnMetadata: TableColumnMetadata = await getTableColumnMetadataAsync(cell.columnOid);
-                                onRequestOpenObject({
-                                    key: 'object',
-                                    name: columnMetadata.name,
-                                    tableOid: content.tableOid,
-                                    rowOid: content.value
-                                });
-                            } else {
-                                await executeAsync({
-                                    createObject: {
-                                        tableOid: cell.tableOid,
-                                        columnOid: cell.columnOid,
-                                        rowOid: cell.rowOid,
-                                        objectTableOid: content.tableOid
-                                    }
-                                });
-                            }
-                        }
+                        const columnMetadata: TableColumnMetadata | ReportColumnMetadata = 'reference' in cell
+                            ? await getReportColumnMetadataAsync(columnOid)
+                            : await getTableColumnMetadataAsync(columnOid);
+                        onRequestOpenObject({
+                            key: 'object',
+                            name: columnMetadata.name,
+                            tableOid: content.tableOid,
+                            rowOid: objectRowOid
+                        });
                     } catch (e) {
                         onError(e);
                     }
                 };
             } else if (cell && content) {
-                // Create a Button that will make a new Object
-                const button: HTMLButtonElement = document.createElement('button');
-                button.innerText = 'New';
-                button.className = classNames([
-                    'inline-flex items-center justify-center border align-middle select-none font-sans font-medium text-center transition-all duration-300 ease-in disabled:opacity-50 disabled:shadow-none disabled:cursor-not-allowed data-[shape=pill]:rounded-full data-[width=full]:w-full focus:shadow-none text-sm rounded-md py-2 px-4 shadow-sm hover:shadow-md bg-gradient-to-tr from-primary-dark to-primary-light border-primary text-primary-foreground hover:brightness-105 cursor-pointer'
-                ]);
-                this.gui.appendChild(button);
+                const reference: TableCellReference | null = 'reference' in cell 
+                    ? cell.reference 
+                    : { tableOid: cell.tableOid, columnOid: cell.columnOid, rowOid: cell.rowOid }; 
 
-                // The Button creates a new Object when clicked
-                button.addEventListener('click', async (_e) => {
-                    try {
-                        await executeAsync({
-                            createObject: {
-                                tableOid: cell.tableOid,
-                                columnOid: cell.columnOid,
-                                rowOid: cell.rowOid,
-                                objectTableOid: content.tableOid,
-                            }
-                        });
-                    } catch (e) {
-                        onError(e);
-                    }
-                });
+                if (reference !== null) {
+                    // Create a Button that will make a new Object
+                    const button: HTMLButtonElement = document.createElement('button');
+                    button.innerText = 'New';
+                    button.className = classNames([
+                        'inline-flex items-center justify-center border align-middle select-none font-sans font-medium text-center transition-all duration-300 ease-in disabled:opacity-50 disabled:shadow-none disabled:cursor-not-allowed data-[shape=pill]:rounded-full data-[width=full]:w-full focus:shadow-none text-sm rounded-md py-2 px-4 shadow-sm hover:shadow-md bg-gradient-to-tr from-primary-dark to-primary-light border-primary text-primary-foreground hover:brightness-105 cursor-pointer'
+                    ]);
+                    this.gui.appendChild(button);
+
+                    // The Button creates a new Object when clicked
+                    button.addEventListener('click', async (_e) => {
+                        try {
+                            await executeAsync({
+                                createObject: {
+                                    tableOid: reference.tableOid,
+                                    columnOid: reference.columnOid,
+                                    rowOid: reference.rowOid,
+                                    objectTableOid: content.tableOid,
+                                }
+                            });
+                        } catch (e) {
+                            onError(e);
+                        }
+                    });
+                }
             }
             
             return true;

@@ -9,8 +9,9 @@ import { TableCell, TableCellContent, TableRowLabel } from '../../api/model/tabl
 import { ObjectPageBreadcrumb, ReportPageBreadcrumb } from '../../breadcrumb';
 import { SingleSelectCellRenderer } from './renderer/SingleSelectCellRenderer';
 import { MultiSelectCellRenderer } from './renderer/MultiSelectCellRenderer';
+import { ReportCell } from '../../api/model/reportRow';
 
-export function selectRenderer(cell: TableCell, dropdownValues: {[tableOid: number]: TableRowLabel[]}, onRequestOpenDrillDownReport: (report: ReportPageBreadcrumb) => void, onRequestOpenObject: (object: ObjectPageBreadcrumb) => void, onError: (e: unknown) => void): CellRendererSelectorResult | undefined {
+export function selectRenderer(cell: TableCell | ReportCell, dropdownValues: {[tableOid: number]: TableRowLabel[]}, onRequestOpenDrillDownReport: (report: ReportPageBreadcrumb) => void, onRequestOpenObject: (object: ObjectPageBreadcrumb) => void, onError: (e: unknown) => void): CellRendererSelectorResult | undefined {
     const content: TableCellContent = cell.content;
     if ('text' in content) {
         switch (content.text.format) {

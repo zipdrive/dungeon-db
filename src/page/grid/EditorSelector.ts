@@ -1,9 +1,10 @@
 import { CellEditorSelectorResult } from 'ag-grid-community';
-import { AdhocSingleSelectCellEditor } from './editor/AdhocSingleSelectCellEditor';
-import { AdhocMultiSelectCellEditor } from './editor/AdhocMultiSelectCellEditor';
+import { SingleSelectCellEditor } from './editor/SingleSelectCellEditor';
+import { AdhocMultiSelectCellEditor } from './editor/MultiSelectCellEditor';
 import { TableCell, TableCellContent, TableRowLabel } from '../../api/model/tableRow';
+import { ReportCell } from '../../api/model/reportRow';
 
-export function selectEditor(cell: TableCell, dropdownValues: {[tableOid: string]: TableRowLabel[]}, onError: (e: unknown) => void): CellEditorSelectorResult {
+export function selectEditor(cell: TableCell | ReportCell, dropdownValues: {[tableOid: string]: TableRowLabel[]}, loadDropdownValues: (tableOid: number) => void, onError: (e: unknown) => void): CellEditorSelectorResult {
     const content: TableCellContent = cell.content;
     if ('text' in content) {
         return {
@@ -30,10 +31,11 @@ export function selectEditor(cell: TableCell, dropdownValues: {[tableOid: string
         };
     } else if ('singleSelectDropdown' in content) {
         return {
-            component: AdhocSingleSelectCellEditor,
+            component: SingleSelectCellEditor,
             params: {
                 singleSelectDropdown: content.singleSelectDropdown,
-                dropdownValues: content.singleSelectDropdown.tableOid.toString() in dropdownValues ? dropdownValues[content.singleSelectDropdown.tableOid.toString()] : [],
+                dropdownValues,
+                loadDropdownValues,
                 onError,
             }
         };
@@ -42,7 +44,8 @@ export function selectEditor(cell: TableCell, dropdownValues: {[tableOid: string
             component: AdhocMultiSelectCellEditor,
             params: {
                 multiSelectDropdown: content.multiSelectDropdown,
-                dropdownValues: content.multiSelectDropdown.tableOid.toString() in dropdownValues ? dropdownValues[content.multiSelectDropdown.tableOid.toString()] : [],
+                dropdownValues,
+                loadDropdownValues,
                 onError,
             }
         };

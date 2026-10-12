@@ -119,6 +119,12 @@ pub enum QueryStream {
         channel: JavaScriptChannelId,
     },
 
+    /// Emits a basic stream of all tables inheriting from a table.
+    TableSubtypes {
+        table_oid: i64,
+        channel: JavaScriptChannelId
+    },
+
 
     /// Emits a basic stream of all columns directly owned by or inherited by a table.
     TableColumns {
@@ -140,6 +146,7 @@ pub enum QueryStream {
     /// Emits a stream of all columns belonging to a report, and the rows of the report.
     ReportCells {
         report_oid: i64,
+        oid_filters: Vec<(String, Vec<i64>)>,
         column_channel: JavaScriptChannelId,
         row_channel: JavaScriptChannelId,
     },
@@ -171,6 +178,14 @@ impl QueryStream {
                 table_oid,
             ),
 
+            Self::TableSubtypes { 
+                table_oid, 
+                channel 
+            } => table::TableListItem::send_inheritors(
+                Sender::Channel(channel.channel_on(webview)), 
+                table_oid
+            ),
+
             Self::TableColumns {
                 table_oid,
                 channel,
@@ -199,12 +214,14 @@ impl QueryStream {
 
             Self::ReportCells { 
                 report_oid, 
+                oid_filters,
                 column_channel, 
                 row_channel
             } => report::row::ReportRow::send(
                 Sender::Channel(column_channel.channel_on(webview.clone())),
                 Sender::Channel(row_channel.channel_on(webview)), 
-                report_oid
+                report_oid,
+                oid_filters
             ),
 
             Self::TableRowLabels { 
@@ -248,6 +265,13 @@ pub async fn get_object_label(table_oid: i64, row_oid: i64) -> Result<String, Er
 /// Gets the metadata for a report.
 pub fn get_report_metadata(report_oid: i64) -> Result<report::ReportMetadata, Error> {
     report::ReportMetadata::get(report_oid)
+}
+
+#[tauri::command]
+/// Gets the metadata for a report column.
+pub fn get_report_column_metadata(column_oid: i64) -> Result<report::column::ReportColumnMetadata, Error> {
+    let (_, column_metadata) = report::column::ReportColumnMetadata::get(column_oid)?;
+    Ok(column_metadata)
 }
 
 #[tauri::command]

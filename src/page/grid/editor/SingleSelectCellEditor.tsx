@@ -1,17 +1,17 @@
 import { ICellEditorComp, ICellEditorParams, ICellRendererComp, ICellRendererParams } from 'ag-grid-community';
 import Choices, { EventChoice, InputChoice } from 'choices.js';
-import { DropdownValue, queryAsync, SelectedHierarchicalListItemMetadata } from '../../api/query';
 import classNames from 'classnames';
 import { Channel } from '@tauri-apps/api/core';
-import { SingleSelectDropdownCellContent } from '../../api/model/cell';
+import { SingleSelectDropdownTableCellContent, TableRowLabel } from '../../../api/model/tableRow';
 
-type AdhocSingleSelectDropdownCellParams = ICellEditorParams & {
-    singleSelectDropdown: SingleSelectDropdownCellContent,
-    dropdownValues: DropdownValue[],
+type SingleSelectDropdownCellParams = ICellEditorParams & {
+    singleSelectDropdown: SingleSelectDropdownTableCellContent,
+    dropdownValues: {[tableOid: number]: TableRowLabel[]},
+    loadDropdownValues: (tableOid: number) => void,
     onError: (e: unknown) => void,
 };
 
-export class AdhocSingleSelectCellEditor implements ICellEditorComp {
+export class SingleSelectCellEditor implements ICellEditorComp {
     private gui: HTMLDivElement;
     private choices: Choices;
 
@@ -61,7 +61,7 @@ export class AdhocSingleSelectCellEditor implements ICellEditorComp {
         });
     }
 
-    init(params: AdhocSingleSelectDropdownCellParams) {
+    init(params: SingleSelectDropdownCellParams) {
         this.refresh(params);
     }
 
@@ -83,23 +83,27 @@ export class AdhocSingleSelectCellEditor implements ICellEditorComp {
         return null;
     }
 
-    refresh(params: AdhocSingleSelectDropdownCellParams): boolean {
-        const singleSelectDropdown: SingleSelectDropdownCellContent = params.singleSelectDropdown;
+    refresh(params: SingleSelectDropdownCellParams): boolean {
+        const { tableOid, value } = params.singleSelectDropdown;
         const dropdownValues = params.dropdownValues;
-
-        console.log(dropdownValues);
-        this.choices.setChoices(
-            dropdownValues.map((item) => {
-                return {
-                    value: item.value.toString(),
-                    label: item.label ? item.label : ' ',
-                    selected: item.value == singleSelectDropdown.dropdownRowOid
-                };
-            }), 
-            'value', 
-            'label', 
-            true
-        );
+        if (tableOid in dropdownValues) {
+            this.choices.setChoices(
+                dropdownValues[tableOid].map((item) => {
+                    return {
+                        value: item.oid.toString(),
+                        label: item.label ? item.label : ' ',
+                        selected: item.oid == value
+                    };
+                }), 
+                'value', 
+                'label', 
+                true
+            );
+        } else {
+            this.choices.setChoices([]);
+            params.loadDropdownValues(tableOid);
+        }
+        
         this.choices.showDropdown(false);
         return true;
     }

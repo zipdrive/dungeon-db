@@ -1,6 +1,7 @@
 import { ICellRendererComp, ICellRendererParams } from 'ag-grid-community';
 import classNames from 'classnames';
 import { MultiSelectDropdownTableCellContent, SingleSelectDropdownTableCellContent, TableCell, TableRowLabel } from '../../../api/model/tableRow';
+import { ReportCell } from '../../../api/model/reportRow';
 
 type MultiSelectCellRendererParams = ICellRendererParams<any, any, any> & {
     dropdownValues: {[tableOid: number]: TableRowLabel[]},
@@ -25,12 +26,14 @@ export class MultiSelectCellRenderer implements ICellRendererComp {
 
     refresh(params: MultiSelectCellRendererParams): boolean {
         const onError: (e: unknown) => void = params.onError;
+        if (!onError)
+            return false;
 
         try {
             this.gui.innerText = '';
 
             // Get the cell and the Multi-Select Dropdown content
-            const cell: TableCell<{ multiSelectDropdown: MultiSelectDropdownTableCellContent }> | null = params.getValue ? params.getValue() : null;
+            const cell: TableCell<{ multiSelectDropdown: MultiSelectDropdownTableCellContent }> | ReportCell<{ multiSelectDropdown: MultiSelectDropdownTableCellContent }> | null = params.getValue ? params.getValue() : null;
             const content: MultiSelectDropdownTableCellContent | null = cell?.content.multiSelectDropdown ?? null;
 
             if (content && content.value && content.tableOid in params.dropdownValues) {

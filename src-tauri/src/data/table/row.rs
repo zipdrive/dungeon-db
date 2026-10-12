@@ -238,8 +238,7 @@ impl TableCell {
                     &conn, 
                     format!(
                         "
-UPDATE __MULTISELECT{} SET 
-    TRASH = TRUE
+DELETE FROM __MULTISELECT{}
 WHERE TABLE{}_OID = ?1
                         ",
                         self.column_oid,
@@ -254,7 +253,6 @@ WHERE TABLE{}_OID = ?1
                         format!(
                             "
 INSERT INTO __MULTISELECT{} (TABLE{table_oid}_OID, TABLE{}_OID) VALUES (?1, ?2)
-ON CONFLICT DO UPDATE SET TRASH = FALSE
                             ",
                             self.column_oid,
                             self.table_oid

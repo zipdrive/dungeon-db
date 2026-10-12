@@ -1,13 +1,13 @@
 import { ICellEditorComp, ICellEditorParams, ICellRendererComp, ICellRendererParams } from 'ag-grid-community';
 import Choices, { EventChoice, InputChoice } from 'choices.js';
-import { DropdownValue, queryAsync, SelectedHierarchicalListItemMetadata } from '../../api/query';
 import classNames from 'classnames';
 import { Channel } from '@tauri-apps/api/core';
-import { MultiSelectDropdownCellContent } from '../../api/model/cell';
+import { MultiSelectDropdownTableCellContent, TableRowLabel } from '../../../api/model/tableRow';
 
 type AdhocMultiSelectDropdownCellParams = ICellEditorParams & {
-    multiSelectDropdown: MultiSelectDropdownCellContent,
-    dropdownValues: DropdownValue[],
+    multiSelectDropdown: MultiSelectDropdownTableCellContent,
+    dropdownValues: {[tableOid: number]: TableRowLabel[]},
+    loadDropdownValues: (tableOid: number) => void,
     onError: (e: unknown) => void,
 };
 
@@ -74,11 +74,6 @@ export class AdhocMultiSelectCellEditor implements ICellEditorComp {
     getValue() {
         const value = this.choices?.getValue();
         if (Array.isArray(value)) {
-            console.log(value, 
-                value.map((item) => typeof item.value === 'string' ? parseInt(item.value) : null), 
-                value.map((item) => typeof item.value === 'string' ? parseInt(item.value) : null)
-                    .filter((item) => item !== null && Number.isFinite(item))
-            );
             if (value.length > 0) {
                 return value.map((item) => typeof item.value === 'string' ? parseInt(item.value) : null)
                     .filter((item) => item !== null && Number.isFinite(item));
@@ -91,21 +86,26 @@ export class AdhocMultiSelectCellEditor implements ICellEditorComp {
     }
 
     refresh(params: AdhocMultiSelectDropdownCellParams): boolean {
-        const multiSelectDropdown: MultiSelectDropdownCellContent = params.multiSelectDropdown;
+        const { tableOid, value } = params.multiSelectDropdown;
         const dropdownValues = params.dropdownValues;
 
-        this.choices.setChoices(
-            dropdownValues.map((item) => {
-                return {
-                    value: item.value.toString(),
-                    label: item.label,
-                    selected: multiSelectDropdown.dropdownRowOid.indexOf(item.value) >= 0
-                };
-            }), 
-            'value', 
-            'label', 
-            true
-        );
+        if (tableOid in dropdownValues) {
+            this.choices.setChoices(
+                dropdownValues[tableOid].map((item) => {
+                    return {
+                        value: item.oid.toString(),
+                        label: item.label,
+                        selected: value.indexOf(item.oid) >= 0
+                    };
+                }), 
+                'value', 
+                'label', 
+                true
+            );
+        } else {
+            this.choices.setChoices([]);
+        }
+        
         this.choices.showDropdown(false);
         return true;
     }

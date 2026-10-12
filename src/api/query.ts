@@ -30,6 +30,11 @@ export type Query = {
         channel: Channel<TableListItem>
     }
 } | {
+    tableSubtypes: {
+        tableOid: number,
+        channel: Channel<TableListItem>
+    }
+} | {
     tableColumns: {
         tableOid: number,
         channel: Channel<TableColumnMetadata>
@@ -48,6 +53,7 @@ export type Query = {
 } | {
     reportCells: {
         reportOid: number,
+        oidFilters: [string, number[]][],
         columnChannel: Channel<ReportColumnMetadata>,
         rowChannel: Channel<ReportRow>
     }
@@ -74,15 +80,19 @@ export async function getTableColumnMetadataAsync(oid: number): Promise<TableCol
     return await invoke('get_table_column_metadata', { columnOid: oid });
 }
 
+export async function getReportColumnMetadataAsync(oid: number): Promise<ReportColumnMetadata> {
+    return await invoke('get_report_column_metadata', { columnOid: oid });
+}
+
 export async function getObjectLabelAsync(tableOid: number, rowOid: number): Promise<string> {
     return await invoke('get_object_label', { tableOid, rowOid });
 }
 
-export async function getTableRow(tableOid: number, rowOid: number): Promise<TableRow> {
+export async function getTableRow(tableOid: number, rowOid: number): Promise<[[number, TableColumnMetadata][], TableRow]> {
     return await invoke('get_row', { tableOid, rowOid });
 }
 
-export async function getObjectRow(tableOid: number, rowOid: number): Promise<TableRow> {
+export async function getObjectRow(tableOid: number, rowOid: number): Promise<[number, [number, TableColumnMetadata][], TableRow]> {
     return await invoke('get_object_row', { tableOid, rowOid });
 }
 

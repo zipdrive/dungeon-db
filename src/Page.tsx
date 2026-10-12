@@ -1,23 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
-import { PageBreadcrumb, TablePageBreadcrumb, ReportPageBreadcrumb, ObjectPageBreadcrumb } from "./breadcrumb";
+import { PageBreadcrumb, ReportPageBreadcrumb, ObjectPageBreadcrumb } from "./breadcrumb";
 import { 
     Typography,
     Breadcrumb,
 } from "@material-tailwind/react";
-import { SchemaPage } from "./Schema";
 import { ObjectPage } from "./page/Object";
 import { AgGridProvider } from "ag-grid-react";
 import { AllCommunityModule, enableDevValidations } from 'ag-grid-community';
 import { TableColumnMetadata } from "./api/model/tableColumn";
-import { getTableMetadataAsync, queryAsync } from "./api/query";
 import { TablePage } from "./page/Table";
-import { TableRowLabel } from "./api/model/tableRow";
-import { Channel } from "@tauri-apps/api/core";
+import { ReportPage } from "./page/Report";
+import { ReportColumnMetadata } from "./api/model/reportColumn";
 
 type PageProps = {
     schema: ['table' | 'report', number, string] | null,
     onRequestCreateTableColumn: (tableOid: number, ordering: number | null) => void,
     onRequestEditTableColumn: (columnMetadata: TableColumnMetadata) => void,
+    onRequestCreateReportColumn: (reportOid: number, ordering: number | null) => void,
+    onRequestEditReportColumn: (columnMetadata: ReportColumnMetadata) => void,
     onRequestUploadFile: (absolutePath: string, relativePath: string, onUploadFile: (fileOid: number) => Promise<any>) => void,
     onError: (e: unknown) => void,
 };
@@ -94,7 +94,15 @@ export function Page(props: PageProps): React.JSX.Element {
                     onRequestOpenObject={openObjectPage}
                     onError={props.onError}
                 />}
-                {lastPageBreadcrumb.key === 'report'}
+                {lastPageBreadcrumb.key === 'report' && <ReportPage
+                    {...lastPageBreadcrumb}
+                    onRequestCreateReportColumn={props.onRequestCreateReportColumn}
+                    onRequestEditReportColumn={props.onRequestEditReportColumn}
+                    onRequestUploadFile={props.onRequestUploadFile}
+                    onRequestOpenDrillDownReport={openDrillDownReportPage}
+                    onRequestOpenObject={openObjectPage}
+                    onError={props.onError}
+                />}
                 {lastPageBreadcrumb.key === 'object' && (<ObjectPage 
                     {...lastPageBreadcrumb}
                     onRequestEditTableColumn={props.onRequestEditTableColumn}

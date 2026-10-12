@@ -19,6 +19,7 @@ import { selectEditor } from "./grid/EditorSelector";
 import { getValue } from "./grid/ValueGetter";
 import { editCellContents } from "./grid/CellEditRequest";
 import { TableListItem } from "../api/model/table";
+import './Grid.css';
 
 type TablePageProps = Omit<TablePageBreadcrumb, 'key' | 'name'> & {
     onRequestCreateTableColumn: (tableOid: number, ordering: number | null) => void,
@@ -99,14 +100,14 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
                     const metadata = columnList.find((c) => `column${c.oid}` === key);
                     if (metadata) {
                         try {
-                            executeAsync({
+                            await executeAsync({
                                 editTableColumnMetadata: {
                                     metadata: {
                                         ...metadata,
                                         size: Math.floor(column.getActualWidth())
                                     }
                                 }
-                            })
+                            });
                         } catch (e) {
                             props.onError(e);
                         }
@@ -159,7 +160,7 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
                 setRowList(tempRowList);
             });
         });
-    }, [props.tableOid, props.onError, dropdownValues]);
+    }, [props.tableOid, props.onError]);
 
     /**
      * Creates a new row in the table.
@@ -202,7 +203,7 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
         return () => {
             unlistenTable.then(f => f());
         };
-    }, [props.tableOid, props.onError]);
+    }, [props.tableOid, updateTable]);
 
     useEffect(() => {
         const unlistenTableCell = listen<TableCell>('tableCell', (event) => {
@@ -285,14 +286,6 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
             ...columnList.map((columnMetadata): ColDef<TableGridRowData> => {
                 const key: `column${number}` = `column${columnMetadata.oid}`;
 
-                let columnType: string;
-                if ('singleSelect' in columnMetadata.columnType) {
-                    columnType = `singleSelectDropdown${columnMetadata.columnType.singleSelect.tableOid}`;
-                } else if ('multiSelect' in columnMetadata.columnType) {
-                    columnType = `multiSelectDropdown${columnMetadata.columnType.multiSelect.tableOid}`;
-                } else {
-                    columnType = 'any';
-                }
                 return {
                     colId: key,
                     headerComponent: ColumnHeaderRenderer,
@@ -337,7 +330,7 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
                         if (data) {
                             if (key in data) {
                                 const cell: TableCell = data[key];
-                                return selectEditor(cell, dropdownValues, props.onError);
+                                return selectEditor(cell, dropdownValues, loadDropdownValues, props.onError);
                             }
                         }
                         return {
@@ -361,6 +354,7 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
         columnList, 
         props.tableOid, 
         dropdownValues, 
+        loadDropdownValues,
         props.onRequestCreateTableColumn, 
         props.onRequestEditTableColumn, 
         props.onRequestOpenDrillDownReport,

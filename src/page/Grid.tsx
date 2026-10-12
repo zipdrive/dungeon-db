@@ -11,3 +11,15 @@ export const gridTheme = themeBalham.withParams({
     fontSize: 'inherit',
     rowHoverColor: 'rgb(var(--color-primary)/0.05)',
 });
+
+export const objectTheme = themeBalham.withParams({
+    backgroundColor: 'rgb(var(--color-surface-light)/1)',
+    oddRowBackgroundColor: 'inherit',
+    textColor: 'rgb(var(--color-surface-foreground)/1)',
+    chromeBackgroundColor: 'rgb(var(--color-surface)/1)',
+    headerTextColor: 'inherit',
+    borderColor: 'rgb(var(--color-surface-dark)/1)',
+    fontFamily: 'inherit',
+    fontSize: 'inherit',
+    rowHoverColor: 'rgb(var(--color-primary)/0.05)',
+});
