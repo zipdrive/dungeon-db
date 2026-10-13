@@ -96,6 +96,33 @@ export async function getObjectRow(tableOid: number, rowOid: number): Promise<[n
     return await invoke('get_object_row', { tableOid, rowOid });
 }
 
+/**
+ * Checks if a formula is valid or not.
+ */
+export async function checkFormula(formula: string): Promise<{ success: true } | { success: false, msg: string }> {
+    try {
+        await invoke('check_formula', { formula });
+        return { success: true };
+    } catch (e) {
+        if (e instanceof Error) {
+            return {
+                success: false,
+                msg: e.message
+            };
+        } else if (typeof e === 'string') {
+            return {
+                success: false,
+                msg: e 
+            };
+        } else {
+            return {
+                success: false,
+                msg: ''
+            };
+        }
+    }
+}
+
 export async function getSrcAsync(data: { file: File }): Promise<string> {
     return await invoke('get_src', data);
 }

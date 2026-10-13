@@ -73,7 +73,7 @@ export class ObjectCellRenderer implements ICellRendererComp {
                             ? await getReportColumnMetadataAsync(columnOid)
                             : await getTableColumnMetadataAsync(columnOid);
                         onRequestOpenObject({
-                            key: 'object',
+                            page: 'object',
                             name: columnMetadata.name,
                             tableOid: content.tableOid,
                             rowOid: objectRowOid

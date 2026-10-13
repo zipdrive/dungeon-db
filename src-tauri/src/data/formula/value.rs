@@ -110,6 +110,7 @@ impl ValueType {
 
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all="camelCase")]
 pub struct TableCellReference {
     pub table_oid: i64,
     pub column_oid: i64,

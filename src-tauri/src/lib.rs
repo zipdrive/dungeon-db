@@ -38,6 +38,7 @@ pub fn run() {
             data::get_report_column_metadata,
             data::get_row,
             data::get_object_row,
+            data::check_formula,
             data::get_src,
             data::download_file,
             data::upload_file,

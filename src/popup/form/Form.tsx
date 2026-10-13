@@ -179,7 +179,7 @@ export function FormSelectField<S extends string>(props: FormSelectFieldProps<S>
         if (props.value !== undefined) {
             choices?.setChoiceByValue(props.value);
         } else {
-            choices?.removeActiveItems();
+            choices?.setValue([]);
         }
     }, [choices, props.value]);
 
@@ -243,7 +243,7 @@ export function FormMultiselectField<S extends string>(props: FormMultiselectFie
         if (props.value !== undefined) {
             choices?.setChoiceByValue(props.value);
         } else {
-            choices?.removeActiveItems();
+            choices?.setValue([]);
         }
     }, [choices, props.value]);
 
@@ -298,17 +298,9 @@ export function FormFormulaField(props: FormFormulaFieldProps): React.JSX.Elemen
     return (<div className="flex flex-col gap-y-2">
         <Typography type="h6">{props.label}</Typography>
         <Textarea ref={textareaRef} placeholder={props.label} onChange={(e) => { props.onSetValue?.(e.target.value); }}>
-            {props.value
-                .split(/(@\{ROOT\d+(?:_INHERITOR\d+|_MASTER\d+|_COLUMN\d+)*_COLUMN\d+\})/gi)
-                .reduce<React.ReactNode[]>((prev, current, i) => {
-                    if (i % 2 == 1) {
-                        // TODO replace this with a label for the parameter
-                        return prev.concat(<Chip>{current}</Chip>)
-                    } else {
-                        return prev.concat(current);
-                    }
-                }, [])}
+            {props.value}
         </Textarea>
+        {/*
         <div className="flex flex-row justify-end gap-2">
             <Dialog>
                 <Dialog.Trigger as={Button}>Insert Parameter</Dialog.Trigger>
@@ -355,6 +347,7 @@ export function FormFormulaField(props: FormFormulaFieldProps): React.JSX.Elemen
                 </Dialog.Overlay>
             </Dialog>
         </div>
+        */}
     </div>);
 }
 

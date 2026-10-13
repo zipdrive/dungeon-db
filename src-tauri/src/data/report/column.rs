@@ -1,7 +1,7 @@
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use crate::util::channel::Sender;
-use crate::util::db::{RowWrapper, sql_collect, sql_execute, sql_one, sql_iter};
+use crate::util::db::{RowWrapper, sql_collect, sql_execute, sql_one, sql_zero_or_one, sql_iter};
 use crate::util::db;
 use crate::util::error::Error;
 use crate::data::report::column_type::ReportColumnType;
@@ -35,6 +35,7 @@ impl ReportColumnListItem {
 
 
 #[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all="camelCase")]
 pub struct ReportColumnMetadata {
     pub oid: i64,
     pub name: String,
@@ -55,7 +56,7 @@ impl ReportColumnMetadata {
                 match column_type_id.as_str() {
                     "Formula" => ReportColumnType::Formula { 
                         oid: row.get("COLUMNTYPE_OID")?, 
-                        formula: row.get("FORMULA")?
+                        formula: row.get("COLUMNTYPE_FORMULA")?
                     },
                     "Subreport" => ReportColumnType::Subreport { 
                         oid: row.get("COLUMNTYPE_OID")?, 
@@ -134,6 +135,14 @@ impl ReportColumnMetadata {
         // Create row in column type metadata
         self.column_type.create(conn)?;
 
+        // Determine ordering
+        let ordering: i64 = sql_zero_or_one(
+            conn, 
+            "SELECT COALESCE(MAX(ORDERING), 0) + 1 FROM __METADATA_TABLE_COLUMN", 
+            [], 
+            |row| row.get(0)
+        )?.unwrap_or(1);
+
         // Create row in column metadata
         sql_execute(
             conn,
@@ -144,14 +153,16 @@ INSERT INTO __METADATA_REPORT_COLUMN (
     COLUMNTYPE_OID,
     SIZE,
     STYLE,
-    IS_PRIMARY_KEY 
+    IS_PRIMARY_KEY,
+    ORDERING
 ) VALUES (
     ?1,
     ?2,
     ?3,
     ?4,
     ?5,
-    ?6
+    ?6,
+    ?7
 )
             ", 
             params![
@@ -160,7 +171,8 @@ INSERT INTO __METADATA_REPORT_COLUMN (
                 self.column_type.oid(),
                 self.size,
                 self.style,
-                self.is_primary_key
+                self.is_primary_key,
+                ordering
             ]
         )?;
         self.oid = conn.last_insert_rowid();
@@ -209,9 +221,17 @@ WHERE OID = ?5
 
     /// Sets the ordering for the column.
     /// Returns the old ordering that was overwritten.
-    pub fn set_ordering(&self, ordering: Option<i64>) -> Result<i64, Error> {
+    pub fn set_ordering(&self, ordering: Option<i64>) -> Result<(i64, i64), Error> {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
+
+        // Query for the OID of the report that owns the column being replaced
+        let report_oid: i64 = sql_one(
+            &trans, 
+            "SELECT REPORT_OID FROM METADATA_REPORT_COLUMN WHERE OID = ?1", 
+            params![self.oid], 
+            |row| row.get("REPORT_OID")
+        )?;
 
         // Query for the old ordering of the column
         let old_ordering: i64 = sql_one(
@@ -255,7 +275,7 @@ WHERE OID = ?1
 
         // Commit the transaction
         trans.commit()?;
-        Ok(old_ordering)
+        Ok((report_oid, old_ordering))
     }
 
     /// Replaces a column.

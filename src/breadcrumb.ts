@@ -1,18 +1,18 @@
 export type TablePageBreadcrumb = {
-    key: 'table',
+    page: 'table',
     name: string,
     tableOid: number 
 };
 
 export type ReportPageBreadcrumb = {
-    key: 'report',
+    page: 'report',
     name: string,
     reportOid: number,
     oidFilters: [string, number[]][]
 };
 
 export type ObjectPageBreadcrumb = {
-    key: 'object',
+    page: 'object',
     name: string,
     tableOid: number,
     rowOid: number

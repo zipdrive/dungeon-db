@@ -321,7 +321,10 @@ export function ReportPage(props: ReportPageProps): React.JSX.Element {
                     ['index', row.index],
                     ['blank', null]
                 ] as {[K in keyof ReportRowData]: [K, ReportRowData[K]]}[keyof ReportRowData][])
-                .concat(row.cells.map<[`column${number}`, ReportCell]>((cell) => [`column${cell.columnOid}`, cell]))
+                .concat(row.cells.map<[`column${number}`, ReportCell]>((cell) => {
+                    console.log(cell);
+                    return [`column${cell.columnOid}`, cell];
+                }))
             );
         });
     }, [rowList]);

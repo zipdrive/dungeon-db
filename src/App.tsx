@@ -133,7 +133,7 @@ function App() {
       onClosePopup,
       onError,
     }); 
-  }, []);
+  }, [onOpenPopup, onClosePopup, onError]);
 
   /**
    * Opens a popup to create a new report.
@@ -144,7 +144,7 @@ function App() {
       onClosePopup,
       onError,
     }); 
-  }, []);
+  }, [onOpenPopup, onClosePopup, onError]);
 
   /**
    * Opens a popup to edit an existing table.
@@ -156,7 +156,7 @@ function App() {
       onClosePopup,
       onError,
     }); 
-  }, []);
+  }, [onOpenPopup, onClosePopup, onError]);
 
   /**
    * Opens a popup to edit an existing report.
@@ -168,7 +168,7 @@ function App() {
       onClosePopup,
       onError,
     }); 
-  }, []);
+  }, [onOpenPopup, onClosePopup, onError]);
 
   /**
    * Opens a popup to create a new table column.
@@ -181,7 +181,7 @@ function App() {
       onClosePopup,
       onError,
     }); 
-  }, []);
+  }, [onOpenPopup, onClosePopup, onError]);
 
   /**
    * Opens a popup to edit an existing table column.
@@ -193,7 +193,7 @@ function App() {
       onClosePopup,
       onError,
     }); 
-  }, []);
+  }, [onOpenPopup, onClosePopup, onError]);
 
   /**
    * Opens a popup to create a new report column.
@@ -206,7 +206,7 @@ function App() {
       onClosePopup,
       onError,
     }); 
-  }, []);
+  }, [onOpenPopup, onClosePopup, onError]);
 
   /**
    * Opens a popup to edit an existing table column.
@@ -218,7 +218,7 @@ function App() {
       onClosePopup,
       onError,
     }); 
-  }, []);
+  }, [onOpenPopup, onClosePopup, onError]);
 
   /**
    * Opens a popup to manage how a file is uploaded.
@@ -232,7 +232,7 @@ function App() {
       onClosePopup,
       onError,
     });
-  }, []);
+  }, [onOpenPopup, onClosePopup, onError]);
 
   return (
     <main>

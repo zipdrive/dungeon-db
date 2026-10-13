@@ -269,7 +269,7 @@ impl Expression {
         let table: TableMetadata = TableMetadata::conn_find(conn, table_name)?;
 
         // Check for if immediately followed by backreference expression
-        let where1_regex: Regex = Regex::new(r#"(?is)^\s*where\s+([A-Za-z0-9_]*)\s*=\s*(.*)"#).unwrap();
+        let where1_regex: Regex = Regex::new(r#"(?is)^\s*where\s+([A-Za-z0-9_]+)\s*=\s*(.*)"#).unwrap();
         if let Some(cap) = where1_regex.captures(remaining_str) {
             let (_, [column_name, following]) = cap.extract();
             let (_, column) = TableColumnMetadata::conn_find(conn, table.oid.clone(), String::from(column_name))?;
@@ -306,7 +306,7 @@ impl Expression {
     /// Parses if there is an expression dependent on this one (e.g. a binary operator, a column reference).
     fn conn_parse_dependent_expr(self, conn: &Connection, full_str: &String, remaining_str: &str) -> Result<(Self, String), Error> {
         // Check for reference
-        let reference1_regex: Regex = Regex::new(r#"(?is)^\s*\.\s*([A-Za-z0-9_]*)\s*(.*)""#).unwrap();
+        let reference1_regex: Regex = Regex::new(r#"(?is)^\s*\.\s*([A-Za-z0-9_]+)\s*(.*)"#).unwrap();
         if let Some(reference_cap) = reference1_regex.captures(remaining_str) {
             let (_, [column_name, following]) = reference_cap.extract();
             let record = self.into_record()?;
@@ -719,7 +719,7 @@ impl Expression {
         }
 
         // Check for table name expression
-        let table1_regex: Regex = Regex::new(r#"(?is)^\s*([A-Za-z0-9_]*)\s*(.*)""#).unwrap();
+        let table1_regex: Regex = Regex::new(r#"(?is)^\s*([A-Za-z0-9_]+)\s*(.*)"#).unwrap();
         if let Some(table_cap) = table1_regex.captures(remaining_str) {
             let (_, [table_name, following]) = table_cap.extract();
             return Self::conn_parse_backreference_expr(conn, full_str, following, String::from(table_name));

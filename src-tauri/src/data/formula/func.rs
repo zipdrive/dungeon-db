@@ -345,10 +345,10 @@ impl Func {
             Self::Column { record, table_oid, column } => {
                 let alias: String = record.alias();
                 FuncSql {
-                    value_expr: format!("{alias}_COLUMN{}", column.name),
+                    value_expr: format!("{alias}_COLUMN{}", column.oid),
                     reference_expr: format!(
                         "('{};' || COALESCE('{table_oid}:{}:' || CAST({} AS TEXT), ''))",
-                        column.column_type.name(),
+                        column.column_type.id(),
                         column.oid,
                         if record.table_oid()? == *table_oid {
                             format!("{alias}_OID")

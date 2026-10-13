@@ -52,13 +52,13 @@ export function Page(props: PageProps): React.JSX.Element {
         if (props.schema !== null) {
             if (props.schema[0] === 'table') {
                 setPageBreadcrumbs([{
-                    key: 'table',
+                    page: 'table',
                     tableOid: props.schema[1],
                     name: props.schema[2]
                 }]);
             } else {
                 setPageBreadcrumbs([{
-                    key: 'report',
+                    page: 'report',
                     reportOid: props.schema[1],
                     name: props.schema[2],
                     oidFilters: []
@@ -90,7 +90,7 @@ export function Page(props: PageProps): React.JSX.Element {
                         </>);
                     })}
                 </Breadcrumb>
-                {lastPageBreadcrumb.key === 'table' && <TablePage
+                {lastPageBreadcrumb.page === 'table' && <TablePage
                     {...lastPageBreadcrumb}
                     onRequestCreateTableColumn={props.onRequestCreateTableColumn}
                     onRequestEditTableColumn={props.onRequestEditTableColumn}
@@ -99,7 +99,7 @@ export function Page(props: PageProps): React.JSX.Element {
                     onRequestOpenObject={openObjectPage}
                     onError={props.onError}
                 />}
-                {lastPageBreadcrumb.key === 'report' && <ReportPage
+                {lastPageBreadcrumb.page === 'report' && <ReportPage
                     {...lastPageBreadcrumb}
                     onRequestCreateReportColumn={props.onRequestCreateReportColumn}
                     onRequestEditReportColumn={props.onRequestEditReportColumn}
@@ -108,7 +108,7 @@ export function Page(props: PageProps): React.JSX.Element {
                     onRequestOpenObject={openObjectPage}
                     onError={props.onError}
                 />}
-                {lastPageBreadcrumb.key === 'object' && (<ObjectPage 
+                {lastPageBreadcrumb.page === 'object' && (<ObjectPage 
                     {...lastPageBreadcrumb}
                     onRequestEditTableColumn={props.onRequestEditTableColumn}
                     onRequestUploadFile={props.onRequestUploadFile}

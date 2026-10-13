@@ -56,7 +56,7 @@ impl RecordFuncCte {
                         TableColumnType::Object { table_oid, .. }
                         | TableColumnType::SingleSelect { table_oid, .. } => {
                             Self {
-                                join: format!("LEFT JOIN {alias} ON t.COLUMN{} = {alias}_OID", column.oid),
+                                join: format!("LEFT JOIN CTE_{alias} ON t.COLUMN{} = {alias}_OID", column.oid),
                                 table_oid,
                                 alias,
                                 cte: HashSet::new(),
@@ -68,7 +68,7 @@ impl RecordFuncCte {
                                 join: format!(
                                     "
 LEFT JOIN MULTISELECT{} ON t.OID = MULTISELECT{}.SOURCE_OID 
-LEFT JOIN {alias} ON MULTISELECT{}.TARGET_OID = {alias}_OID
+LEFT JOIN CTE_{alias} ON MULTISELECT{}.TARGET_OID = {alias}_OID
                                     ",
                                     column.oid,
                                     column.oid,
@@ -90,7 +90,7 @@ LEFT JOIN {alias} ON MULTISELECT{}.TARGET_OID = {alias}_OID
                         TableColumnType::Object { table_oid, .. }
                         | TableColumnType::SingleSelect { table_oid, .. } => {
                             Self {
-                                join: format!("LEFT JOIN {alias} ON t.OID = {alias}_COLUMN{}", column.oid),
+                                join: format!("LEFT JOIN CTE_{alias} ON t.OID = {alias}_COLUMN{}", column.oid),
                                 table_oid,
                                 alias,
                                 cte: HashSet::new(),
@@ -102,7 +102,7 @@ LEFT JOIN {alias} ON MULTISELECT{}.TARGET_OID = {alias}_OID
                                 join: format!(
                                     "
 LEFT JOIN MULTISELECT{} ON t.OID = MULTISELECT{}.SOURCE_OID 
-LEFT JOIN {alias} ON MULTISELECT{}.TARGET_OID = {alias}_OID
+LEFT JOIN CTE_{alias} ON MULTISELECT{}.TARGET_OID = {alias}_OID
                                     ",
                                     column.oid,
                                     column.oid,
@@ -121,7 +121,7 @@ LEFT JOIN {alias} ON MULTISELECT{}.TARGET_OID = {alias}_OID
                 }
                 RecordFunc::Cast { table, .. } => {
                     Self {
-                        join: format!("LEFT JOIN {alias} ON t.OID = {alias}_MASTER{}_OID", self.table_oid),
+                        join: format!("LEFT JOIN CTE_{alias} ON t.OID = {alias}_MASTER{}_OID", self.table_oid),
                         table_oid: table.oid,
                         alias,
                         cte: HashSet::new(),
@@ -161,7 +161,7 @@ LEFT JOIN {alias} ON MULTISELECT{}.TARGET_OID = {alias}_OID
     pub fn sql(&self) -> String {
         let sql: String = format!(
             "
-{} AS (
+CTE_{} AS (
     SELECT 
         {}
     {}
@@ -173,7 +173,7 @@ LEFT JOIN {alias} ON MULTISELECT{}.TARGET_OID = {alias}_OID
                     self.cte.iter()
                         .fold(
                             format!("t.OID AS {}_OID", self.alias),
-                            |acc, e| format!("{acc}, {}.*", e.alias)
+                            |acc, e| format!("{acc}, CTE_{}.*", e.alias)
                         ), 
                     |acc, e| format!("{acc}, {e}")
                 ),
@@ -253,11 +253,11 @@ WRAPPER AS (
     {}
 )
             ",
-            match self.cte.iter().map(|e| format!("{}.*", e.alias)).reduce(|acc, e| format!("{acc}, {e}")) {
+            match self.cte.iter().map(|e| format!("CTE_{}.*", e.alias)).reduce(|acc, e| format!("{acc}, {e}")) {
                 Some(columns) => columns,
                 None => String::from("NULL")
             },
-            match self.cte.iter().map(|j| j.alias.clone()).reduce(|acc, e| format!("{acc}, {e}")) {
+            match self.cte.iter().map(|j| format!("CTE_{}", j.alias)).reduce(|acc, e| format!("{acc}, {e}")) {
                 Some(sources) => format!("FROM {sources}"),
                 None => String::from("WHERE FALSE")
             }

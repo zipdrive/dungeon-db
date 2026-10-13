@@ -39,6 +39,7 @@ enum ParsedReportColumn {
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all="camelCase")]
 pub struct ReportCell {
     pub column_oid: i64,
     pub reference: Option<TableCellReference>,
@@ -46,6 +47,7 @@ pub struct ReportCell {
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all="camelCase")]
 pub struct ReportRow {
     pub oid_filters: Vec<(String, Vec<i64>)>,
     pub index: i64,
@@ -124,13 +126,13 @@ impl ReportRow {
         // Determine which records are to be automatically excluded from groupings
         if let Some(filter_func) = &filter_func {
             for (record, table_oid, col) in filter_func.get_nonaggregated_columns() {
-                query.add_column(&record.linearize(), table_oid, col.name)?;
+                query.add_column(&record.linearize(), table_oid, format!("COLUMN{}", col.oid))?;
             }
         }
         for column in columns.iter() {
             if let ParsedReportColumn::Formula { func, .. } = column {
                 for (record, table_oid, col) in func.get_nonaggregated_columns() {
-                    query.add_column(&record.linearize(), table_oid, col.name)?;
+                    query.add_column(&record.linearize(), table_oid, format!("COLUMN{}", col.oid))?;
                 }
             }
         }
@@ -140,12 +142,17 @@ impl ReportRow {
         for column in columns.iter() {
             if let ParsedReportColumn::Formula { func, .. } = column {
                 for (record, table_oid, col) in func.get_all_columns() {
-                    query.add_column(&record.linearize(), table_oid, col.name)?;
+                    query.add_column(&record.linearize(), table_oid, format!("COLUMN{}", col.oid))?;
                 }
             }
         }
         let cte: String = query.sql();
         let all_oids = query.oid_filters();
+
+        if all_oids.len() == 0 {
+            // No OIDs means there are no tables being selected from
+            return Ok(());
+        }
 
         // Construct the SQL query
         let sql: String = format!(

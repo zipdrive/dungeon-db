@@ -7,8 +7,8 @@ import { CreateTablePopup, CreateTablePopupProps } from "./CreateTablePopup";
 import { CreateReportPopup, CreateReportPopupProps } from "./CreateReportPopup";
 import { EditTablePopup, EditTablePopupProps } from "./EditTablePopup";
 import { EditReportPopup, EditReportPopupProps } from "./EditReportPopup";
-import { CreateReportColumnPopupProps } from "./CreateReportColumnPopup";
-import { EditReportColumnPopupProps } from "./EditReportColumnPopup";
+import { CreateReportColumnPopup, CreateReportColumnPopupProps } from "./CreateReportColumnPopup";
+import { EditReportColumnPopup, EditReportColumnPopupProps } from "./EditReportColumnPopup";
 import { ExportJsonPopup, ExportJsonPopupProps } from "./ExportJsonPopup";
 
 export type PopupBreadcrumb = 
@@ -40,6 +40,8 @@ export function Popup(props: PopupProps): React.JSX.Element {
                         {popup.popup === 'editReport' && <EditReportPopup {...popup} />}
                         {popup.popup === 'createTableColumn' && <CreateTableColumnPopup {...popup} />}
                         {popup.popup === 'editTableColumn' && <EditTableColumnPopup {...popup} />}
+                        {popup.popup === 'createReportColumn' && <CreateReportColumnPopup {...popup} />}
+                        {popup.popup === 'editReportColumn' && <EditReportColumnPopup {...popup} />}
                         {popup.popup === 'exportJson' && <ExportJsonPopup {...popup} />}
                         {popup.popup === 'uploadFile' && <FilePopup {...popup} />}
                     </Dialog.Content>

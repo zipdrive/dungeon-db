@@ -8,7 +8,7 @@ import { useState, useEffect, useTransition } from "react";
 import { executeAsync } from "../api/action";
 import { TableColumnBaseType, TableColumnType } from "../api/model/tableColumn";
 import { listen } from "@tauri-apps/api/event";
-import { queryAsync } from "../api/query";
+import { checkFormula, queryAsync } from "../api/query";
 import { Channel } from "@tauri-apps/api/core";
 import Form from "./form/Form";
 import { TableListItem } from "../api/model/table";
@@ -74,7 +74,13 @@ export function CreateReportColumnPopup(props: CreateReportColumnPopupProps): Re
         switch (columnBaseType) {
             case 'formula':
                 if (formula) {
-                    columnType = { formula: { oid: 0, formula }};
+                    const result = await checkFormula(formula);
+                    if (result.success) {
+                        columnType = { formula: { oid: 0, formula }};
+                    } else {
+                        setConfirmAlert(result.msg);
+                        return false;
+                    }
                 } else {
                     setConfirmAlert('"Formula" is a required field if column type "Formula" is selected!');
                     return false;

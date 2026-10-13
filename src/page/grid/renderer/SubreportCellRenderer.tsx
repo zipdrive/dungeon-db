@@ -54,7 +54,7 @@ export class SubreportCellRenderer implements ICellRendererComp {
                 if (cell && content) {
                     const columnMetadata = await getTableColumnMetadataAsync(cell.columnOid);
                     onRequestOpenDrillDownReport({
-                        key: 'report',
+                        page: 'report',
                         name: columnMetadata.name,
                         reportOid: content.reportOid,
                         oidFilters: content.oidFilters

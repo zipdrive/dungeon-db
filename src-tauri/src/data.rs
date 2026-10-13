@@ -237,7 +237,6 @@ impl QueryStream {
 #[tauri::command]
 /// Sends data through a channel from the backend to the frontend.
 pub async fn query(app: AppHandle, webview: Webview, query: QueryStream) -> Result<(), Error> {
-    println!("Querying...");
     query.send(app, webview)
 }
 
@@ -283,6 +282,15 @@ pub fn get_row(table_oid: i64, row_oid: i64) -> Result<(Vec<(i64, table::column:
 /// Gets the table, columns, and cells of an Object.
 pub fn get_object_row(table_oid: i64, row_oid: i64) -> Result<(i64, Vec<(i64, table::column::TableColumnMetadata)>, table::row::TableRow), Error> {
     table::row::TableRow::get_object(table_oid, row_oid)
+}
+
+
+
+#[tauri::command]
+/// Checks if a formula is valid. Throws an error if not.
+pub fn check_formula(formula: String) -> Result<(), Error> {
+    formula::func::Func::parse(formula)?;
+    Ok(())
 }
 
 
@@ -659,7 +667,7 @@ impl Action {
 
                 // Adjust the ordering of the column
                 if let Some(ordering) = ordering {
-                    let old_ordering = metadata.set_ordering(Some(ordering))?;
+                    let (_, old_ordering) = metadata.set_ordering(Some(ordering))?;
                     record_action(
                         Self::EditReportColumnOrdering { 
                             metadata, 
@@ -669,7 +677,8 @@ impl Action {
                     );
                 }
 
-                // Emit signal to update report
+                // Send signal to update report
+                app.emit("report", report_oid)?;
             }
             Self::ReplaceReportColumn { old_metadata, mut new_metadata } => {
                 // Update the column
@@ -683,11 +692,12 @@ impl Action {
                     is_forward,
                 );
 
-                // Emit signal to update report
+                // Send signal to update report
+                app.emit("report", report_oid)?;
             }
             Self::EditReportColumnMetadata { metadata } => {
                 // Overwrite the old metadata
-                let (_, old_metadata) = report::column::ReportColumnMetadata::get(metadata.oid)?;
+                let (report_oid, old_metadata) = report::column::ReportColumnMetadata::get(metadata.oid)?;
                 metadata.set_metadata()?;
                 record_action(
                     Self::EditReportColumnMetadata {
@@ -696,11 +706,12 @@ impl Action {
                     is_forward,
                 );
 
-                // Emit signal to update report
+                // Send signal to update report
+                app.emit("report", report_oid)?;
             }
             Self::EditReportColumnOrdering { metadata, ordering } => {
                 // Update the column style
-                let old_column_ordering = metadata.set_ordering(ordering)?;
+                let (report_oid, old_column_ordering) = metadata.set_ordering(ordering)?;
                 record_action(
                     Self::EditReportColumnOrdering {
                         metadata: metadata.clone(),
@@ -709,7 +720,8 @@ impl Action {
                     is_forward,
                 );
 
-                // Emit signal to update report
+                // Send signal to update report
+                app.emit("report", report_oid)?;
             }
             Self::TrashReportColumn { report_oid, column_oid } => {
                 // Flag the column for garbage collection
@@ -722,7 +734,8 @@ impl Action {
                     is_forward,
                 );
 
-                // Emit signal to update report
+                // Send signal to update report
+                app.emit("report", report_oid)?;
             }
             Self::UntrashReportColumn { report_oid, column_oid } => {
                 // Unflag the column for garbage collection
@@ -735,7 +748,8 @@ impl Action {
                     is_forward,
                 );
 
-                // Emit signal to update report
+                // Send signal to update report
+                app.emit("report", report_oid)?;
             }
             Self::RestoreReportColumn { report_oid, trash_column_oid, untrash_column_oid } => {
                 // Unflag the old column for garbage collection, and flag the new column in its place
@@ -753,7 +767,8 @@ impl Action {
                     is_forward,
                 );
 
-                // Emit signal to update report
+                // Send signal to update report
+                app.emit("report", report_oid)?;
             }
 
 
