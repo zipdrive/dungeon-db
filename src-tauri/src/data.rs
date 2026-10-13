@@ -902,10 +902,19 @@ pub async fn redo(app: AppHandle) -> Result<(), Error> {
 
 #[tauri::command]
 /// Exports schemas in JSON file format.
-pub async fn export_json(app: AppHandle, filepath: String, schemas: Vec<export::json::ExportSchema>) -> Result<(), Error> {
-    export::json::export(
-        Sender::Event(&app, "progress"),
-        filepath,
-        schemas
-    )
+pub async fn export_json(app: AppHandle, schemas: Vec<export::json::ExportSchema>, type_column: Option<String>) -> Result<(), Error> {
+    if let Some(file_path) = app
+        .dialog()
+        .file()
+        .add_filter("JSON (*.json)", &["json"])
+        .blocking_save_file()
+    {
+        export::json::export(
+            Sender::Event(&app, "progress"),
+            file_path.to_string(),
+            schemas,
+            type_column
+        )?;
+    }
+    Ok(())
 }

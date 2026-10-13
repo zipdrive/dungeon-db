@@ -33,6 +33,25 @@ function App() {
     }
   }, []);
 
+
+  const [popups, setPopups] = useState<PopupBreadcrumb[]>([]);
+
+  /**
+   * Opens a popup.
+   */
+  const onOpenPopup = useCallback((popup: PopupBreadcrumb) => {
+    setPopups((oldPopups) => oldPopups.concat([popup]));
+  }, []);
+
+  /**
+   * Closes the current popup.
+   */
+  const onClosePopup = useCallback(() => {
+    setPopups((oldPopups) => oldPopups.slice(0, oldPopups.length - 1));
+  }, []);
+
+
+
   useEffect(() => {
     (async () => {
       const menu = await Menu.new({
@@ -79,6 +98,21 @@ function App() {
                     onError(e);
                   }
                 }
+              }),
+              await Submenu.new({
+                text: "Export",
+                items: [
+                  await MenuItem.new({
+                    text: "JSON",
+                    action: () => {
+                      onOpenPopup({
+                        popup: 'exportJson',
+                        onClosePopup,
+                        onError
+                      });
+                    }
+                  })
+                ]
               })
             ]
           })
@@ -86,24 +120,9 @@ function App() {
       });
       await menu.setAsAppMenu();
     })();
-  }, [onError]);
+  }, [onError, onOpenPopup, onClosePopup]);
 
   const [selectedSchema, setSelectedSchema] = useState<['table' | 'report', number, string] | null>(null);
-  const [popups, setPopups] = useState<PopupBreadcrumb[]>([]);
-
-  /**
-   * Opens a popup.
-   */
-  const onOpenPopup = useCallback((popup: PopupBreadcrumb) => {
-    setPopups((oldPopups) => oldPopups.concat([popup]));
-  }, []);
-
-  /**
-   * Closes the current popup.
-   */
-  const onClosePopup = useCallback(() => {
-    setPopups((oldPopups) => oldPopups.slice(0, oldPopups.length - 1));
-  }, []);
 
   /**
    * Opens a popup to create a new table.

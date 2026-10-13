@@ -108,3 +108,5 @@ export type Action = {
 export async function executeAsync(action: Action): Promise<void> {
     return await invoke('execute', { action: action });
 }
+
+
