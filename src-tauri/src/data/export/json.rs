@@ -19,7 +19,7 @@ use std::path::Path;
 #[serde(rename_all="camelCase", rename_all_fields="camelCase")]
 pub enum ExportPolymorphism {
     No,
-    Yes { type_column: Option<String> },
+    Yes
 }
 
 #[derive(Deserialize)]
@@ -54,6 +54,7 @@ fn construct_value(
     conn: &Connection,
     columns_by_table: &mut HashMap<i64, Vec<(i64, TableColumnMetadata)>>,
     columns_by_report: &mut HashMap<i64, Vec<ReportColumnMetadata>>,
+    type_column: &Option<String>,
     content: TableCellContent
 ) -> Result<Value, Error> {
     Ok(match content {
@@ -74,11 +75,11 @@ fn construct_value(
                     conn, 
                     columns_by_table, 
                     columns_by_report,
+                    type_column,
                     &table_oid, 
                     row_oid, 
                     &None,
-                    &None,
-                    &Some(String::from("$type"))
+                    &None
                 )?
             }
             None => json!(None::<Value>)
@@ -89,6 +90,7 @@ fn construct_value(
                 conn, 
                 columns_by_table, 
                 columns_by_report, 
+                type_column,
                 report_oid, 
                 oid_filters, 
                 None
@@ -119,6 +121,7 @@ fn construct_table_row_json_object(
     row: TableRow,
     columns_by_table: &mut HashMap<i64, Vec<(i64, TableColumnMetadata)>>,
     columns_by_report: &mut HashMap<i64, Vec<ReportColumnMetadata>>,
+    type_column: &Option<String>,
     table_oid: &i64,
     index_column: &Option<String>,
     oid_column: &Option<String>,
@@ -161,7 +164,7 @@ fn construct_table_row_json_object(
         }
 
         // Insert value for cell into map
-        map.insert(column_name, construct_value(conn, columns_by_table, columns_by_report, cell.content)?);
+        map.insert(column_name, construct_value(conn, columns_by_table, columns_by_report, type_column, cell.content)?);
     }
 
     // Add any custom columns
@@ -179,6 +182,7 @@ fn construct_report_row_json_object(
     row: ReportRow,
     columns_by_table: &mut HashMap<i64, Vec<(i64, TableColumnMetadata)>>,
     columns_by_report: &mut HashMap<i64, Vec<ReportColumnMetadata>>,
+    type_column: &Option<String>,
     report_oid: &i64,
     index_column: &Option<String>
 ) -> Result<Value, Error> {
@@ -211,7 +215,7 @@ fn construct_report_row_json_object(
         }
 
         // Insert value for cell into map
-        map.insert(column_name, construct_value(conn, columns_by_table, columns_by_report, cell.content)?);
+        map.insert(column_name, construct_value(conn, columns_by_table, columns_by_report, type_column, cell.content)?);
     }
 
     // Return the serialized map
@@ -223,11 +227,11 @@ fn export_object_row_json_object(
     conn: &Connection,
     columns_by_table: &mut HashMap<i64, Vec<(i64, TableColumnMetadata)>>,
     columns_by_report: &mut HashMap<i64, Vec<ReportColumnMetadata>>,
+    type_column: &Option<String>,
     table_oid: &i64,
     row_oid: i64,
     index_column: &Option<String>,
     oid_column: &Option<String>,
-    type_column: &Option<String>,
 ) -> Result<Value, Error> {
     let (table_oid, column_tuples, row) = TableRow::conn_get_object(conn, table_oid.clone(), row_oid)?;
 
@@ -245,6 +249,7 @@ fn export_object_row_json_object(
         row, 
         columns_by_table, 
         columns_by_report,
+        type_column,
         &table_oid, 
         index_column, 
         oid_column,
@@ -263,10 +268,10 @@ fn export_table_by_row(
     conn: &Connection,
     columns_by_table: &mut HashMap<i64, Vec<(i64, TableColumnMetadata)>>,
     columns_by_report: &mut HashMap<i64, Vec<ReportColumnMetadata>>,
+    type_column: &Option<String>,
     table_oid: i64,
     index_column: Option<String>,
-    oid_column: Option<String>,
-    type_column: Option<String>,
+    oid_column: Option<String>
 ) -> Result<Value, Error> {
     let mut array_rows: Vec<Value> = Vec::new();
 
@@ -282,11 +287,11 @@ fn export_table_by_row(
                 conn,
                 columns_by_table,
                 columns_by_report,
+                type_column,
                 &table_oid,
                 row_oid,
                 &index_column,
-                &oid_column,
-                &type_column,
+                &oid_column
             )?);
             Ok(None::<()>)
         }
@@ -299,6 +304,7 @@ fn export_table_batch(
     conn: &Connection,
     columns_by_table: &mut HashMap<i64, Vec<(i64, TableColumnMetadata)>>,
     columns_by_report: &mut HashMap<i64, Vec<ReportColumnMetadata>>,
+    type_column: &Option<String>,
     table_oid: i64,
     index_column: Option<String>,
     oid_column: Option<String>,
@@ -328,6 +334,7 @@ fn export_table_batch(
                     row, 
                     columns_by_table, 
                     columns_by_report,
+                    type_column,
                     &table_oid, 
                     &index_column, 
                     &oid_column, 
@@ -347,6 +354,7 @@ fn export_table(
     conn: &Connection,
     columns_by_table: &mut HashMap<i64, Vec<(i64, TableColumnMetadata)>>,
     columns_by_report: &mut HashMap<i64, Vec<ReportColumnMetadata>>,
+    type_column: &Option<String>,
     table_oid: i64,
     polymorphism: ExportPolymorphism,
     index_column: Option<String>,
@@ -359,21 +367,22 @@ fn export_table(
                 conn,
                 columns_by_table,
                 columns_by_report,
+                type_column,
                 table_oid,
                 index_column,
                 oid_column,
             )
         }
-        ExportPolymorphism::Yes { type_column } => {
+        ExportPolymorphism::Yes => {
             // Export rows of table individually
             export_table_by_row(
                 conn,
                 columns_by_table,
                 columns_by_report,
+                type_column,
                 table_oid,
                 index_column,
                 oid_column,
-                type_column,
             )
         }
     }
@@ -383,6 +392,7 @@ fn export_report(
     conn: &Connection,
     columns_by_table: &mut HashMap<i64, Vec<(i64, TableColumnMetadata)>>,
     columns_by_report: &mut HashMap<i64, Vec<ReportColumnMetadata>>,
+    type_column: &Option<String>,
     report_oid: i64,
     oid_filters: Vec<(String, Vec<i64>)>,
     index_column: Option<String>
@@ -409,6 +419,7 @@ fn export_report(
                     row, 
                     columns_by_table,
                     columns_by_report, 
+                    type_column,
                     &report_oid, 
                     &index_column
                 )?
@@ -423,7 +434,7 @@ fn export_report(
 }
 
 /// Exports schemas in JSON format.
-pub fn export(mut channel: channel::Sender<(f64, String)>, filepath: String, schemas: Vec<ExportSchema>) -> Result<(), Error> {
+pub fn export(mut channel: channel::Sender<(f64, String)>, filepath: String, schemas: Vec<ExportSchema>, type_column: Option<String>) -> Result<(), Error> {
     let progress_by_item: f64 = 1.0 / (schemas.len() as f64);
     let mut columns_by_table: HashMap<i64, Vec<(i64, TableColumnMetadata)>> = HashMap::new();
     let mut columns_by_report: HashMap<i64, Vec<ReportColumnMetadata>> = HashMap::new();
@@ -440,10 +451,10 @@ pub fn export(mut channel: channel::Sender<(f64, String)>, filepath: String, sch
         // Do the serialization
         let schema_rows = match schema {
             ExportSchema::Table { table_oid, polymorphism, index_column, oid_column, .. } => {
-                export_table(&conn, &mut columns_by_table, &mut columns_by_report, table_oid, polymorphism, index_column, oid_column)?
+                export_table(&conn, &mut columns_by_table, &mut columns_by_report, &type_column, table_oid, polymorphism, index_column, oid_column)?
             }
             ExportSchema::Report { report_oid, index_column, .. } => {
-                export_report(&conn, &mut columns_by_table, &mut columns_by_report, report_oid, Vec::new(), index_column)?
+                export_report(&conn, &mut columns_by_table, &mut columns_by_report, &type_column, report_oid, Vec::new(), index_column)?
             }
         };
         map.insert(schema_name, schema_rows);
