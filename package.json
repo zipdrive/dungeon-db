@@ -21,6 +21,8 @@
     "ag-grid-react": "^36.1.0",
     "choices.js": "^11.2.4",
     "classnames": "^2.5.1",
+    "dompurify": "^3.4.17",
+    "marked": "^18.1.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-spreadsheet": "^0.10.1",

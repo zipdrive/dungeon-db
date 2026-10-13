@@ -106,13 +106,13 @@ export function EditTableColumnPopup(props: EditTableColumnPopupProps): React.JS
             setDefaultValue('');
             setRefTable(props.columnMetadata.columnType.object.tableOid.toString());
             setRefReport(undefined);
-        } else if ('select' in props.columnMetadata.columnType) {
-            setColumnBaseType('select');
+        } else if ('singleSelect' in props.columnMetadata.columnType) {
+            setColumnBaseType('singleSelect');
             setDefaultValue('');
             setRefTable(props.columnMetadata.columnType.singleSelect.tableOid.toString());
             setRefReport(undefined);
-        } else if ('multiselect' in props.columnMetadata.columnType) {
-            setColumnBaseType('multiselect');
+        } else if ('multiSelect' in props.columnMetadata.columnType) {
+            setColumnBaseType('multiSelect');
             setDefaultValue('');
             setRefTable(props.columnMetadata.columnType.multiSelect.tableOid.toString());
             setRefReport(undefined);
@@ -176,7 +176,7 @@ export function EditTableColumnPopup(props: EditTableColumnPopupProps): React.JS
             case 'singleSelect':
                 if (refTable !== undefined) {
                     columnType = { singleSelect: { oid: 0, tableOid: parseInt(refTable) }};
-                    hasColumnTypeChanged = !('select' in props.columnMetadata.columnType)
+                    hasColumnTypeChanged = !('singleSelect' in props.columnMetadata.columnType)
                         || props.columnMetadata.columnType.singleSelect.tableOid !== columnType.singleSelect.tableOid;
                 } else {
                     setConfirmAlert('"Table" is a required field if column type "Single-Select Dropdown" is selected!');
@@ -186,7 +186,7 @@ export function EditTableColumnPopup(props: EditTableColumnPopupProps): React.JS
             case 'multiSelect':
                 if (refTable !== undefined) {
                     columnType = { multiSelect: { oid: 0, tableOid: parseInt(refTable) }};
-                    hasColumnTypeChanged = !('multiselect' in props.columnMetadata.columnType)
+                    hasColumnTypeChanged = !('multiSelect' in props.columnMetadata.columnType)
                         || props.columnMetadata.columnType.multiSelect.tableOid !== columnType.multiSelect.tableOid;
                 } else {
                     setConfirmAlert('"Table" is a required field if column type "Multi-Select Dropdown" is selected!');
@@ -264,10 +264,12 @@ export function EditTableColumnPopup(props: EditTableColumnPopupProps): React.JS
                                 { value: 'date', label: "Date", disabled: false },
                                 { value: 'datetime', label: "Datetime", disabled: false },
                                 { value: 'object', label: "Object", disabled: refTableList.length == 0 },
-                                { value: 'select', label: "Single-Select Dropdown", disabled: refTableList.length == 0 },
-                                { value: 'multiselect', label: "Multi-Select Dropdown", disabled: refTableList.length == 0 },
+                                { value: 'singleSelect', label: "Single-Select Dropdown", disabled: refTableList.length == 0 },
+                                { value: 'multiSelect', label: "Multi-Select Dropdown", disabled: refTableList.length == 0 },
                                 { value: 'file', label: "File", disabled: false },
                                 { value: 'textJson', label: "JSON", disabled: false },
+                                { value: 'textMarkdown', label: "Markdown Text", disabled: false },
+                                { value: 'textBBCode', label: "BBCode Text", disabled: false },
                                 { value: 'subreport', label: "Drill-Down Report", disabled: refReportList.length == 0 },
                             ]}
                             onSetValue={setColumnBaseType}
@@ -289,8 +291,8 @@ export function EditTableColumnPopup(props: EditTableColumnPopupProps): React.JS
                             onSetValue={setDefaultValue} 
                         />)}
                         {(columnBaseType === 'object'
-                            || columnBaseType === 'select'
-                            || columnBaseType === 'multiselect'
+                            || columnBaseType === 'singleSelect'
+                            || columnBaseType === 'multiSelect'
                         ) && (<Form.SelectField 
                             label="Table" 
                             value={refTable} 

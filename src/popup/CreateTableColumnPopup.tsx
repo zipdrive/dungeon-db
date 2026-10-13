@@ -200,6 +200,8 @@ export function CreateTableColumnPopup(props: CreateTableColumnPopupProps): Reac
                                 { value: 'multiSelect', label: "Multi-Select Dropdown", disabled: refTableList.length == 0 },
                                 { value: 'file', label: "File", disabled: false },
                                 { value: 'textJson', label: "JSON", disabled: false },
+                                { value: 'textMarkdown', label: "Markdown Text", disabled: false },
+                                { value: 'textBBCode', label: "BBCode Text", disabled: false },
                                 { value: 'subreport', label: "Drill-Down Report", disabled: refReportList.length == 0 },
                             ]}
                             onSetValue={setColumnBaseType}

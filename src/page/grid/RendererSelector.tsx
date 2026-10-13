@@ -10,11 +10,43 @@ import { ObjectPageBreadcrumb, ReportPageBreadcrumb } from '../../breadcrumb';
 import { SingleSelectCellRenderer } from './renderer/SingleSelectCellRenderer';
 import { MultiSelectCellRenderer } from './renderer/MultiSelectCellRenderer';
 import { ReportCell } from '../../api/model/reportRow';
+import { MarkdownTextCellRenderer } from './renderer/MarkdownTextCellRenderer';
+import { JsonTextCellRenderer } from './renderer/JsonTextCellRenderer';
+import { XmlTextCellRenderer } from './renderer/XmlTextCellRenderer';
+import { BBCodeTextCellRenderer } from './renderer/BBCodeTextCellRenderer';
 
 export function selectRenderer(cell: TableCell | ReportCell, dropdownValues: {[tableOid: number]: TableRowLabel[]}, onRequestOpenDrillDownReport: (report: ReportPageBreadcrumb) => void, onRequestOpenObject: (object: ObjectPageBreadcrumb) => void, onError: (e: unknown) => void): CellRendererSelectorResult | undefined {
     const content: TableCellContent = cell.content;
     if ('text' in content) {
         switch (content.text.format) {
+            case 'Json':
+                return {
+                    component: JsonTextCellRenderer,
+                    params: {
+                        deferRender: true 
+                    }
+                };
+            case 'Xml':
+                return {
+                    component: XmlTextCellRenderer,
+                    params: {
+                        deferRender: true 
+                    }
+                };
+            case 'Markdown':
+                return {
+                    component: MarkdownTextCellRenderer,
+                    params: {
+                        deferRender: true
+                    }
+                };
+            case 'BBCode':
+                return {
+                    component: BBCodeTextCellRenderer,
+                    params: {
+                        deferRender: true 
+                    }
+                };
             default: 
                 return {
                     component: PlainTextCellRenderer,

@@ -1,5 +1,157 @@
 .ag-cell {
     padding: var(--spacing);
+
+    /* Reimplement default CSS, more or less */
+
+    & h1 {
+        display: block;
+        font-size: 2em;
+        margin-top: 0.67em;
+        margin-bottom: 0.67em;
+        margin-left: 0;
+        margin-right: 0;
+        font-weight: bold;
+    }
+    & h2 {
+        display: block;
+        font-size: 1.5em;
+        margin-top: 0.83em;
+        margin-bottom: 0.83em;
+        margin-left: 0;
+        margin-right: 0;
+        font-weight: bold;
+    }
+    & h3 {
+        display: block;
+        font-size: 1.17em;
+        margin-top: 1em;
+        margin-bottom: 1em;
+        margin-left: 0;
+        margin-right: 0;
+        font-weight: bold;
+    }
+    & h4 {
+        display: block;
+        margin-top: 1.33em;
+        margin-bottom: 1.33em;
+        margin-left: 0;
+        margin-right: 0;
+        font-weight: bold;
+    }
+    & h5 {
+        display: block;
+        font-size: .83em;
+        margin-top: 1.67em;
+        margin-bottom: 1.67em;
+        margin-left: 0;
+        margin-right: 0;
+        font-weight: bold;
+    }
+    & h6 {
+        display: block;
+        font-size: .67em;
+        margin-top: 2.33em;
+        margin-bottom: 2.33em;
+        margin-left: 0;
+        margin-right: 0;
+        font-weight: bold;
+    }
+
+    & blockquote {
+        display: block;
+        margin-top: 1em;
+        margin-bottom: 1em;
+        margin-left: 40px;
+        margin-right: 40px;
+    }
+
+    & hr {
+        display: block;
+        margin-top: 0.5em;
+        margin-bottom: 0.5em;
+        margin-left: auto;
+        margin-right: auto;
+        border-width: 1px;
+        border-color: rgb(var(--color-surface-dark)/1);
+        color: rgb(var(--color-surface-dark)/1);
+    }
+
+    & table {
+        display: table;
+        border-collapse: collapse;
+        border-color: rgb(var(--color-surface-dark)/1);
+    }
+    & thead {
+        display: table-header-group;
+        vertical-align: middle;
+        border-color: inherit;
+    }
+    & tbody {
+        display: table-row-group;
+        vertical-align: middle;
+        border-color: inherit;
+    }
+    & tfoot {
+        display: table-footer-group;
+        vertical-align: middle;
+        border-color: inherit;
+    }
+    & tr {
+        display: table-row;
+        vertical-align: inherit;
+        border-color: inherit;
+    }
+    & th {
+        display: table-cell;
+        vertical-align: inherit;
+        font-weight: bold;
+        text-align: center;
+        border-width: 1px;
+        border-color: inherit;
+        background-color: rgb(var(--color-surface)/1);
+        padding: var(--spacing);
+    }
+    & td {
+        display: table-cell;
+        vertical-align: inherit;
+        border-width: 1px;
+        border-color: inherit;
+        padding: var(--spacing);
+    }
+
+    & ol {
+        display: block;
+        list-style-type: decimal;
+        margin-top: 1em;
+        margin-bottom: 1em;
+        margin-left: 0;
+        margin-right: 0;
+        padding-left: 40px;
+    }
+    & ul {
+        display: block;
+        list-style-type: disc;
+        margin-top: 1em;
+        margin-bottom: 1em;
+        margin-left: 0;
+        margin-right: 0;
+        padding-left: 40px;
+    }
+    & li {
+        display: list-item;
+    }
+
+    /* JSON coloration */
+
+    & .json-key {
+        color: rgb(var(--color-primary)/1);
+    }
+    & .json-value {
+        color: rgb(var(--color-info)/1);
+    }
+    & .json-string {
+        color: rgb(var(--color-warning)/1);
+    }
 }
 
 .choices {
