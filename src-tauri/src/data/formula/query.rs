@@ -67,12 +67,11 @@ impl RecordFuncCte {
                             Self {
                                 join: format!(
                                     "
-LEFT JOIN MULTISELECT{} ON t.OID = MULTISELECT{}.TABLE{}_OID 
-LEFT JOIN {alias} ON MULTISELECT{}.TABLE{table_oid}_OID = {alias}_OID
+LEFT JOIN MULTISELECT{} ON t.OID = MULTISELECT{}.SOURCE_OID 
+LEFT JOIN {alias} ON MULTISELECT{}.TARGET_OID = {alias}_OID
                                     ",
                                     column.oid,
                                     column.oid,
-                                    self.table_oid,
                                     column.oid
                                 ),
                                 alias,
@@ -102,12 +101,11 @@ LEFT JOIN {alias} ON MULTISELECT{}.TABLE{table_oid}_OID = {alias}_OID
                             Self {
                                 join: format!(
                                     "
-LEFT JOIN MULTISELECT{} ON t.OID = MULTISELECT{}.TABLE{}_OID 
-LEFT JOIN {alias} ON MULTISELECT{}.TABLE{table_oid}_OID = {alias}_OID
+LEFT JOIN MULTISELECT{} ON t.OID = MULTISELECT{}.SOURCE_OID 
+LEFT JOIN {alias} ON MULTISELECT{}.TARGET_OID = {alias}_OID
                                     ",
                                     column.oid,
                                     column.oid,
-                                    self.table_oid,
                                     column.oid
                                 ),
                                 alias,

@@ -13,7 +13,14 @@ export class MultiSelectCellRenderer implements ICellRendererComp {
 
     constructor() {
         this.gui = document.createElement('div');
-        this.gui.className = classNames('flex', 'justify-center', 'h-full');
+        this.gui.className = classNames(
+            'flex', 
+            'flex-wrap',
+            'justify-center', 
+            'gap-x-1',
+            'gap-y-0.5',
+            'h-full'
+        );
     }
 
     init(params: MultiSelectCellRendererParams) {
@@ -59,7 +66,21 @@ export class MultiSelectCellRenderer implements ICellRendererComp {
                     return null;
                 }
                 
-                this.gui.innerText = content.value.map(getLabel).filter((label) => label !== null).join('\n');
+                this.gui.append(
+                    ...content.value
+                        .map(getLabel)
+                        .filter((label) => label !== null)
+                        .map((label) => {
+                            const chip: HTMLDivElement = document.createElement('div');
+                            chip.className = classNames(
+                                'relative inline-flex w-max items-center border font-sans font-medium rounded-md data-[shape=pill]:rounded-full text-sm p-0.5 shadow-sm bg-primary border-primary text-primary-foreground',
+                                'px-2'
+                            );
+                            chip.dataset.shape = "pill";
+                            chip.innerText = label;
+                            return chip;
+                        })
+                );
             }
             return true;
         } catch (e) {

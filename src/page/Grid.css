@@ -1,3 +1,7 @@
+.ag-cell {
+    padding: var(--spacing);
+}
+
 .choices {
     --choices-primary-color: rgb(var(--color-primary)/1);
     --choices-item-color: rgb(var(--color-primary-foreground)/1);

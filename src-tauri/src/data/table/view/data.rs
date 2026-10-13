@@ -100,10 +100,8 @@ impl DataCte {
                     }
                     TableColumnType::MultiSelect { table_oid, .. } => {
                         format!(
-                            "(SELECT GROUP_CONCAT(CAST(m.TABLE{table_oid}_OID AS TEXT), ',') FROM MULTISELECT{} m WHERE m.TABLE{}_OID = t.OID GROUP BY m.TABLE{}_OID)",
-                            column.oid,
-                            self.table_oid,
-                            self.table_oid
+                            "(SELECT GROUP_CONCAT(CAST(m.TARGET_OID AS TEXT), ',') FROM MULTISELECT{} m WHERE m.SOURCE_OID = t.OID GROUP BY m.SOURCE_OID)",
+                            column.oid
                         )
                     }
                     _ => {

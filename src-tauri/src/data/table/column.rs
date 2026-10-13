@@ -1,7 +1,7 @@
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use crate::util::channel::Sender;
-use crate::util::db::{RowWrapper, sql_collect, sql_execute, sql_iter, sql_one, sql_zero_or_one};
+use crate::util::db::{RowWrapper, sql_collect, sql_execute, sql_execute_batch, sql_iter, sql_one, sql_zero_or_one};
 use crate::util::db;
 use crate::util::encode::json_encode_string;
 use crate::util::error::Error;
@@ -343,50 +343,36 @@ INSERT INTO __METADATA_TABLE_COLUMN (
                 )?;
             }
             TableColumnType::MultiSelect { oid, table_oid: referenced_table_oid } => {
-                sql_execute(
+                sql_execute_batch(
                     conn, 
                     format!(
                         "
 CREATE TABLE __MULTISELECT{} (
-    TABLE{table_oid}_OID INTEGER NOT NULL REFERENCES __TABLE{table_oid} (OID) 
+    SOURCE_OID INTEGER NOT NULL REFERENCES __TABLE{table_oid} (OID) 
         ON UPDATE CASCADE 
         ON DELETE CASCADE,
-    TABLE{referenced_table_oid}_OID INTEGER NOT NULL REFERENCES __TABLE{referenced_table_oid} (OID) 
+    TARGET_OID INTEGER NOT NULL REFERENCES __TABLE{referenced_table_oid} (OID) 
         ON UPDATE CASCADE 
         ON DELETE CASCADE,
-    PRIMARY KEY (TABLE{table_oid}_OID, TABLE{referenced_table_oid}_OID)
-)
-                        ",
-                        self.oid
-                    ),
-                    []
-                )?;
-                sql_execute(
-                    conn, 
-                    format!(
-                        "
+    PRIMARY KEY (SOURCE_OID, TARGET_OID)
+);
+CREATE INDEX __MULTISELECT{}_INDEX_BY_TARGET_OID ON __MULTISELECT{} (TARGET_OID);
 CREATE VIEW MULTISELECT{} AS 
     SELECT 
-        m.TABLE{table_oid}_OID,
-        m.TABLE{referenced_table_oid}_OID 
+        m.SOURCE_OID,
+        m.TARGET_OID 
     FROM __MULTISELECT{} m 
-    INNER JOIN __TABLE{table_oid} t1 ON t1.OID = m.TABLE{table_oid}_OID 
-    INNER JOIN __TABLE{referenced_table_oid} t2 ON t2.OID = m.TABLE{referenced_table_oid}_OID 
+    INNER JOIN __TABLE{table_oid} t1 ON t1.OID = m.SOURCE_OID 
+    INNER JOIN __TABLE{referenced_table_oid} t2 ON t2.OID = m.TARGET_OID 
     WHERE NOT t1.TRASH AND NOT t2.TRASH
+;
                         ",
                         self.oid,
-                        self.oid
-                    ),
-                    []
-                )?;
-                sql_execute(
-                    conn, 
-                    format!(
-                        "CREATE INDEX __MULTISELECT{}_INDEX_BY_TABLE{referenced_table_oid}_OID ON __MULTISELECT{} (TABLE{referenced_table_oid}_OID)",
+                        self.oid,
+                        self.oid,
                         self.oid,
                         self.oid
-                    ),
-                    []
+                    )
                 )?;
             }
             _ => {

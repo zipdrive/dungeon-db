@@ -239,10 +239,9 @@ impl TableCell {
                     format!(
                         "
 DELETE FROM __MULTISELECT{}
-WHERE TABLE{}_OID = ?1
+WHERE SOURCE_OID = ?1
                         ",
-                        self.column_oid,
-                        self.table_oid
+                        self.column_oid
                     ), 
                     params![self.row_oid]
                 )?;
@@ -252,12 +251,11 @@ WHERE TABLE{}_OID = ?1
                         &conn, 
                         format!(
                             "
-INSERT INTO __MULTISELECT{} (TABLE{table_oid}_OID, TABLE{}_OID) VALUES (?1, ?2)
+INSERT INTO __MULTISELECT{} (SOURCE_OID, TARGET_OID) VALUES (?1, ?2)
                             ",
-                            self.column_oid,
-                            self.table_oid
+                            self.column_oid
                         ), 
-                        params![value, self.row_oid]
+                        params![self.row_oid, value]
                     )?;
                 }
             }

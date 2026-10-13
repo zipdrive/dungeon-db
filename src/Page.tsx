@@ -3,6 +3,7 @@ import { PageBreadcrumb, ReportPageBreadcrumb, ObjectPageBreadcrumb } from "./br
 import { 
     Typography,
     Breadcrumb,
+    Chip,
 } from "@material-tailwind/react";
 import { ObjectPage } from "./page/Object";
 import { AgGridProvider } from "ag-grid-react";
