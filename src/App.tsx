@@ -222,6 +222,7 @@ function App() {
           selectedSchema={selectedSchema ? [selectedSchema[0], selectedSchema[1]] : null} 
           onSelectTable={(tableOid, tableName) => { setSelectedSchema(['table', tableOid, tableName]); }}
           onSelectReport={(reportOid, reportName) => { setSelectedSchema(['report', reportOid, reportName]); }}
+          onDeselect={() => { setSelectedSchema(null); }}
           onRequestCreateTable={onRequestCreateTable} 
           onRequestCreateReport={onRequestCreateReport}
           onRequestEditTable={onRequestEditTable}

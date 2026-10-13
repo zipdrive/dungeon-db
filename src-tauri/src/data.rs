@@ -19,8 +19,8 @@ fn reset(app: &AppHandle) -> Result<(), Error> {
         }
     }
 
-    // Emit that schemas have changed
-    //app.emit(UPDATE_SCHEMA_SIGNAL, Vec::<i64>::new())?;
+    // Emit reset event
+    app.emit("reset", None::<()>)?;
     Ok(())
 }
 

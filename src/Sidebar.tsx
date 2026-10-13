@@ -18,6 +18,7 @@ type SidebarProps = {
     selectedSchema: ['table' | 'report', number] | null,
     onSelectTable: (tableOid: number, tableName: string) => void,
     onSelectReport: (reportOid: number, reportName: string) => void,
+    onDeselect: () => void,
     onRequestCreateTable: () => void,
     onRequestEditTable: (table: TableMetadata) => void,
     onRequestCreateReport: () => void,
@@ -33,22 +34,25 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
     const [reportList, setReportList] = useState<ReportListItem[]>([]);
     const [isReportListPending, startReportListTransition] = useTransition();
 
+    // Deselect if selected table is no longer present
     useEffect(() => {
-        loadTables();
-        loadReports();
+        if (props.selectedSchema && props.selectedSchema[0] === 'table') {
+            const tableOid = props.selectedSchema[1];
+            if (tableList.every(({ oid }) => oid != tableOid)) {
+                props.onDeselect();
+            }
+        }
+    }, [props.selectedSchema, props.onDeselect, tableList]);
 
-        const unlistenForTables = listen<TableListItem>('table', () => {
-            loadTables();
-        });
-        const unlistenForReports = listen<number>('report', () => {
-            loadReports();
-        });
-
-        return () => {
-            unlistenForTables.then(f => f());
-            unlistenForReports.then(f => f());
-        };
-    }, []);
+    // Deselect if selected report is no longer present
+    useEffect(() => {
+        if (props.selectedSchema && props.selectedSchema[0] === 'report') {
+            const reportOid = props.selectedSchema[1];
+            if (reportList.every(({ oid }) => oid != reportOid)) {
+                props.onDeselect();
+            }
+        }
+    }, [props.selectedSchema, props.onDeselect, reportList]);
 
     /**
      * Loads a basic list of tables.
@@ -96,6 +100,45 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
         });
     }, []);
 
+    // Load tables on boot and on subsequent updates to any table
+    useEffect(() => {
+        loadTables();
+        
+        const unlistenForTables = listen<TableListItem>('table', () => {
+            loadTables();
+        });
+
+        return () => {
+            unlistenForTables.then(f => f());
+        };
+    }, [loadTables]);
+
+    // Load reports on boot and on subsequent updates to any report
+    useEffect(() => {
+        loadReports();
+
+        const unlistenForReports = listen<number>('report', () => {
+            loadReports();
+        });
+
+        return () => {
+            unlistenForReports.then(f => f());
+        };
+    }, [loadReports]);
+
+    // Reset tables, reports, and selection when reset signal is received
+    useEffect(() => {
+        const unlistenForReset = listen<null>('reset', () => {
+            loadTables();
+            loadReports();
+            props.onDeselect();
+        });
+
+        return () => {
+            unlistenForReset.then(f => f());
+        };
+    }, [loadTables, loadReports, props.onDeselect]);
+
     return (
         <div className="w-sm py-4 border-r-2 border-r-[rgb(var(--color-primary)/1)] bg-[rgb(var(--color-secondary-light)/1)] flex flex-col gap-y-6 overflow-y-auto">
             <div>
@@ -111,7 +154,11 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                                     key={`table-${item.oid}`}
                                     className={`px-4 py-1 ${(props.selectedSchema !== null && props.selectedSchema[0] === 'table' && props.selectedSchema[1] == item.oid ? 'bg-[rgb(var(--color-secondary)/1)] border-y-1 border-y-[rgb(var(--color-secondary-dark)/1)]' : '')} text-[rgb(var(--color-secondary-foreground)/1)]`}
                                     onClick={() => {
-                                        props.onSelectTable(item.oid, item.name);
+                                        if (props.selectedSchema && props.selectedSchema[0] === 'table' && props.selectedSchema[1] == item.oid) {
+                                            props.onDeselect();
+                                        } else {
+                                            props.onSelectTable(item.oid, item.name);
+                                        }
                                     }}
                                     onContextMenu={async () => {
                                         const menu = await Menu.new({
@@ -167,7 +214,11 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                                     key={`table-${item.oid}`}
                                     className={`px-4 py-1 ${(props.selectedSchema !== null && props.selectedSchema[0] === 'report' && props.selectedSchema[1] == item.oid ? 'bg-[rgb(var(--color-secondary)/1)] border-y-1 border-y-[rgb(var(--color-secondary-dark)/1)]' : '')} text-[rgb(var(--color-secondary-foreground)/1)]`}
                                     onClick={() => {
-                                        props.onSelectReport(item.oid, item.name);
+                                        if (props.selectedSchema && props.selectedSchema[0] === 'report' && props.selectedSchema[1] == item.oid) {
+                                            props.onDeselect();
+                                        } else {
+                                            props.onSelectReport(item.oid, item.name);
+                                        }
                                     }}
                                     onContextMenu={async () => {
                                         const menu = await Menu.new({
