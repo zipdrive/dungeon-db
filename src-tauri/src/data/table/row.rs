@@ -377,7 +377,13 @@ impl TableRow {
     /// Takes polymorphism into account.
     pub fn get_object(table_oid: i64, row_oid: i64) -> Result<(i64, Vec<(i64, TableColumnMetadata)>, Self), Error> {
         let conn = db::open()?;
+        Self::conn_get_object(&conn, table_oid, row_oid)
+    }
 
+    /// Gets a single row from the given table.
+    /// Takes polymorphism into account.
+    /// Uses the given connection.
+    pub fn conn_get_object(conn: &Connection, table_oid: i64, row_oid: i64) -> Result<(i64, Vec<(i64, TableColumnMetadata)>, Self), Error> {
         // Query for object table and row
         let (table_oid, row_oid) = sql_one(
             &conn,
@@ -398,7 +404,7 @@ impl TableRow {
     }
 
     /// Queries for multiple rows from the given table.
-    pub fn send(mut column_sender: Sender<(i64, TableColumnMetadata)>, mut row_sender: Sender<Self>, table_oid: i64) -> Result<(), Error> {
+    pub fn send(mut column_sender: Sender<(i64, TableColumnMetadata)>, row_sender: Sender<Self>, table_oid: i64) -> Result<(), Error> {
         let conn = db::open()?;
 
         // Send the columns of the table
@@ -411,7 +417,14 @@ impl TableRow {
             }
             columns
         };
-        
+
+        // Send the rows of the table
+        Self::conn_send(&conn, row_sender, table_oid, columns)
+    }
+
+    /// Queries for multiple rows from the given table.
+    /// Uses the given connection.
+    pub fn conn_send(conn: &Connection, mut row_sender: Sender<Self>, table_oid: i64, columns: Vec<(i64, TableColumnMetadata)>) -> Result<(), Error> {
         // Send the rows of the table
         sql_iter(
             &conn, 

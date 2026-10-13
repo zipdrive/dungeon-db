@@ -1,6 +1,6 @@
 use base64::engine::general_purpose::{STANDARD as base64standard};
 use base64::Engine;
-use rusqlite::params;
+use rusqlite::{Connection, params};
 use rusqlite::types::ValueRef;
 use serde::Serialize;
 use finetime::IntoDateTime;
@@ -40,9 +40,9 @@ enum ParsedReportColumn {
 
 #[derive(Clone, Serialize)]
 pub struct ReportCell {
-    column_oid: i64,
-    reference: Option<TableCellReference>,
-    content: TableCellContent
+    pub column_oid: i64,
+    pub reference: Option<TableCellReference>,
+    pub content: TableCellContent
 }
 
 #[derive(Clone, Serialize)]
@@ -53,23 +53,29 @@ pub struct ReportRow {
 }
 
 impl ReportRow {
-    /// Queries for multiple rows from the given table.
+    /// Queries for multiple rows from the given report.
     pub fn send(mut column_sender: Sender<ReportColumnMetadata>, mut row_sender: Sender<Self>, report_oid: i64, oid_filters: Vec<(String, Vec<i64>)>) -> Result<(), Error> {
         let conn = db::open()?;
 
-        let report: ReportMetadata = ReportMetadata::conn_get(&conn, report_oid)?;
-        let filter_func: Option<Func> = if let Some(filter_formula) = report.filter_formula {
-            Some(Func::parse(filter_formula)?)
-        } else {
-            None 
+        // Send the columns of the report
+        let columns: Vec<ReportColumnMetadata> = {
+            let columns = ReportColumnMetadata::conn_query_all(&conn, report_oid)?;
+            for column in columns.iter() {
+                column_sender.send(column.clone())?;
+            }
+            columns
         };
 
-        // Send the columns of the report
+        // Send the rows of the report
+        Self::conn_send(&conn, row_sender, report_oid, oid_filters, columns)
+    }
+
+    /// Queries for multiple rows from the given report.
+    /// Uses the given connection.
+    pub fn conn_send(conn: &Connection, mut row_sender: Sender<Self>, report_oid: i64, oid_filters: Vec<(String, Vec<i64>)>, columns: Vec<ReportColumnMetadata>) -> Result<(), Error> {
         let columns: Vec<ParsedReportColumn> = {
             let mut output: Vec<ParsedReportColumn> = Vec::new();
-            let columns = ReportColumnMetadata::conn_query_all(&conn, report_oid)?;
             for column in columns {
-                column_sender.send(column.clone())?;
                 match column.column_type {
                     ReportColumnType::Formula { formula, .. } => {
                         // Parse the formula
@@ -104,6 +110,14 @@ impl ReportRow {
             }
             output
         };
+        
+        let report: ReportMetadata = ReportMetadata::conn_get(conn, report_oid)?;
+        let filter_func: Option<Func> = if let Some(filter_formula) = report.filter_formula {
+            Some(Func::parse(filter_formula)?)
+        } else {
+            None 
+        };
+
 
         let mut query: RecordFuncQuery = RecordFuncQuery::new();
 
@@ -202,7 +216,7 @@ FROM (
             // Grouping
             {
                 let group_column_oids: Vec<i64> = sql_collect(
-                    &conn, 
+                    conn, 
                     "SELECT COLUMN_OID FROM METADATA_REPORT_GROUPBY WHERE REPORT_OID = ?1", 
                     params![report_oid], 
                     |row| row.get("COLUMN_OID")
@@ -242,7 +256,7 @@ FROM (
             // Ordering
             {
                 let order_column_oids: Vec<(i64, bool)> = sql_collect(
-                    &conn, 
+                    conn, 
                     "SELECT COLUMN_OID, DIRECTION FROM METADATA_REPORT_ORDERBY WHERE REPORT_OID = ?1", 
                     params![report_oid], 
                     |row| Ok((
@@ -276,7 +290,7 @@ FROM (
         );
 
         sql_iter(
-            &conn, 
+            conn, 
             sql, 
             [], 
             |row| {

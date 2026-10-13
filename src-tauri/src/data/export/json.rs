@@ -1,86 +1,137 @@
-use crate::data::datasource::Datasource;
-use crate::data::{column, column_type};
-use crate::util::db::{self, sql_zero_or_one};
-use crate::util::db::{sql_iter, sql_map_then_iter, sql_one};
+use crate::data::report::column::ReportColumnMetadata;
+use crate::data::report::row::ReportRow;
+use crate::data::table::{self, TableMetadata};
+use crate::data::table::column::TableColumnMetadata;
+use crate::data::table::row::{TableRow, TableCell, TableCellContent, TableCellTextContentFormat};
+use crate::util::channel;
+use crate::util::db::{sql_zero_or_one, sql_iter, sql_map_then_iter, sql_one};
+use crate::util::db;
 use crate::util::error::Error;
 use rusqlite::{params, Connection, OptionalExtension, Row};
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::fs::File as FilesystemFile;
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
 
-enum ExportPolymorphism {
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase", rename_all_fields="camelCase")]
+pub enum ExportPolymorphism {
     No,
     Yes { type_column: Option<String> },
 }
 
-enum ExportSchema {
+#[derive(Deserialize)]
+#[serde(rename_all="camelCase", rename_all_fields="camelCase")]
+pub enum ExportSchema {
     Table {
-        schema_oid: i64,
-        schema_name: String,
+        table_oid: i64,
+        table_name: String,
         polymorphism: ExportPolymorphism,
         index_column: Option<String>,
         oid_column: Option<String>,
     },
     Report {
-        schema_oid: i64,
-        schema_name: String,
-        index_column: Option<String>,
-    },
-}
-
-/// Get the columns of a schema.
-fn get_columns<'a, 'b>(
-    conn: &'a Connection,
-    columns_by_schema: &'b mut HashMap<i64, Vec<column::FullMetadata>>,
-    schema_oid: &i64,
-) -> Result<&'b Vec<column::FullMetadata>, Error> {
-    if columns_by_schema.contains_key(schema_oid) {
-        return Ok(columns_by_schema.get(schema_oid).unwrap());
+        report_oid: i64,
+        report_name: String,
+        index_column: Option<String>
     }
-
-    let mut cols: Vec<column::FullMetadata> = Vec::new();
-    sql_map_then_iter(
-        conn,
-        "
-        SELECT 
-            COLUMN_OID 
-        FROM METADATA_SCHEMA_COLUMN_VIEW 
-        WHERE IS_REQUIRED 
-            AND SCHEMA_OID = ?1 
-        ORDER BY ORDERING
-        ",
-        params![schema_oid],
-        |row| row.get::<_, i64>("COLUMN_OID"),
-        |column_oid| {
-            let column_metadata: column::FullMetadata = column::FullMetadata::get_transact(conn, column_oid)?;
-
-            // Add to the list of columns
-            cols.push(column_metadata);
-            Ok(None::<()>)
-        }
-    )?;
-    columns_by_schema.insert(schema_oid.clone(), cols);
-    return Ok(columns_by_schema.get(schema_oid).unwrap());
 }
 
-fn construct_row_object(
+impl ExportSchema {
+    /// Gets the name of the schema.
+    fn name(&self) -> String {
+        match self {
+            Self::Table { table_name: name, .. }
+            | Self::Report { report_name: name, .. } => name.clone()
+        }
+    }
+}
+
+/// Construct a Value corresponding to a TableCellContent object.
+fn construct_value(
     conn: &Connection,
-    row: &Row<'_>,
-    columns_by_schema: &mut HashMap<i64, Vec<column::FullMetadata>>,
-    schema_oid: &i64,
+    columns_by_table: &mut HashMap<i64, Vec<(i64, TableColumnMetadata)>>,
+    columns_by_report: &mut HashMap<i64, Vec<ReportColumnMetadata>>,
+    content: TableCellContent
+) -> Result<Value, Error> {
+    Ok(match content {
+        TableCellContent::Boolean { value } => json!(value),
+        TableCellContent::Date { label, .. }
+        | TableCellContent::Datetime { label, .. } => json!(label),
+        TableCellContent::File { value } => match value {
+            Some(file) => json!(file.oid().clone()),
+            None => json!(None::<Value>)
+        },
+        TableCellContent::Integer { value }
+        | TableCellContent::SingleSelectDropdown { value, .. } => json!(value),
+        TableCellContent::MultiSelectDropdown { value, .. } => json!(value),
+        TableCellContent::Number { value } => json!(value),
+        TableCellContent::Object { table_oid, value } => match value {
+            Some(row_oid) => {
+                export_object_row_json_object(
+                    conn, 
+                    columns_by_table, 
+                    columns_by_report,
+                    &table_oid, 
+                    row_oid, 
+                    &None,
+                    &None,
+                    &Some(String::from("$type"))
+                )?
+            }
+            None => json!(None::<Value>)
+        },
+        TableCellContent::Subreport { report_oid, oid_filters } => {
+            // Export the rows of the subreport
+            export_report(
+                conn, 
+                columns_by_table, 
+                columns_by_report, 
+                report_oid, 
+                oid_filters, 
+                None
+            )?
+        }
+        TableCellContent::Text { value, format } => {
+            match format {
+                TableCellTextContentFormat::Json => match value {
+                    Some(value) => {
+                        match serde_json::from_str(&value) {
+                            Ok(json_value) => json_value,
+                            Err(_) => {
+                                return Err(Error::InvalidJson { text: value });
+                            }
+                        }
+                    }
+                    None => json!(None::<Value>)
+                }
+                _ => json!(value)
+            }
+        }
+    })
+}
+
+// Construct a JSON object corresponding to the table row.
+fn construct_table_row_json_object(
+    conn: &Connection,
+    row: TableRow,
+    columns_by_table: &mut HashMap<i64, Vec<(i64, TableColumnMetadata)>>,
+    columns_by_report: &mut HashMap<i64, Vec<ReportColumnMetadata>>,
+    table_oid: &i64,
     index_column: &Option<String>,
     oid_column: &Option<String>,
+    custom_columns: Vec<(String, Value)>
 ) -> Result<Value, Error> {
-    let cols = get_columns(conn, columns_by_schema, schema_oid)?.clone();
+    let cols = columns_by_table.get(table_oid).unwrap().clone();
     let mut map: Map<String, Value> = Map::new();
 
     // Add the row's index, if requested
     if let Some(index_column_name) = index_column {
         map.insert(
             index_column_name.clone(),
-            json!(row.get::<_, i64>("ROW_INDEX")?),
+            json!(row.index)
         );
     }
 
@@ -88,289 +139,130 @@ fn construct_row_object(
     if let Some(oid_column_name) = oid_column {
         map.insert(
             oid_column_name.clone(),
-            match row.get::<_, Option<i64>>("OID")? {
-                Some(oid) => json!(oid),
-                None => Value::Null,
-            },
+            json!(row.oid)
         );
     }
 
     // Add each column to the map
-    for c in cols.iter() {
-        // Ensure the column name isn't duplicated
-        if map.contains_key(&c.name) {
+    for cell in row.cells {
+        // Get the column name
+        let column_name: String = {
+            let Some((_, column_metadata)) = cols.iter().find(|(_, col)| col.oid == cell.column_oid) else {
+                return Err(Error::MissingMetadata);
+            };
+            column_metadata.name.clone()
+        };
+
+        // Ensure that the column name isn't duplicated
+        if map.contains_key(&column_name) {
             return Err(Error::DuplicateColumnName {
-                column_name: c.name.clone(),
+                column_name
             });
         }
 
-        // Insert the column into the map
+        // Insert value for cell into map
+        map.insert(column_name, construct_value(conn, columns_by_table, columns_by_report, cell.content)?);
+    }
+
+    // Add any custom columns
+    for (key, value) in custom_columns {
+        map.insert(key, value);
+    }
+
+    // Return the serialized map
+    Ok(json!(map))
+}
+
+// Construct a JSON object corresponding to the report row.
+fn construct_report_row_json_object(
+    conn: &Connection,
+    row: ReportRow,
+    columns_by_table: &mut HashMap<i64, Vec<(i64, TableColumnMetadata)>>,
+    columns_by_report: &mut HashMap<i64, Vec<ReportColumnMetadata>>,
+    report_oid: &i64,
+    index_column: &Option<String>
+) -> Result<Value, Error> {
+    let cols = columns_by_report.get(report_oid).unwrap().clone();
+    let mut map: Map<String, Value> = Map::new();
+
+    // Add the row's index, if requested
+    if let Some(index_column_name) = index_column {
         map.insert(
-            c.name.clone(),
-            match &c.column_type {
-                column_type::ColumnType::Primitive(prim) => {
-                    let value_ord: String = format!("COLUMN{}_VALUE", c.oid);
-                    match prim {
-                        column_type::Primitive::Integer => {
-                            match row.get::<&str, Option<i64>>(&value_ord)? {
-                                Some(value) => json!(value),
-                                None => Value::Null,
-                            }
-                        }
-                        column_type::Primitive::Number => {
-                            match row.get::<&str, Option<f64>>(&value_ord)? {
-                                Some(value) => json!(value),
-                                None => Value::Null,
-                            }
-                        }
-                        column_type::Primitive::PlainText
-                        | column_type::Primitive::MarkdownText
-                        | column_type::Primitive::XmlText => {
-                            match row.get::<&str, Option<String>>(&value_ord)? {
-                                Some(value) => json!(value),
-                                None => Value::Null,
-                            }
-                        }
-                        column_type::Primitive::JsonText => {
-                            match row.get::<&str, Option<String>>(&value_ord)? {
-                                Some(value) => {
-                                    todo!("Parse the JSON string into a Value")
-                                }
-                                None => Value::Null,
-                            }
-                        }
-                        column_type::Primitive::File | column_type::Primitive::Image => {
-                            match row.get::<&str, Option<i64>>(&value_ord)? {
-                                Some(value) => {
-                                    todo!("Get the file content as a base64 string")
-                                }
-                                None => Value::Null,
-                            }
-                        }
-                        column_type::Primitive::Boolean => {
-                            match row.get::<&str, Option<bool>>(&value_ord)? {
-                                Some(value) => json!(value),
-                                None => Value::Null,
-                            }
-                        }
-                        column_type::Primitive::Date | column_type::Primitive::Datetime => {
-                            let label_ord: String = format!("COLUMN{}_LABEL", c.oid);
-                            match row.get::<&str, Option<String>>(&label_ord)? {
-                                Some(value) => json!(value),
-                                None => Value::Null,
-                            }
-                        }
-                    }
-                }
-                column_type::ColumnType::Object { table_oid, .. } => {
-                    let value_ord: String = format!("COLUMN{}_VALUE", c.oid);
-                    match row.get::<&str, Option<i64>>(&value_ord)? {
-                        Some(row_oid) => {
-                            let obj_conn = db::open()?;
-                            export_object_row(
-                                &obj_conn,
-                                columns_by_schema,
-                                &table_oid,
-                                &row_oid,
-                                &None,
-                                &None,
-                                &Some(String::from("$type")),
-                            )?
-                        }
-                        None => Value::Null,
-                    }
-                }
-                column_type::ColumnType::Select { .. } => {
-                    let value_ord: String = format!("COLUMN{}_VALUE", c.oid);
-                    match row.get::<&str, Option<i64>>(&value_ord)? {
-                        Some(value) => json!(value),
-                        None => Value::Null,
-                    }
-                }
-                column_type::ColumnType::Multiselect { .. } => {
-                    let value_ord: String = format!("COLUMN{}_VALUE", c.oid);
-                    match row.get::<&str, Option<String>>(&value_ord)? {
-                        Some(value) => Value::Array(
-                            value
-                                .split(',')
-                                .filter_map(|s| match i64::from_str_radix(s, 10) {
-                                    Ok(i) => Some(json!(i)),
-                                    Err(_) => None,
-                                })
-                                .collect(),
-                        ),
-                        None => Value::Null,
-                    }
-                }
-                column_type::ColumnType::Formula { .. } => {
-                    let param_ord: String = format!("COLUMN{}_PARAM", c.oid);
-                    match row.get::<&str, Option<String>>(&param_ord)? {
-                        Some(param) => {
-                            if param.starts_with("boolean") {
-                                let value_ord: String = format!("COLUMN{}_VALUE", c.oid);
-                                let value: String = row.get::<&str, String>(&value_ord)?;
-                                match i64::from_str_radix(&value, 10) {
-                                    Ok(i) => json!(i != 0),
-                                    Err(_) => {
-                                        return Err(Error::adhoc("Expected a boolean value."));
-                                    }
-                                }
-                            } else if param.starts_with("integer") {
-                                let value_ord: String = format!("COLUMN{}_VALUE", c.oid);
-                                let value: String = row.get::<&str, String>(&value_ord)?;
-                                match i64::from_str_radix(&value, 10) {
-                                    Ok(i) => json!(i),
-                                    Err(_) => {
-                                        return Err(Error::adhoc("Expected a boolean value."));
-                                    }
-                                }
-                            } else {
-                                return Err(Error::adhoc("Unknown formula return type."));
-                            }
-                        }
-                        None => Value::Null,
-                    }
-                }
-                column_type::ColumnType::Subreport { report_oid, .. } => {
-                    // Export the rows of the report, filtered
-                    let report_conn: Connection = db::open()?;
-
-                    // Query for the rows of the schema
-                    let select_sql: String = format!(
-                        "SELECT * FROM SCHEMA{report_oid}_VIEW {} ORDER BY ROW_INDEX",
-                        {
-                            if let Some(query_filter) =
-                                row.get::<_, Option<String>>("QUERY_FILTER")?
-                            {
-                                let report_view_def: String = sql_one(
-                                    &report_conn,
-                                    "SELECT sql FROM sqlite_schema WHERE tbl_name = ?1",
-                                    params![format!("SCHEMA{report_oid}_VIEW")],
-                                    |row| row.get::<_, String>("sql"),
-                                )?;
-                                let mut filters: Vec<String> = Vec::new();
-                                for (filtered_column_name, filtered_column_oid) in
-                                    query_filter.split('&').filter_map(|s| s.split_once('='))
-                                {
-                                    // Ensure that the filtered column name belongs to the report view
-                                    if report_view_def
-                                        .contains(&format!(" AS {filtered_column_name}"))
-                                    {
-                                        filters.push(format!(
-                                            "{filtered_column_name} = {filtered_column_oid}"
-                                        ));
-                                    }
-                                }
-                                match filters
-                                    .into_iter()
-                                    .reduce(|acc, e| format!("{acc} AND {e}"))
-                                {
-                                    Some(combined_filters) => format!("WHERE {combined_filters}"),
-                                    None => String::from(""),
-                                }
-                            } else {
-                                String::from("")
-                            }
-                        }
-                    );
-                    let mut select_stmt = conn.prepare(&select_sql)?;
-                    let mut select_rows = select_stmt.query([])?;
-
-                    // Build the JSON array
-                    let mut array_rows: Vec<Value> = Vec::new();
-                    loop {
-                        // Start building the object for the next row of the schema
-                        let Some(row) = select_rows.next()? else {
-                            break;
-                        };
-
-                        // Add the object to the array of the schema rows
-                        array_rows.push(construct_row_object(
-                            conn,
-                            row,
-                            columns_by_schema,
-                            &schema_oid,
-                            &index_column,
-                            &oid_column,
-                        )?);
-                    }
-                    json!(array_rows)
-                }
-            },
+            index_column_name.clone(),
+            json!(row.index)
         );
     }
 
+    // Add each column to the map
+    for cell in row.cells {
+        // Get the column name
+        let column_name: String = {
+            let Some(column_metadata) = cols.iter().find(|col| col.oid == cell.column_oid) else {
+                return Err(Error::MissingMetadata);
+            };
+            column_metadata.name.clone()
+        };
+
+        // Ensure that the column name isn't duplicated
+        if map.contains_key(&column_name) {
+            return Err(Error::DuplicateColumnName {
+                column_name
+            });
+        }
+
+        // Insert value for cell into map
+        map.insert(column_name, construct_value(conn, columns_by_table, columns_by_report, cell.content)?);
+    }
+
+    // Return the serialized map
     Ok(json!(map))
 }
 
 /// Exports a single row of a table, accounting for additional columns of tables inheriting from this one.
-fn export_object_row(
+fn export_object_row_json_object(
     conn: &Connection,
-    columns_by_schema: &mut HashMap<i64, Vec<column::FullMetadata>>,
+    columns_by_table: &mut HashMap<i64, Vec<(i64, TableColumnMetadata)>>,
+    columns_by_report: &mut HashMap<i64, Vec<ReportColumnMetadata>>,
     table_oid: &i64,
-    row_oid: &i64,
+    row_oid: i64,
     index_column: &Option<String>,
     oid_column: &Option<String>,
     type_column: &Option<String>,
 ) -> Result<Value, Error> {
-    todo!("Stop using the old POLYMORPHISM view.");
-    Ok(
-        if let Some((table_oid, table_name, row_oid)) = sql_zero_or_one(
-            conn,
-            format!(
-                "
-                SELECT 
-                    t.TABLE_OID, 
-                    s.TABLE_NAME, 
-                    t.ROW_OID 
-                FROM TABLE{table_oid}_POLYMORPHISM_VIEW t 
-                INNER JOIN METADATA_SCHEMA s ON s.OID = t.TABLE_OID 
-                WHERE t.OID = ?1
-                "
-            ), 
-            params![row_oid], 
-            |row| {
-                Ok((
-                    row.get::<_, i64>("TABLE_OID")?,
-                    row.get::<_, String>("TABLE_NAME")?,
-                    row.get::<_, i64>("ROW_OID")?,
-                ))
+    let (table_oid, column_tuples, row) = TableRow::conn_get_object(conn, table_oid.clone(), row_oid)?;
+
+    // Add columns to storage
+    if !columns_by_table.contains_key(&table_oid) {
+        columns_by_table.insert(
+            table_oid.clone(), 
+            column_tuples
+        );
+    }
+
+    // Construct a JSON object for the polymorphic row
+    construct_table_row_json_object(
+        conn, 
+        row, 
+        columns_by_table, 
+        columns_by_report,
+        &table_oid, 
+        index_column, 
+        oid_column,
+        match type_column {
+            Some(type_column) => {
+                let table_metadata: TableMetadata = TableMetadata::conn_get(conn, table_oid.clone())?;
+                vec![(type_column.clone(), json!(table_metadata.name))]
             }
-        )? {
-            // Query the row from the table
-            let select_sql: String = format!("SELECT * FROM SCHEMA{table_oid}_VIEW WHERE OID = ?1");
-            let mut select_stmt = conn.prepare(&select_sql)?;
-            let mut select_rows = select_stmt.query(params![row_oid])?;
-            if let Some(row) = select_rows.next()? {
-                let mut row_value: Value = construct_row_object(
-                    conn,
-                    row,
-                    columns_by_schema,
-                    &table_oid,
-                    index_column,
-                    oid_column,
-                )?;
-                if let Some(type_column_name) = type_column {
-                    if let Value::Object(ref mut row_object_map) = row_value {
-                        row_object_map.insert(type_column_name.clone(), json!(table_name));
-                    }
-                }
-                row_value
-            } else {
-                return Err(Error::adhoc(
-                    "Expected to find a row that does not exist.",
-                ));
-            }
-        } else {
-            Value::Null
-        },
+            None => Vec::new()
+        }
     )
 }
 
 /// Exports the rows of the schema individually, accounting for column/type polymorphism.
-fn export_schema_individual(
+fn export_table_by_row(
     conn: &Connection,
-    columns_by_schema: &mut HashMap<i64, Vec<column::FullMetadata>>,
+    columns_by_table: &mut HashMap<i64, Vec<(i64, TableColumnMetadata)>>,
+    columns_by_report: &mut HashMap<i64, Vec<ReportColumnMetadata>>,
     table_oid: i64,
     index_column: Option<String>,
     oid_column: Option<String>,
@@ -378,24 +270,20 @@ fn export_schema_individual(
 ) -> Result<Value, Error> {
     let mut array_rows: Vec<Value> = Vec::new();
 
+    // Iterate over all OIDs of the table
     sql_map_then_iter(
         conn,
-        format!(
-            "
-            SELECT 
-                OID 
-            FROM TABLE{table_oid} 
-            WHERE NOT TRASH
-            "
-        ),
+        format!("SELECT OID FROM TABLE{table_oid}"),
         [],
         |row| row.get::<_, i64>("OID"),
         |row_oid| {
-            array_rows.push(export_object_row(
+            // Export JSON object for each row, accounting for polymorphism
+            array_rows.push(export_object_row_json_object(
                 conn,
-                columns_by_schema,
+                columns_by_table,
+                columns_by_report,
                 &table_oid,
-                &row_oid,
+                row_oid,
                 &index_column,
                 &oid_column,
                 &type_column,
@@ -407,108 +295,165 @@ fn export_schema_individual(
 }
 
 /// Exports the rows of the schema in a batch, not accounting for polymorphism.
-fn export_schema_batch(
+fn export_table_batch(
     conn: &Connection,
-    columns_by_schema: &mut HashMap<i64, Vec<column::FullMetadata>>,
-    schema_oid: i64,
+    columns_by_table: &mut HashMap<i64, Vec<(i64, TableColumnMetadata)>>,
+    columns_by_report: &mut HashMap<i64, Vec<ReportColumnMetadata>>,
+    table_oid: i64,
     index_column: Option<String>,
     oid_column: Option<String>,
 ) -> Result<Value, Error> {
-    // Query for the rows of the schema
-    let select_sql: String = format!("SELECT * FROM SCHEMA{schema_oid}_VIEW ORDER BY ROW_INDEX");
-    let mut select_stmt = conn.prepare(&select_sql)?;
-    let mut select_rows = select_stmt.query([])?;
-
-    // Build the JSON array
     let mut array_rows: Vec<Value> = Vec::new();
-    loop {
-        // Start building the object for the next row of the schema
-        let Some(row) = select_rows.next()? else {
-            break;
-        };
 
-        // Add the object to the array of the schema rows
-        array_rows.push(construct_row_object(
-            conn,
-            row,
-            columns_by_schema,
-            &schema_oid,
-            &index_column,
-            &oid_column,
-        )?);
-    }
+    // Query for columns of table
+    let columns: Vec<(i64, TableColumnMetadata)> = match columns_by_table.get(&table_oid) {
+        Some(columns) => columns.clone(),
+        None => {
+            let columns: Vec<(i64, TableColumnMetadata)> = TableColumnMetadata::conn_query_all(conn, table_oid)?
+                .into_iter()
+                .map(|(owning_table_oid, _, column)| (owning_table_oid, column))
+                .collect();
+            columns_by_table.insert(table_oid, columns.clone());
+            columns 
+        }
+    };
+
+    // Query for the rows of the table
+    TableRow::conn_send(
+        conn,
+        channel::Sender::Callback(Box::new(|row| {
+            array_rows.push(
+                construct_table_row_json_object(
+                    conn, 
+                    row, 
+                    columns_by_table, 
+                    columns_by_report,
+                    &table_oid, 
+                    &index_column, 
+                    &oid_column, 
+                    Vec::new()
+                )?
+            );
+            Ok(())
+        })), 
+        table_oid,
+        columns
+    )?;
     Ok(json!(array_rows))
 }
 
-fn export_schema(
+/// Export a table according to the specified rules for handling polymorphism.
+fn export_table(
     conn: &Connection,
-    columns_by_schema: &mut HashMap<i64, Vec<column::FullMetadata>>,
-    schema: ExportSchema,
-) -> Result<(String, Value), Error> {
-    match schema {
-        ExportSchema::Table {
-            schema_oid,
-            schema_name,
-            polymorphism,
-            index_column,
-            oid_column,
-        } => {
-            match polymorphism {
-                ExportPolymorphism::No => {
-                    // Export rows of table in batch
-                    Ok((
-                        schema_name,
-                        export_schema_batch(
-                            conn,
-                            columns_by_schema,
-                            schema_oid,
-                            index_column,
-                            oid_column,
-                        )?,
-                    ))
-                }
-                ExportPolymorphism::Yes { type_column } => {
-                    // Export rows of table individually
-                    Ok((
-                        schema_name,
-                        export_schema_individual(
-                            conn,
-                            columns_by_schema,
-                            schema_oid,
-                            index_column,
-                            oid_column,
-                            type_column,
-                        )?,
-                    ))
-                }
-            }
+    columns_by_table: &mut HashMap<i64, Vec<(i64, TableColumnMetadata)>>,
+    columns_by_report: &mut HashMap<i64, Vec<ReportColumnMetadata>>,
+    table_oid: i64,
+    polymorphism: ExportPolymorphism,
+    index_column: Option<String>,
+    oid_column: Option<String>
+) -> Result<Value, Error> {
+    match polymorphism {
+        ExportPolymorphism::No => {
+            // Export rows of table in batch
+            export_table_batch(
+                conn,
+                columns_by_table,
+                columns_by_report,
+                table_oid,
+                index_column,
+                oid_column,
+            )
         }
-        ExportSchema::Report {
-            schema_oid,
-            schema_name,
-            index_column,
-        } => {
-            // Export rows of report in batch
-            Ok((
-                schema_name,
-                export_schema_batch(conn, columns_by_schema, schema_oid, index_column, None)?,
-            ))
+        ExportPolymorphism::Yes { type_column } => {
+            // Export rows of table individually
+            export_table_by_row(
+                conn,
+                columns_by_table,
+                columns_by_report,
+                table_oid,
+                index_column,
+                oid_column,
+                type_column,
+            )
         }
     }
 }
 
+fn export_report(
+    conn: &Connection,
+    columns_by_table: &mut HashMap<i64, Vec<(i64, TableColumnMetadata)>>,
+    columns_by_report: &mut HashMap<i64, Vec<ReportColumnMetadata>>,
+    report_oid: i64,
+    oid_filters: Vec<(String, Vec<i64>)>,
+    index_column: Option<String>
+) -> Result<Value, Error> {
+    let mut array_rows: Vec<Value> = Vec::new();
+
+    // Query for columns of table
+    let columns: Vec<ReportColumnMetadata> = match columns_by_report.get(&report_oid) {
+        Some(columns) => columns.clone(),
+        None => {
+            let columns: Vec<ReportColumnMetadata> = ReportColumnMetadata::conn_query_all(conn, report_oid)?;
+            columns_by_report.insert(report_oid, columns.clone());
+            columns 
+        }
+    };
+
+    // Query for rows of the report
+    ReportRow::conn_send(
+        conn, 
+        channel::Sender::Callback(Box::new(|row| {
+            array_rows.push(
+                construct_report_row_json_object(
+                    conn, 
+                    row, 
+                    columns_by_table,
+                    columns_by_report, 
+                    &report_oid, 
+                    &index_column
+                )?
+            );
+            Ok(())
+        })), 
+        report_oid, 
+        oid_filters, 
+        columns
+    )?;
+    Ok(json!(array_rows))
+}
+
 /// Exports schemas in JSON format.
-pub fn export(filepath: String, schemas: Vec<ExportSchema>) -> Result<(), Error> {
+pub fn export(mut channel: channel::Sender<(f64, String)>, filepath: String, schemas: Vec<ExportSchema>) -> Result<(), Error> {
+    let progress_by_item: f64 = 1.0 / (schemas.len() as f64);
+    let mut columns_by_table: HashMap<i64, Vec<(i64, TableColumnMetadata)>> = HashMap::new();
+    let mut columns_by_report: HashMap<i64, Vec<ReportColumnMetadata>> = HashMap::new();
+
     // Construct the top-level map
     let conn = db::open()?;
-    let mut columns_by_schema: HashMap<i64, Vec<column::FullMetadata>> = HashMap::new();
     let mut map: Map<String, Value> = Map::new();
+    let mut cur_progress: f64 = 0.0;
     for schema in schemas.into_iter() {
-        let (schema_name, schema_rows) = export_schema(&conn, &mut columns_by_schema, schema)?;
+        // Send progress report
+        let schema_name: String = schema.name();
+        channel.send((cur_progress, format!("Serializing {schema_name}...")))?;
+
+        // Do the serialization
+        let schema_rows = match schema {
+            ExportSchema::Table { table_oid, polymorphism, index_column, oid_column, .. } => {
+                export_table(&conn, &mut columns_by_table, &mut columns_by_report, table_oid, polymorphism, index_column, oid_column)?
+            }
+            ExportSchema::Report { report_oid, index_column, .. } => {
+                export_report(&conn, &mut columns_by_table, &mut columns_by_report, report_oid, Vec::new(), index_column)?
+            }
+        };
         map.insert(schema_name, schema_rows);
+
+        // Update progress percentage
+        cur_progress += progress_by_item;
     }
 
     // Serialize into JSON document
+    channel.send((cur_progress, format!("Saving to file...")))?;
     let json: String = json!(map).to_string();
 
     // Create or open the file for writing

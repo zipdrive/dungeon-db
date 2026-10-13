@@ -27,6 +27,7 @@ pub fn run() {
             data::load,
             data::undo,
             data::redo,
+            data::export_json,
             util::dialog::dialog_open,
             util::dialog::dialog_close,
             data::query,

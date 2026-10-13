@@ -20,10 +20,23 @@ pub enum Error {
 
 
 
+    /// Error for when there is not metadata for a data column.
+    MissingMetadata,
+
     /// Error for when there are two columns with the same name.
     DuplicateColumnName {
         column_name: String,
     },
+
+
+
+    /// Error for when the user has inputted invalid JSON.
+    InvalidJson {
+        text: String,
+    },
+
+
+
 
     /// Error for when a column with type Primitive, Object, Select, or Multiselect does not belong to a table.
     OrphanedDataColumn {
@@ -123,15 +136,23 @@ impl Into<String> for Error {
         match self {
             Self::AdhocError { msg, mut backtrace } => {
                 backtrace.resolve();
-                return format!("{msg}===== STACK ====={backtrace:?}");
+                return format!("{msg}\n\n===== STACK =====\n{backtrace:?}");
             }
 
             Self::NotImplementedError { msg } => {
                 return msg;
             }
 
+            Self::MissingMetadata => {
+                return format!("A column is missing metadata!");
+            }
+
             Self::DuplicateColumnName { column_name } => {
                 return format!("Multiple columns in table with the name \"{}\"!", column_name.replace("\\", "\\\\").replace("\"", "\\\""))
+            }
+
+            Self::InvalidJson { text } => {
+                return format!("Invalid JSON: {text}");
             }
 
             Self::OrphanedDataColumn { column_oid, column_name } => {

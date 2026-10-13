@@ -10,6 +10,7 @@ mod file;
 mod table;
 mod report;
 mod formula;
+mod export;
 
 fn reset(app: &AppHandle) -> Result<(), Error> {
     // Close all dialogs
@@ -896,4 +897,15 @@ pub async fn redo(app: AppHandle) -> Result<(), Error> {
         None => {}
     }
     return Ok(());
+}
+
+
+#[tauri::command]
+/// Exports schemas in JSON file format.
+pub async fn export_json(app: AppHandle, filepath: String, schemas: Vec<export::json::ExportSchema>) -> Result<(), Error> {
+    export::json::export(
+        Sender::Event(&app, "progress"),
+        filepath,
+        schemas
+    )
 }
