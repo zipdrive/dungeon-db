@@ -13,6 +13,7 @@ import { Menu } from "@tauri-apps/api/menu";
 import { executeAsync } from "./api/action";
 import { TableListItem, TableMetadata } from "./api/model/table";
 import { ReportListItem, ReportMetadata } from "./api/model/report";
+import { LogicalPosition } from "@tauri-apps/api/dpi";
 
 type SidebarProps = {
     selectedSchema: ['table' | 'report', number] | null,
@@ -160,7 +161,8 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                                             props.onSelectTable(item.oid, item.name);
                                         }
                                     }}
-                                    onContextMenu={async () => {
+                                    onContextMenu={async (e: React.MouseEvent) => {
+                                        e.preventDefault();
                                         const menu = await Menu.new({
                                             items: [
                                                 {
@@ -184,7 +186,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                                                 }
                                             ]
                                         });
-                                        menu.popup();
+                                        menu.popup(new LogicalPosition(e.clientX, e.clientY));
                                     }}
                                 >
                                     {item.name}
@@ -220,7 +222,8 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                                             props.onSelectReport(item.oid, item.name);
                                         }
                                     }}
-                                    onContextMenu={async () => {
+                                    onContextMenu={async (e: React.MouseEvent) => {
+                                        e.preventDefault();
                                         const menu = await Menu.new({
                                             items: [
                                                 {
@@ -244,7 +247,7 @@ export function Sidebar(props: SidebarProps): React.JSX.Element {
                                                 }
                                             ]
                                         });
-                                        menu.popup();
+                                        menu.popup(new LogicalPosition(e.clientX, e.clientY));
                                     }}
                                 >
                                     {item.name}

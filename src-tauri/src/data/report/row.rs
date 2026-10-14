@@ -236,7 +236,7 @@ FROM (
                             if let ParsedReportColumn::Formula { column_oid: c_oid, .. } = c {
                                 idx += 1;
                                 if column_oid == c_oid {
-                                    return Some(format!("{idx}"));
+                                    return Some(format!("{}", (2 * idx) + 1));
                                 }
                             }
                         }
@@ -277,10 +277,10 @@ FROM (
                         let mut idx: i64 = 0;
                         for c in columns.iter() {
                             if let ParsedReportColumn::Formula { column_oid: c_oid, .. } = c {
-                                idx += 1;
                                 if column_oid == c_oid {
-                                    return Some(format!("{idx} {}", if *dir { "ASC" } else { "DESC" }));
+                                    return Some(format!("{} {} NULLS LAST", (2 * idx) + 1, if *dir { "ASC" } else { "DESC" }));
                                 }
+                                idx += 1;
                             }
                         }
                         return None;
@@ -288,13 +288,14 @@ FROM (
                     .reduce(|acc, e| format!("{acc}, {e}")) {
 
                     // Query with ordering by specific columns
-                    Some(group_column_indices) => format!("ORDER BY {group_column_indices}"),
+                    Some(order_column_indices) => format!("ORDER BY {order_column_indices}"),
 
                     // Query with native ordering
                     None => String::from("")
                 }
             }
         );
+        println!("{sql}");
 
         sql_iter(
             conn, 

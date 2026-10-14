@@ -8,5 +8,5 @@ export type ReportMetadata = {
     name: string,
     filterFormula: string | null,
     groupByColumnOids: number[],
-    orderByColumnOids: number[]
+    orderByColumnOids: [number, boolean][]
 }

@@ -48,7 +48,7 @@ pub struct ReportMetadata {
     pub name: String,
     pub filter_formula: Option<String>,
     pub group_by_column_oids: Vec<i64>,
-    pub order_by_column_oids: Vec<i64>
+    pub order_by_column_oids: Vec<(i64, bool)>
 }
 
 impl Hash for ReportMetadata {
@@ -111,13 +111,17 @@ ORDER BY OID
             &conn, 
             "
 SELECT 
-    COLUMN_OID
+    COLUMN_OID,
+    DIRECTION
 FROM METADATA_REPORT_ORDERBY
 WHERE REPORT_OID = ?1
 ORDER BY OID
             ", 
             params![oid], 
-            |row| row.get::<_, i64>("COLUMN_OID")
+            |row| Ok((
+                row.get::<_, i64>("COLUMN_OID")?,
+                row.get::<_, bool>("DIRECTION")?
+            ))
         )?;
 
         // Return the metadata
@@ -163,7 +167,7 @@ UPDATE __METADATA_REPORT SET
     FILTER = ?2 
 WHERE OID = ?3
             ", 
-            params![self.name, self.filter_formula]
+            params![self.name, self.filter_formula, self.oid]
         )?;
 
         // Overwrite the GROUP BY and ORDER BY columns
@@ -211,11 +215,11 @@ WHERE c.OID = o.COLUMN_OID
         )?;
 
         // Insert new rows in __METADATA_REPORT_ORDERBY table
-        for orderby_column_oid in self.order_by_column_oids.iter() {
+        for (orderby_column_oid, orderby_direction) in self.order_by_column_oids.iter() {
             sql_execute(
                 conn, 
-                "INSERT INTO __METADATA_REPORT_ORDERBY (COLUMN_OID) VALUES (?1)", 
-                params![orderby_column_oid]
+                "INSERT INTO __METADATA_REPORT_ORDERBY (COLUMN_OID, DIRECTION) VALUES (?1, ?2)", 
+                params![orderby_column_oid, orderby_direction]
             )?;
         }
 

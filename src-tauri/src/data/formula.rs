@@ -311,6 +311,7 @@ impl Expression {
             let (_, [column_name, following]) = reference_cap.extract();
             let record = self.into_record()?;
             let (table_oid, column) = TableColumnMetadata::conn_find(conn, record.table_oid()?, String::from(column_name))?;
+            println!("TABLE{table_oid}.COLUMN{} = \"{}\"", column.oid, column.name);
             
             let expr: Self = match &column.column_type {
                 TableColumnType::Primitive { .. }
@@ -328,6 +329,7 @@ impl Expression {
             let column_name = column_name_raw.replace("\\\"", "\"").replace("\\\\", "\\");
             let record = self.into_record()?;
             let (table_oid, column) = TableColumnMetadata::conn_find(conn, record.table_oid()?, String::from(column_name))?;
+            println!("TABLE{table_oid}.COLUMN{} = \"{}\"", column.oid, column.name);
             
             let expr: Self = match &column.column_type {
                 TableColumnType::Primitive { .. }

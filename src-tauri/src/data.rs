@@ -236,7 +236,7 @@ impl QueryStream {
 
 #[tauri::command]
 /// Sends data through a channel from the backend to the frontend.
-pub async fn query(app: AppHandle, webview: Webview, query: QueryStream) -> Result<(), Error> {
+pub fn query(app: AppHandle, webview: Webview, query: QueryStream) -> Result<(), Error> {
     query.send(app, webview)
 }
 
@@ -255,7 +255,7 @@ pub fn get_table_column_metadata(column_oid: i64) -> Result<table::column::Table
 
 #[tauri::command]
 /// Gets the label for an Object.
-pub async fn get_object_label(table_oid: i64, row_oid: i64) -> Result<String, Error> {
+pub fn get_object_label(table_oid: i64, row_oid: i64) -> Result<String, Error> {
     table::label::get_object_label(table_oid, row_oid)
 }
 
@@ -297,20 +297,20 @@ pub fn check_formula(formula: String) -> Result<(), Error> {
 
 #[tauri::command]
 /// Gets the content of a file as a base64 string.
-pub async fn get_src(file: file::File) -> Result<String, Error> {
+pub fn get_src(file: file::File) -> Result<String, Error> {
     file.get_src()
 }
 
 #[tauri::command]
 /// Downloads a file.
-pub async fn download_file(file_oid: i64, download_to_path: String) -> Result<(), Error> {
+pub fn download_file(file_oid: i64, download_to_path: String) -> Result<(), Error> {
     let file: file::File = file::File::get(file_oid)?;
     file.download(download_to_path)
 }
 
 #[tauri::command]
 /// Uploads a file.
-pub async fn upload_file(mut file: file::File, upload_from_path: String) -> Result<i64, Error> {
+pub fn upload_file(mut file: file::File, upload_from_path: String) -> Result<i64, Error> {
     file.upload(upload_from_path)?;
     Ok(*file.oid())
 }
@@ -442,7 +442,7 @@ fn record_action(action: Action, is_forward: bool) {
 }
 
 impl Action {
-    async fn execute(self, app: &AppHandle, is_forward: bool) -> Result<(), Error> {
+    fn execute(self, app: &AppHandle, is_forward: bool) -> Result<(), Error> {
         match self {
             Self::CreateTable(mut metadata) => {
                 // Create the table
@@ -872,9 +872,9 @@ impl Action {
 
 #[tauri::command]
 /// Executes an action that affects the state of the database.
-pub async fn execute(app: AppHandle, action: Action) -> Result<(), Error> {
+pub fn execute(app: AppHandle, action: Action) -> Result<(), Error> {
     // Do something that affects the database
-    action.execute(&app, true).await?;
+    action.execute(&app, true)?;
 
     // Clear the stack of undone actions
     let mut forward_stack = FORWARD_STACK.lock().unwrap();
@@ -884,14 +884,14 @@ pub async fn execute(app: AppHandle, action: Action) -> Result<(), Error> {
 
 #[tauri::command]
 /// Undoes the last action by popping the top of the reverse stack.
-pub async fn undo(app: AppHandle) -> Result<(), Error> {
+pub fn undo(app: AppHandle) -> Result<(), Error> {
     // Get the action from the top of the stack
     match {
         let mut reverse_stack = REVERSE_STACK.lock().unwrap();
         (*reverse_stack).pop()
     } {
         Some(reverse_action) => {
-            reverse_action.execute(&app, false).await?;
+            reverse_action.execute(&app, false)?;
         }
         None => {}
     }
@@ -900,14 +900,14 @@ pub async fn undo(app: AppHandle) -> Result<(), Error> {
 
 #[tauri::command]
 /// Redoes the last undone action by popping the top of the forward stack.
-pub async fn redo(app: AppHandle) -> Result<(), Error> {
+pub fn redo(app: AppHandle) -> Result<(), Error> {
     // Get the action from the top of the stack
     match {
         let mut forward_stack = FORWARD_STACK.lock().unwrap();
         (*forward_stack).pop()
     } {
         Some(forward_action) => {
-            forward_action.execute(&app, true).await?;
+            forward_action.execute(&app, true)?;
         }
         None => {}
     }
@@ -917,7 +917,7 @@ pub async fn redo(app: AppHandle) -> Result<(), Error> {
 
 #[tauri::command]
 /// Exports schemas in JSON file format.
-pub async fn export_json(app: AppHandle, schemas: Vec<export::json::ExportSchema>, type_column: Option<String>) -> Result<(), Error> {
+pub fn export_json(app: AppHandle, schemas: Vec<export::json::ExportSchema>, type_column: Option<String>) -> Result<(), Error> {
     if let Some(file_path) = app
         .dialog()
         .file()

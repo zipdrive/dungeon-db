@@ -18,7 +18,7 @@ export function EditReportPopup(props: EditReportPopupProps): React.JSX.Element 
     const [reportName, setReportName] = useState<string>('');
     const [filterFormula, setFilterFormula] = useState<string>('');
     const [groupByColumnOids, setGroupByColumnOids] = useState<string[]>([]);
-    const [orderByColumnOids, setOrderByColumnOids] = useState<string[]>([]);
+    const [orderByColumnOids, setOrderByColumnOids] = useState<[string, boolean][]>([]);
 
     const [reportColumnList, setReportColumnList] = useState<ReportColumnMetadata[]>([]);
     const [isReportColumnListPending, startReportColumnListTransition] = useTransition();
@@ -27,7 +27,7 @@ export function EditReportPopup(props: EditReportPopupProps): React.JSX.Element 
         setReportName(props.metadata.name);
         setFilterFormula(props.metadata.filterFormula ?? '');
         setGroupByColumnOids(props.metadata.groupByColumnOids.map((oid) => oid.toString()));
-        setOrderByColumnOids(props.metadata.orderByColumnOids.map((oid) => oid.toString()));
+        setOrderByColumnOids(props.metadata.orderByColumnOids.map(([oid, dir]) => [oid.toString(), dir]));
 
         loadReportColumns();
         const unlistenForReportColumns = listen<number>('report', (event) => {
@@ -71,9 +71,9 @@ export function EditReportPopup(props: EditReportPopupProps): React.JSX.Element 
                 editReport: {
                     oid: props.metadata.oid,
                     name: reportName,
-                    filterFormula: filterFormula ?? null,
+                    filterFormula: filterFormula || null,
                     groupByColumnOids: groupByColumnOids.map((oid) => parseInt(oid)),
-                    orderByColumnOids: orderByColumnOids.map((oid) => parseInt(oid))
+                    orderByColumnOids: orderByColumnOids.map(([oid, dir]) => [parseInt(oid), dir])
                 }
             });
             return true;
@@ -155,15 +155,15 @@ export function EditReportPopup(props: EditReportPopupProps): React.JSX.Element 
                     value: 'sorting',
                     label: "Sorting",
                     fields: (<>
-                        {orderByColumnOids.map((oid, index) => {
-                            <Form.SelectField 
+                        {orderByColumnOids.map(([oid, dir], index) => {
+                            return <Form.SelectField 
                                 key={`report${props.metadata.oid}-orderby${index}`}
-                                label={`${index}.`}
+                                label={`${index + 1}.`}
                                 tooltip={index == 0 ? "The rows of the report will first be sorted by this column." : "After the rows of the report are sorted by the above columns, they will next be sorted by this column."}
                                 value={oid}
                                 onSetValue={(newOid) => {
                                     if (newOid) {
-                                        setOrderByColumnOids((oldOrderByColumnOids) => oldOrderByColumnOids.splice(index, 1, newOid));
+                                        setOrderByColumnOids((oldOrderByColumnOids) => oldOrderByColumnOids.splice(index, 1, [newOid, dir]));
                                     } else {
                                         setOrderByColumnOids((oldOrderByColumnOids) => oldOrderByColumnOids.splice(index, 1));
                                     }
@@ -173,18 +173,18 @@ export function EditReportPopup(props: EditReportPopupProps): React.JSX.Element 
                                     return {
                                         value: colOid,
                                         label: col.name,
-                                        disabled: colOid !== oid && orderByColumnOids.indexOf(colOid) >= 0
+                                        disabled: colOid !== oid && orderByColumnOids.map(([oid, _dir]) => oid).indexOf(colOid) >= 0
                                     };
                                 })}
-                            />
+                            />;
                         })}
                         <Form.SelectField
                             key={`report${props.metadata.oid}-orderby${orderByColumnOids.length}`}
-                            label={`${orderByColumnOids.length}.`}
+                            label={`${orderByColumnOids.length + 1}.`}
                             value=""
                             onSetValue={(newOid) => {
                                 if (newOid) {
-                                    setOrderByColumnOids((oldOrderByColumnOids) => oldOrderByColumnOids.concat([newOid]));
+                                    setOrderByColumnOids((oldOrderByColumnOids) => oldOrderByColumnOids.concat([[newOid, true]]));
                                 }
                             }}
                             possibleValues={reportColumnList.map((col) => {
@@ -192,7 +192,7 @@ export function EditReportPopup(props: EditReportPopupProps): React.JSX.Element 
                                 return {
                                     value: colOid,
                                     label: col.name,
-                                    disabled: orderByColumnOids.indexOf(colOid) >= 0
+                                    disabled: orderByColumnOids.map(([oid, _dir]) => oid).indexOf(colOid) >= 0
                                 };
                             })}
                         />

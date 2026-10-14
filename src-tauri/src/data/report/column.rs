@@ -138,7 +138,7 @@ impl ReportColumnMetadata {
         // Determine ordering
         let ordering: i64 = sql_zero_or_one(
             conn, 
-            "SELECT COALESCE(MAX(ORDERING), 0) + 1 FROM __METADATA_TABLE_COLUMN", 
+            "SELECT COALESCE(MAX(ORDERING), 0) + 1 FROM __METADATA_REPORT_COLUMN", 
             [], 
             |row| row.get(0)
         )?.unwrap_or(1);

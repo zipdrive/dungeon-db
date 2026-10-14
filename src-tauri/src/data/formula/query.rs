@@ -85,19 +85,19 @@ LEFT JOIN CTE_{alias} ON MULTISELECT{}.TARGET_OID = {alias}_OID
                         }
                     }
                 }
-                RecordFunc::Backreference { column, .. } => {
+                RecordFunc::Backreference { table, column, .. } => {
                     match column.column_type {
-                        TableColumnType::Object { table_oid, .. }
-                        | TableColumnType::SingleSelect { table_oid, .. } => {
+                        TableColumnType::Object { .. }
+                        | TableColumnType::SingleSelect { .. } => {
                             Self {
                                 join: format!("LEFT JOIN CTE_{alias} ON t.OID = {alias}_COLUMN{}", column.oid),
-                                table_oid,
+                                table_oid: table.oid.clone(),
                                 alias,
                                 cte: HashSet::new(),
                                 columns: HashSet::from_iter(vec![format!("COLUMN{}", column.oid)])
                             }
                         }
-                        TableColumnType::MultiSelect { table_oid, .. } => {
+                        TableColumnType::MultiSelect { .. } => {
                             Self {
                                 join: format!(
                                     "
@@ -109,7 +109,7 @@ LEFT JOIN CTE_{alias} ON MULTISELECT{}.TARGET_OID = {alias}_OID
                                     column.oid
                                 ),
                                 alias,
-                                table_oid,
+                                table_oid: table.oid.clone(),
                                 cte: HashSet::new(),
                                 columns: HashSet::new()
                             }

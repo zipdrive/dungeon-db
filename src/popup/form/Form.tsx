@@ -164,6 +164,7 @@ export function FormSelectField<S extends string>(props: FormSelectFieldProps<S>
 
             // Add choices to DIV
             const select: HTMLSelectElement = document.createElement('select');
+            select.dataset.placeholder = props.label;
             selectContainer.current.appendChild(select);
 
             setChoices(new Choices(select, {

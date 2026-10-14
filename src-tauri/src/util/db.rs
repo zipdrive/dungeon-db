@@ -572,6 +572,7 @@ CREATE VIEW METADATA_TABLE_COLUMN AS
         ct.TYPE AS COLUMNTYPE,
         ct.DEFAULT_VALUE AS COLUMNTYPE_DEFAULT_VALUE,
         ct.TABLE_OID AS COLUMNTYPE_TABLE_OID,
+        ct.REPORT_OID AS COLUMNTYPE_REPORT_OID,
         c.ORDERING,
         c.SIZE,
         c.STYLE,
@@ -593,6 +594,7 @@ CREATE VIEW METADATA_TABLE_COLUMN_PATH AS
         c.COLUMNTYPE,
         c.COLUMNTYPE_DEFAULT_VALUE,
         c.COLUMNTYPE_TABLE_OID,
+        c.COLUMNTYPE_REPORT_OID,
         c.ORDERING,
         c.SIZE,
         c.STYLE,
@@ -611,6 +613,7 @@ CREATE VIEW METADATA_TABLE_COLUMN_PATH AS
         c.COLUMNTYPE,
         c.COLUMNTYPE_DEFAULT_VALUE,
         c.COLUMNTYPE_TABLE_OID,
+        c.COLUMNTYPE_REPORT_OID,
         c.ORDERING,
         c.SIZE,
         c.STYLE,
@@ -836,7 +839,7 @@ WHERE c.TRASH
                     row.get::<_, i64>("COLUMN_OID")?
                 )), 
                 |(table_oid, column_oid)| {
-                    let table_name: String = format!("TABLE{table_oid}");
+                    let table_name: String = format!("__TABLE{table_oid}");
 
                     // Drop the multiselect *-to-* mapping table
                     sql_execute(

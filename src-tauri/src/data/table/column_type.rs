@@ -1,7 +1,7 @@
 use rusqlite::{Connection, params};
 use serde::{Serialize, Deserialize};
 
-use crate::util::db::sql_execute;
+use crate::util::db::{sql_execute, sql_zero_or_one};
 use crate::util::error::Error;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -102,7 +102,8 @@ impl TableColumnType {
         
         match self {
             Self::Primitive { oid, primitive, default_value } => {
-                *oid = inserted_oid;
+                sql_execute(conn, "INSERT INTO __METADATA_TABLE_COLUMNTYPE DEFAULT VALUES", [])?;
+                *oid = conn.last_insert_rowid();
                 let mode: &'static str = match *primitive {
                     Primitive::Text => "Text",
                     Primitive::TextJson => "Text/Json",
@@ -122,39 +123,60 @@ impl TableColumnType {
                 )?;
             }
             Self::File { oid } => {
-                *oid = inserted_oid;
+                sql_execute(conn, "INSERT INTO __METADATA_TABLE_COLUMNTYPE DEFAULT VALUES", [])?;
+                *oid = conn.last_insert_rowid();
             }
             Self::Object { oid, table_oid } => {
-                *oid = inserted_oid;
-                sql_execute(
-                    conn, 
-                    "INSERT INTO __METADATA_TABLE_COLUMNTYPE_OBJECT (OID, TABLE_OID) VALUES (?1, ?2)", 
-                    params![*oid, *table_oid]
-                )?;
+                if let Some(existing_oid) = sql_zero_or_one(conn, "SELECT OID FROM __METADATA_TABLE_COLUMNTYPE_OBJECT WHERE TABLE_OID = ?1", params![*table_oid], |row| row.get("OID"))? {
+                    *oid = existing_oid;
+                } else {
+                    sql_execute(conn, "INSERT INTO __METADATA_TABLE_COLUMNTYPE DEFAULT VALUES", [])?;
+                    *oid = conn.last_insert_rowid();
+                    sql_execute(
+                        conn, 
+                        "INSERT INTO __METADATA_TABLE_COLUMNTYPE_OBJECT (OID, TABLE_OID) VALUES (?1, ?2)", 
+                        params![*oid, *table_oid]
+                    )?;
+                }
             }
             Self::SingleSelect { oid, table_oid } => {
-                *oid = inserted_oid;
-                sql_execute(
-                    conn, 
-                    "INSERT INTO __METADATA_TABLE_COLUMNTYPE_SINGLESELECT (OID, TABLE_OID) VALUES (?1, ?2)", 
-                    params![*oid, *table_oid]
-                )?;
+                if let Some(existing_oid) = sql_zero_or_one(conn, "SELECT OID FROM __METADATA_TABLE_COLUMNTYPE_SINGLESELECT WHERE TABLE_OID = ?1", params![*table_oid], |row| row.get("OID"))? {
+                    *oid = existing_oid;
+                } else {
+                    sql_execute(conn, "INSERT INTO __METADATA_TABLE_COLUMNTYPE DEFAULT VALUES", [])?;
+                    *oid = conn.last_insert_rowid();
+                    sql_execute(
+                        conn, 
+                        "INSERT INTO __METADATA_TABLE_COLUMNTYPE_SINGLESELECT (OID, TABLE_OID) VALUES (?1, ?2)", 
+                        params![*oid, *table_oid]
+                    )?;
+                }
             }
             Self::MultiSelect { oid, table_oid } => {
-                *oid = inserted_oid;
-                sql_execute(
-                    conn, 
-                    "INSERT INTO __METADATA_TABLE_COLUMNTYPE_MULTISELECT (OID, TABLE_OID) VALUES (?1, ?2)", 
-                    params![*oid, *table_oid]
-                )?;
+                if let Some(existing_oid) = sql_zero_or_one(conn, "SELECT OID FROM __METADATA_TABLE_COLUMNTYPE_MULTISELECT WHERE TABLE_OID = ?1", params![*table_oid], |row| row.get("OID"))? {
+                    *oid = existing_oid;
+                } else {
+                    sql_execute(conn, "INSERT INTO __METADATA_TABLE_COLUMNTYPE DEFAULT VALUES", [])?;
+                    *oid = conn.last_insert_rowid();
+                    sql_execute(
+                        conn, 
+                        "INSERT INTO __METADATA_TABLE_COLUMNTYPE_MULTISELECT (OID, TABLE_OID) VALUES (?1, ?2)", 
+                        params![*oid, *table_oid]
+                    )?;
+                }
             }
             Self::Subreport { oid, report_oid } => {
-                *oid = inserted_oid;
-                sql_execute(
-                    conn, 
-                    "INSERT INTO __METADATA_TABLE_COLUMNTYPE_SUBREPORT (OID, REPORT_OID) VALUES (?1, ?2)", 
-                    params![*oid, *report_oid]
-                )?;
+                if let Some(existing_oid) = sql_zero_or_one(conn, "SELECT OID FROM __METADATA_TABLE_COLUMNTYPE_SUBREPORT WHERE REPORT_OID = ?1", params![*report_oid], |row| row.get("OID"))? {
+                    *oid = existing_oid;
+                } else {
+                    sql_execute(conn, "INSERT INTO __METADATA_TABLE_COLUMNTYPE DEFAULT VALUES", [])?;
+                    *oid = conn.last_insert_rowid();
+                    sql_execute(
+                        conn, 
+                        "INSERT INTO __METADATA_TABLE_COLUMNTYPE_SUBREPORT (OID, REPORT_OID) VALUES (?1, ?2)", 
+                        params![*oid, *report_oid]
+                    )?;
+                }
             }
         }
         Ok(())

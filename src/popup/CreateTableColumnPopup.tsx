@@ -3,6 +3,7 @@ import {
     Button,
     Alert,
     Tabs,
+    Spinner,
 } from "@material-tailwind/react";
 import { useState, useEffect, useTransition } from "react";
 import { executeAsync } from "../api/action";
@@ -225,13 +226,21 @@ export function CreateTableColumnPopup(props: CreateTableColumnPopupProps): Reac
                         {(columnBaseType === 'object'
                             || columnBaseType === 'singleSelect'
                             || columnBaseType === 'multiSelect'
-                        ) && (<Form.SelectField 
+                        ) && (isRefTableListPending ? <Form.CustomField
+                            label="Table"
+                        >
+                            <Spinner />
+                        </Form.CustomField> : <Form.SelectField 
                             label="Table" 
                             value={refTable} 
                             possibleValues={refTableList.map(({ oid, name }) => { return { value: oid.toString(), label: name }; })} 
                             onSetValue={setRefTable} 
                         />)}
-                        {columnBaseType === 'subreport' && (<Form.SelectField 
+                        {columnBaseType === 'subreport' && (isRefReportListPending ? <Form.CustomField
+                            label="Report"
+                        >
+                            <Spinner />
+                        </Form.CustomField> : <Form.SelectField 
                             label="Report" 
                             value={refReport} 
                             possibleValues={refReportList.map(({ oid, name }) => { return { value: oid.toString(), label: name }; })} 
