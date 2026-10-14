@@ -315,7 +315,7 @@ WHERE OID = ?5
         let report_oid: i64 = sql_one(
             &trans, 
             "SELECT REPORT_OID FROM METADATA_REPORT_COLUMN WHERE OID = ?1", 
-            params![self.oid], 
+            params![other.oid], 
             |row| row.get("REPORT_OID")
         )?;
 

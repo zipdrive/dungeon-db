@@ -17,7 +17,7 @@ import { ReportListItem } from "../api/model/report";
 
 export type CreateTableColumnPopupProps = {
     tableOid: number,
-    ordering: number | null,
+    columnOid: number | null,
     onClosePopup: () => void,
     onError: (e: unknown) => void,
 };
@@ -167,7 +167,7 @@ export function CreateTableColumnPopup(props: CreateTableColumnPopupProps): Reac
                         size: columnSize,
                         style: columnStyle,
                     },
-                    ordering: props.ordering
+                    beforeColumnOid: props.columnOid
                 }
             });
             return true;

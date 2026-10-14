@@ -12,7 +12,7 @@ import { AgGridReact } from "ag-grid-react";
 import { CellEditRequestEvent, ColDef, ColumnResizedEvent } from "ag-grid-community";
 import classNames from "classnames";
 import { Menu, MenuItem, Submenu } from "@tauri-apps/api/menu";
-import { ColumnHeaderRenderer } from "./grid/renderer/ColumnHeaderRenderer";
+import { TableColumnHeaderRenderer } from "./grid/renderer/TableColumnHeaderRenderer";
 import { AddNewColumnButton } from "./grid/ColDef";
 import { selectRenderer } from "./grid/RendererSelector";
 import { selectEditor } from "./grid/EditorSelector";
@@ -22,7 +22,7 @@ import { TableListItem } from "../api/model/table";
 import './Grid.css';
 
 type TablePageProps = Omit<TablePageBreadcrumb, 'key' | 'name'> & {
-    onRequestCreateTableColumn: (tableOid: number, ordering: number | null) => void,
+    onRequestCreateTableColumn: (tableOid: number, columnOid: number | null) => void,
     onRequestEditTableColumn: (columnMetadata: TableColumnMetadata) => void,
     onRequestUploadFile: (absolutePath: string, relativePath: string, onUploadFile: (fileOid: number) => Promise<any>) => void,
     onRequestOpenDrillDownReport: (report: ReportPageBreadcrumb) => void,
@@ -360,10 +360,13 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
 
                 return {
                     colId: key,
-                    headerComponent: ColumnHeaderRenderer,
+                    headerComponent: TableColumnHeaderRenderer,
                     headerComponentParams: {
+                        tableOid: props.tableOid,
                         columnMetadata,
-                        onRequestEditColumn: props.onRequestEditTableColumn,
+                        columnList,
+                        onRequestCreateTableColumn: props.onRequestCreateTableColumn,
+                        onRequestEditTableColumn: props.onRequestEditTableColumn,
                         onError: props.onError,
                     },
                     cellClass({ data }) {

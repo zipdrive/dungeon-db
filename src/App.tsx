@@ -173,11 +173,11 @@ function App() {
   /**
    * Opens a popup to create a new table column.
    */
-  const onRequestCreateTableColumn = useCallback((tableOid: number, ordering: number | null) => {
+  const onRequestCreateTableColumn = useCallback((tableOid: number, columnOid: number | null) => {
     onOpenPopup({ 
       popup: 'createTableColumn',
       tableOid,
-      ordering,
+      columnOid,
       onClosePopup,
       onError,
     }); 
@@ -198,11 +198,11 @@ function App() {
   /**
    * Opens a popup to create a new report column.
    */
-  const onRequestCreateReportColumn = useCallback((reportOid: number, ordering: number | null) => {
+  const onRequestCreateReportColumn = useCallback((reportOid: number, columnOid: number | null) => {
     onOpenPopup({ 
       popup: 'createReportColumn',
       reportOid,
-      ordering,
+      columnOid,
       onClosePopup,
       onError,
     }); 

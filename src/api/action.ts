@@ -21,7 +21,7 @@ export type Action = {
     createTableColumn: {
         tableOid: number,
         metadata: TableColumnMetadata,
-        ordering: number | null
+        beforeColumnOid: number | null
     }
 } | {
     replaceTableColumn: {
@@ -45,7 +45,7 @@ export type Action = {
     createReportColumn: {
         reportOid: number,
         metadata: ReportColumnMetadata,
-        ordering: number | null
+        beforeColumnOid: number | null
     }
 } | {
     replaceReportColumn: {

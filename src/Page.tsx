@@ -15,9 +15,9 @@ import { ReportColumnMetadata } from "./api/model/reportColumn";
 
 type PageProps = {
     schema: ['table' | 'report', number, string] | null,
-    onRequestCreateTableColumn: (tableOid: number, ordering: number | null) => void,
+    onRequestCreateTableColumn: (tableOid: number, columnOid: number | null) => void,
     onRequestEditTableColumn: (columnMetadata: TableColumnMetadata) => void,
-    onRequestCreateReportColumn: (reportOid: number, ordering: number | null) => void,
+    onRequestCreateReportColumn: (reportOid: number, columnOid: number | null) => void,
     onRequestEditReportColumn: (columnMetadata: ReportColumnMetadata) => void,
     onRequestUploadFile: (absolutePath: string, relativePath: string, onUploadFile: (fileOid: number) => Promise<any>) => void,
     onError: (e: unknown) => void,

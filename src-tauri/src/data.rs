@@ -339,7 +339,7 @@ pub enum Action {
     CreateTableColumn {
         table_oid: i64,
         metadata: table::column::TableColumnMetadata,
-        ordering: Option<i64>
+        before_column_oid: Option<i64>
     },
     ReplaceTableColumn {
         old_metadata: table::column::TableColumnMetadata,
@@ -371,7 +371,7 @@ pub enum Action {
     CreateReportColumn {
         report_oid: i64,
         metadata: report::column::ReportColumnMetadata,
-        ordering: Option<i64>
+        before_column_oid: Option<i64>
     },
     ReplaceReportColumn {
         old_metadata: report::column::ReportColumnMetadata,
@@ -540,7 +540,7 @@ impl Action {
             Self::CreateTableColumn { 
                 table_oid,
                 mut metadata,
-                ordering
+                before_column_oid
             } => {
                 // Create the column
                 metadata.create(table_oid.clone())?;
@@ -552,8 +552,8 @@ impl Action {
                 );
 
                 // Adjust the ordering of the column
-                if let Some(ordering) = ordering {
-                    let (_, old_ordering) = metadata.set_ordering(ordering)?;
+                if let Some(before_column_oid) = before_column_oid {
+                    let (_, old_ordering) = metadata.set_ordering_before(Some(before_column_oid))?;
                     record_action(
                         Self::EditTableColumnOrdering { 
                             metadata, 
@@ -692,7 +692,7 @@ impl Action {
             Self::CreateReportColumn { 
                 report_oid, 
                 mut metadata,
-                ordering
+                before_column_oid
             } => {
                 // Create the column
                 metadata.create(report_oid.clone())?;
@@ -705,8 +705,8 @@ impl Action {
                 );
 
                 // Adjust the ordering of the column
-                if let Some(ordering) = ordering {
-                    let (_, old_ordering) = metadata.set_ordering(ordering)?;
+                if let Some(before_column_oid) = before_column_oid {
+                    let (_, old_ordering) = metadata.set_ordering_before(Some(before_column_oid))?;
                     record_action(
                         Self::EditReportColumnOrdering { 
                             metadata, 

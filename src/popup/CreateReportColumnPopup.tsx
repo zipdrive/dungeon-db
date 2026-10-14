@@ -17,7 +17,7 @@ import { ReportColumnType } from "../api/model/reportColumn";
 
 export type CreateReportColumnPopupProps = {
     reportOid: number,
-    ordering: number | null,
+    columnOid: number | null,
     onClosePopup: () => void,
     onError: (e: unknown) => void,
 };
@@ -108,7 +108,7 @@ export function CreateReportColumnPopup(props: CreateReportColumnPopupProps): Re
                         size: columnSize,
                         style: columnStyle,
                     },
-                    ordering: props.ordering
+                    beforeColumnOid: props.columnOid
                 }
             });
             return true;

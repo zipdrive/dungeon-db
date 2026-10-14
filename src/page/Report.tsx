@@ -11,7 +11,7 @@ import { AgGridReact } from "ag-grid-react";
 import { CellContextMenuEvent, CellEditRequestEvent, ColDef, ColumnResizedEvent } from "ag-grid-community";
 import classNames from "classnames";
 import { Menu, MenuItem } from "@tauri-apps/api/menu";
-import { ColumnHeaderRenderer } from "./grid/renderer/ColumnHeaderRenderer";
+import { TableColumnHeaderRenderer } from "./grid/renderer/TableColumnHeaderRenderer";
 import { AddNewColumnButton } from "./grid/ColDef";
 import { selectRenderer } from "./grid/RendererSelector";
 import { selectEditor } from "./grid/EditorSelector";
@@ -22,9 +22,10 @@ import { ReportCell, ReportRow } from "../api/model/reportRow";
 import { ReportColumnMetadata } from "../api/model/reportColumn";
 import './Grid.css';
 import { ReportMetadata } from "../api/model/report";
+import { ReportColumnHeaderRenderer } from "./grid/renderer/ReportColumnHeaderRenderer";
 
 type ReportPageProps = Omit<ReportPageBreadcrumb, 'key' | 'name'> & {
-    onRequestCreateReportColumn: (reportOid: number, ordering: number | null) => void,
+    onRequestCreateReportColumn: (reportOid: number, columnOid: number | null) => void,
     onRequestEditReportColumn: (columnMetadata: ReportColumnMetadata) => void,
     onRequestUploadFile: (absolutePath: string, relativePath: string, onUploadFile: (fileOid: number) => Promise<any>) => void,
     onRequestOpenDrillDownReport: (report: ReportPageBreadcrumb) => void,
@@ -311,10 +312,13 @@ export function ReportPage(props: ReportPageProps): React.JSX.Element {
                 const key: `column${number}` = `column${columnMetadata.oid}`;
                 return {
                     colId: key,
-                    headerComponent: ColumnHeaderRenderer,
+                    headerComponent: ReportColumnHeaderRenderer,
                     headerComponentParams: {
+                        reportOid: props.reportOid,
                         columnMetadata,
-                        onRequestEditColumn: props.onRequestEditReportColumn,
+                        columnList,
+                        onRequestCreateReportColumn: props.onRequestCreateReportColumn,
+                        onRequestEditReportColumn: props.onRequestEditReportColumn,
                         onError: props.onError,
                     },
                     cellClass({ data }) {
