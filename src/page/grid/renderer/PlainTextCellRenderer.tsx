@@ -32,7 +32,6 @@ export class PlainTextCellRenderer implements ICellRendererComp {
                 const p: HTMLParagraphElement = document.createElement('p');
                 p.innerText = paragraph;
                 this.gui.appendChild(p);
-                console.log(paragraph);
             }
         });
         return true;

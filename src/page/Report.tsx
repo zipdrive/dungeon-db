@@ -130,6 +130,7 @@ export function ReportPage(props: ReportPageProps): React.JSX.Element {
             const tempColumnList: ReportColumnMetadata[] = [];
             const tempRowList: ReportRow[] = [];
             try {
+                const dropdownTableOid: Set<number> = new Set();
                 await queryAsync({
                     reportCells: {
                         reportOid: props.reportOid,
@@ -139,9 +140,21 @@ export function ReportPage(props: ReportPageProps): React.JSX.Element {
                         }),
                         rowChannel: new Channel<ReportRow>((item) => {
                             tempRowList.push(item);
+                            for (const cell of item.cells) {
+                                if ('singleSelectDropdown' in cell.content) {
+                                    dropdownTableOid.add(cell.content.singleSelectDropdown.tableOid);
+                                } else if ('multiSelectDropdown' in cell.content) {
+                                    dropdownTableOid.add(cell.content.multiSelectDropdown.tableOid);
+                                }
+                            }
                         })
                     }
                 });
+
+                // Load dropdown values
+                for (const tableOid of dropdownTableOid) {
+                    loadDropdownValues(tableOid);
+                }
             } catch (e) {
                 props.onError(e);
             }
@@ -150,7 +163,7 @@ export function ReportPage(props: ReportPageProps): React.JSX.Element {
                 setRowList(tempRowList);
             });
         });
-    }, [props.reportOid, props.onError]);
+    }, [props.reportOid, props.onError, loadDropdownValues]);
 
     /**
      * Edits a cell.
