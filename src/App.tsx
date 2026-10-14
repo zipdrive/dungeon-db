@@ -100,10 +100,10 @@ function App() {
                 }
               }),
               await Submenu.new({
-                text: "Export",
+                text: "Export...",
                 items: [
                   await MenuItem.new({
-                    text: "JSON",
+                    text: "JSON...",
                     action: () => {
                       onOpenPopup({
                         popup: 'exportJson',

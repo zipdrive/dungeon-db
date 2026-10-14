@@ -16,6 +16,7 @@ export type EditReportPopupProps = {
 
 export function EditReportPopup(props: EditReportPopupProps): React.JSX.Element {
     const [reportName, setReportName] = useState<string>('');
+    const [baselineFormula, setBaselineFormula] = useState<string>('');
     const [filterFormula, setFilterFormula] = useState<string>('');
     const [groupByColumnOids, setGroupByColumnOids] = useState<string[]>([]);
     const [orderByColumnOids, setOrderByColumnOids] = useState<[string, boolean][]>([]);
@@ -25,6 +26,7 @@ export function EditReportPopup(props: EditReportPopupProps): React.JSX.Element 
     
     useEffect(() => {
         setReportName(props.metadata.name);
+        setBaselineFormula(props.metadata.baseline?.formula || '');
         setFilterFormula(props.metadata.filterFormula ?? '');
         setGroupByColumnOids(props.metadata.groupByColumnOids.map((oid) => oid.toString()));
         setOrderByColumnOids(props.metadata.orderByColumnOids.map(([oid, dir]) => [oid.toString(), dir]));
@@ -71,8 +73,14 @@ export function EditReportPopup(props: EditReportPopupProps): React.JSX.Element 
                 editReport: {
                     oid: props.metadata.oid,
                     name: reportName,
+                    baseline: baselineFormula ? {
+                        formula: baselineFormula,
+                        tableOid: 0,
+                        oidName: '',
+                        parentOidName: null
+                    } : null,
                     filterFormula: filterFormula || null,
-                    groupByColumnOids: groupByColumnOids.map((oid) => parseInt(oid)),
+                    groupByColumnOids: baselineFormula ? [] : groupByColumnOids.map((oid) => parseInt(oid)),
                     orderByColumnOids: orderByColumnOids.map(([oid, dir]) => [parseInt(oid), dir])
                 }
             });
@@ -95,6 +103,12 @@ export function EditReportPopup(props: EditReportPopupProps): React.JSX.Element 
                             label="Report Name" 
                             value={reportName} 
                             onSetValue={setReportName} 
+                        />
+                        <Form.FormulaField 
+                            label="Baseline Table" 
+                            tooltip="A formula that returns a baseline table. Specifying a baseline table will add controls to the report to add and remove rows from that table. Aggregation is disabled when a baseline table is specified."
+                            value={baselineFormula} 
+                            onSetValue={setBaselineFormula} 
                         />
                     </>)
                 },
@@ -136,13 +150,13 @@ export function EditReportPopup(props: EditReportPopupProps): React.JSX.Element 
                         />
                     </>)
                 },
-                {
+                ...(baselineFormula ? [] : [{
                     value: 'aggregation',
                     label: "Aggregation",
                     fields: (<>
                         <Form.MultiselectField
                             label="Group By"
-                            tooltip="The report will be aggregated by distinct values in these columns."
+                            tooltip="The report will be aggregated by distinct values in these columns. Aggregation is disabled when a baseline table is specified."
                             value={groupByColumnOids}
                             onSetValue={setGroupByColumnOids}
                             possibleValues={reportColumnList.map((col) => {
@@ -150,7 +164,7 @@ export function EditReportPopup(props: EditReportPopupProps): React.JSX.Element 
                             })}
                         />
                     </>)
-                },
+                }]),
                 {
                     value: 'sorting',
                     label: "Sorting",

@@ -38,6 +38,10 @@ type ObjectGridRowData = {
 };
 
 export function ObjectPage(props: ObjectPageProps): React.JSX.Element {
+    useEffect(() => {
+        console.log(props);
+    }, [props]);
+
     // Stores dropdown values used in single-select and multi-select columns
     const [dropdownValues, setDropdownValues] = useState<{[tableOid: number]: TableRowLabel[]}>({});
 
@@ -114,6 +118,8 @@ export function ObjectPage(props: ObjectPageProps): React.JSX.Element {
      * Listens for possible changes in subtypes.
      */
     useEffect(() => {
+        updateSubtypes();
+        
         const unlistenSubtypes = listen<TableListItem>('table', (_event) => {
             updateSubtypes();
         });
@@ -121,7 +127,7 @@ export function ObjectPage(props: ObjectPageProps): React.JSX.Element {
         return () => {
             unlistenSubtypes.then(f => f());
         };
-    }, [props.tableOid, props.onError]);
+    }, [updateSubtypes, props.tableOid, props.onError]);
 
 
 
@@ -175,6 +181,20 @@ export function ObjectPage(props: ObjectPageProps): React.JSX.Element {
             });
         });
     }, [props.tableOid, props.onError]);
+
+    useEffect(() => {
+        updateRow();
+
+        const unlistenForTable = listen<TableListItem>('table', (event) => {
+            if (event.payload.oid == props.tableOid) {
+                updateRow();
+            }
+        });
+
+        return () => {
+            unlistenForTable.then(f => f());
+        };
+    }, [updateRow, props.tableOid]);
 
 
 
@@ -258,7 +278,12 @@ export function ObjectPage(props: ObjectPageProps): React.JSX.Element {
                     if (data) {
                         if (data.rowId === 'subtype') {
                             return {
-                                component: SubtypeEditor
+                                component: SubtypeEditor,
+                                params: {
+                                    subtypes,
+                                    subtypeTableOid: data.subtypeValue,
+                                    deferRender: true
+                                }
                             };
                         } else {
                             const cell: TableCell = {

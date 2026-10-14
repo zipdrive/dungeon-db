@@ -33,9 +33,9 @@ export type Action = {
         metadata: TableColumnMetadata
     }
 } | {
-    editTableColumnOrdering: {
+    moveTableColumnBefore: {
         metadata: TableColumnMetadata,
-        ordering: number | null
+        beforeColumnOid: number | null
     }
 } | {
     trashTableColumn: {
@@ -57,9 +57,9 @@ export type Action = {
         metadata: ReportColumnMetadata
     }
 } | {
-    editReportColumnOrdering: {
+    moveReportColumnBefore: {
         metadata: ReportColumnMetadata,
-        ordering: number | null
+        beforeColumnOid: number | null
     }
 } | {
     trashReportColumn: {
@@ -70,13 +70,13 @@ export type Action = {
     createTableRow: {
         tableOid: number,
         rowOid: number | null,
-        fixedParentDatasource: [number, number, TableColumnMetadata] | null
+        fixedParent: [string, number] | null
     }
 } | {
-    editTableRowOid: {
+    moveTableRowBefore: {
         tableOid: number,
         rowOid: number,
-        newRowOid: number | null
+        beforeRowOid: number | null
     }
 } | {
     trashTableRow: {

@@ -13,6 +13,7 @@ export type CreateReportPopupProps = {
 
 export function CreateReportPopup(props: CreateReportPopupProps): React.JSX.Element {
     const [reportName, setReportName] = useState<string>('');
+    const [baselineFormula, setBaselineFormula] = useState<string>('');
 
     /**
      * Creates a new schema from the inputted information.
@@ -23,6 +24,12 @@ export function CreateReportPopup(props: CreateReportPopupProps): React.JSX.Elem
                 createReport: {
                     oid: 0,
                     name: reportName,
+                    baseline: baselineFormula ? {
+                        formula: baselineFormula,
+                        tableOid: 0,
+                        oidName: '',
+                        parentOidName: null
+                    } : null,
                     filterFormula: null,
                     groupByColumnOids: [],
                     orderByColumnOids: []
@@ -38,6 +45,12 @@ export function CreateReportPopup(props: CreateReportPopupProps): React.JSX.Elem
     return (<div className="flex flex-col gap-y-6">
         <Form title="Create New Report">
             <Form.TextField label="Report Name" value={reportName} onSetValue={setReportName} />
+            <Form.FormulaField 
+                label="Baseline Table" 
+                tooltip="A formula that returns a baseline table. Specifying a baseline table will add controls to the report to add and remove rows from that table. Aggregation is disabled when a baseline table is specified."
+                value={baselineFormula} 
+                onSetValue={setBaselineFormula} 
+            />
         </Form>
         <div className="flex flex-row gap-y-2 justify-end">
             <Dialog.DismissTrigger

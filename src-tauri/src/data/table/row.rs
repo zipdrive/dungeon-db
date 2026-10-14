@@ -3,6 +3,7 @@ use serde::{Serialize, Deserialize};
 use std::collections::{HashSet, HashMap};
 
 use crate::data::file::File;
+use crate::data::formula::func::RecordFunc;
 use crate::data::table::column::TableColumnMetadata; 
 use crate::data::table::column_type::{Primitive, TableColumnType};
 use crate::data::table::label;
@@ -364,7 +365,7 @@ impl TableRow {
             columns.clone(),
             sql_one(
                 conn, 
-                format!("SELECT ROW_NUMBER() OVER () AS ROW_INDEX, * FROM TABLE{table_oid} WHERE OID = ?1"), 
+                format!("SELECT ROW_NUMBER() OVER (ORDER BY ORDERING) AS ROW_INDEX, * FROM TABLE{table_oid} WHERE OID = ?1"), 
                 params![row_oid], 
                 |row| {
                     Self::new(row, &table_oid, &columns)
@@ -429,7 +430,7 @@ impl TableRow {
         sql_iter(
             &conn, 
             format!(
-                "SELECT ROW_NUMBER() OVER () AS ROW_INDEX, * FROM TABLE{table_oid} {}",
+                "SELECT ROW_NUMBER() OVER (ORDER BY ORDERING) AS ROW_INDEX, * FROM TABLE{table_oid} ORDER BY ORDERING {}",
                 "" // todo limits
             ), 
             [], 
@@ -444,25 +445,102 @@ impl TableRow {
 
 
     /// Inserts a row into the given table.
-    pub fn insert(table_oid: i64, row_oid: Option<i64>) -> Result<i64, Error> {
+    pub fn insert(table_oid: i64, row_oid: Option<i64>, fixed_parent: Option<(String, i64)>) -> Result<i64, Error> {
         // Start a transaction
         let mut conn = db::open()?;
         let trans: Transaction = conn.transaction()?;
 
+        // Get the row ordering
+        let row_ordering: Option<i64> = if let Some(row_oid) = row_oid {
+            Some(sql_one(
+                &trans,
+                format!("SELECT ORDERING FROM __TABLE{table_oid} WHERE OID = ?1"),
+                params![row_oid],
+                |row| row.get(0)
+            )?)
+        } else {
+            None
+        };
+
         // Insert the row into the table, + related rows for each master table
         let mut master_rows: HashMap<i64, i64> = HashMap::new();
-        let row_oid: i64 = Self::conn_insert(&trans, table_oid, row_oid, &mut master_rows)?;
-
-        // TODO fixed parent datasources
+        let row_oid: i64 = Self::conn_insert_fixed(
+            &trans, 
+            table_oid, 
+            row_ordering, 
+            if let Some((record_formula, record_row_oid)) = fixed_parent {
+                let record_func: RecordFunc = RecordFunc::conn_parse(&trans, record_formula)?;
+                Some((record_func, record_row_oid))
+            } else {
+                None
+            },
+            &mut master_rows
+        )?;
 
         // Commit the transaction
         trans.commit()?;
         Ok(row_oid)
     }
 
+    pub fn conn_insert_fixed(conn: &Connection, table_oid: i64, row_ordering: Option<i64>, fixed_parent: Option<(RecordFunc, i64)>, master_rows: &mut HashMap<i64, i64>) -> Result<i64, Error> {
+        // Start by creating the row
+        let row_oid: i64 = Self::conn_insert(conn, table_oid, row_ordering, master_rows)?;
+
+        // Fixate the parent
+        if let Some((record_func, record_row_oid)) = fixed_parent {
+            match record_func {
+                RecordFunc::Source(_) => {
+                    return Err(Error::adhoc(""));
+                }
+                RecordFunc::Cast { record, .. } => {
+                    let parent_table_oid: i64 = record.table_oid()?;
+                    Self::conn_insert_fixed(conn, parent_table_oid, None, Some((*record, record_row_oid)), master_rows)?;
+                }
+                RecordFunc::Reference { record, column } => {
+                    match column.column_type {
+                        TableColumnType::MultiSelect { .. } => {
+                            sql_execute(
+                                conn, 
+                                format!("INSERT INTO __MULTISELECT{} (SOURCE_OID, TARGET_OID) VALUES (?1, ?2)", column.oid), 
+                                params![record_row_oid, row_oid]
+                            )?;
+                        }
+                        _ => {
+                            let parent_table_oid: i64 = record.table_oid()?;
+                            Self::conn_insert_fixed(conn, parent_table_oid, None, Some((*record, record_row_oid)), master_rows)?;
+                        }
+                    }
+                }
+                RecordFunc::Backreference { column, .. } => {
+                    match column.column_type {
+                        TableColumnType::Object { .. }
+                        | TableColumnType::SingleSelect { .. } => {
+                            sql_execute(
+                                conn, 
+                                format!("UPDATE __TABLE{table_oid} SET COLUMN{} = ?1 WHERE OID = ?2", column.oid), 
+                                params![record_row_oid, row_oid]
+                            )?;
+                        }
+                        TableColumnType::MultiSelect { .. } => {
+                            sql_execute(
+                                conn, 
+                                format!("INSERT INTO __MULTISELECT{} (SOURCE_OID, TARGET_OID) VALUES (?1, ?2)", column.oid), 
+                                params![row_oid, record_row_oid]
+                            )?;
+                        }
+                        _ => {
+                            return Err(Error::adhoc(format!("Column of type \"{}\" cannot be used as a backreference.", column.column_type.name())));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(row_oid)
+    }
+
     /// Inserts a row into the given table.
     /// Uses the given connection.
-    pub fn conn_insert(conn: &Connection, table_oid: i64, row_oid: Option<i64>, master_rows: &mut HashMap<i64, i64>) -> Result<i64, Error> {
+    pub fn conn_insert(conn: &Connection, table_oid: i64, row_ordering: Option<i64>, master_rows: &mut HashMap<i64, i64>) -> Result<i64, Error> {
         if let Some(row_oid) = master_rows.get(&table_oid) {
             let mut completed_table_oid: HashSet<i64> = HashSet::new();
             Self::conn_untrash(conn, table_oid, row_oid.clone(), &mut completed_table_oid)?;
@@ -516,33 +594,42 @@ WHERE c.TABLE_OID = ?1
         )?;
 
         // Handle insertion at a specific location in the table
-        if let Some(o) = row_oid {
+        if let Some(row_ordering) = row_ordering {
             // Make space for the new row at the designated OID
             sql_execute(
                 conn, 
                 format!(
                     "
 UPDATE __TABLE{table_oid} SET 
-    OID = -OID 
-WHERE OID >= ?1
+    ORDERING = -ORDERING 
+WHERE ORDERING >= ?1
                     "
                 ), 
-                params![o]
+                params![row_ordering]
             )?;
             sql_execute(
                 conn, 
                 format!(
                     "
 UPDATE __TABLE{table_oid} SET 
-    OID = 1 - OID 
-WHERE OID < 0
+    ORDERING = 1 - ORDERING
+WHERE ORDERING < 0
                     "
                 ), 
                 []
             )?;
 
-            // Add initial value for the OID
-            cols.push((String::from("OID"), format!("{o}")));
+            // Add initial value for the row ordering
+            cols.push((String::from("ORDERING"), format!("{row_ordering}")));
+        } else {
+            // Insert row at bottom of table
+            let row_ordering: i64 = sql_zero_or_one(
+                conn, 
+                format!("SELECT COALESCE(MAX(ORDERING), 0) + 1 FROM __TABLE{table_oid}"), 
+                [], 
+                |row| row.get(0)
+            )?.unwrap_or(1);
+            cols.push((String::from("ORDERING"), format!("{row_ordering}")));
         }
 
         // Compile the INSERT statement and execute
@@ -884,8 +971,13 @@ WHERE MASTER{table_oid}_OID = ?1
 SELECT 
     OID
 FROM __TABLE{inheritor_table_oid}
-WHERE MASTER{table_oid}_OID = ?1
-                "
+WHERE {} = ?1
+                ",
+                if table_oid == inheritor_table_oid {
+                    String::from("OID")
+                } else {
+                    format!("MASTER{table_oid}_OID")
+                }
             ), 
             params![row_oid], 
             |row| row.get::<_, i64>("OID")
@@ -919,90 +1011,111 @@ WHERE MASTER{table_oid}_OID = ?1
         Ok(prior_object.unwrap_or((table_oid, row_oid)).0)
     }
 
-    /// Reorders a row in a table.
-    pub fn reorder(table_oid: i64, row_oid: i64, new_row_oid: Option<i64>) -> Result<i64, Error> {
+    /// Reorders a row in a table to be immediately above another given row.
+    /// Returns the old row ordering.
+    pub fn set_ordering_before(table_oid: i64, row_oid: i64, before_row_oid: Option<i64>) -> Result<i64, Error> {
         // Start a transaction
         let mut conn = db::open()?;
         let trans: Transaction = conn.transaction()?;
 
-        let new_row_oid: i64 = match new_row_oid {
-            Some(new_row_oid) => {
-                // Make room for the row OID
-                sql_execute(
-                    &trans, 
-                    format!(
-                        "
-UPDATE __TABLE{table_oid} SET 
-    OID = -OID 
-WHERE OID >= ?1 
-    AND OID != ?2
-                        "
-                    ), 
-                    params![new_row_oid, row_oid]
-                )?;
-
-                // Change the row OID
-                sql_execute(
-                    &trans, 
-                    format!(
-                        "
-UPDATE __TABLE{table_oid} SET 
-    OID = ?1 
-WHERE OID = ?2
-                        "
-                    ), 
-                    params![new_row_oid, row_oid]
-                )?;
-
-                // Move back the other row OIDs
-                sql_execute(
-                    &trans, 
-                    format!(
-                        "
-UPDATE __TABLE{table_oid} SET 
-    OID = 1 - OID 
-WHERE OID < 0
-                        "), 
-                        []
-                )?;
-
-                new_row_oid
-            }
-            None => {
-                // Query for the next OID
-                let new_row_oid: i64 = sql_zero_or_one(
-                    &trans,
-                    format!(
-                        "
+        // Get the new row ordering
+        let ordering: i64 = if let Some(before_row_oid) = before_row_oid {
+            // Lookup the ordering of the given row
+            sql_one(
+                &trans,
+                format!("SELECT ORDERING FROM __TABLE{table_oid} WHERE OID = ?1"),
+                params![before_row_oid],
+                |row| row.get(0)
+            )?
+        } else {
+            // Lookup the maximum used ordering value + 1
+            sql_zero_or_one(
+                &trans,
+                format!(
+                    "
 SELECT 
-    COALESCE(MAX(OID), 0) + 1 
+    COALESCE(MAX(ORDERING), 0) + 1 
 FROM __TABLE{table_oid}
-                        "
-                    ), 
-                    [], 
-                    |row| row.get::<_, i64>(0)
-                )?.unwrap_or(1);
-
-                // Change the row OID
-                sql_execute(
-                    &trans, 
-                    format!(
-                        "
-UPDATE __TABLE{table_oid} SET 
-    OID = ?1 
-WHERE OID = ?2
-                        "
-                    ), 
-                    params![new_row_oid, row_oid]
-                )?;
-
-                new_row_oid
-            }
+                    "
+                ), 
+                [], 
+                |row| row.get::<_, i64>(0)
+            )?.unwrap_or(1)
         };
+
+        // Set the row ordering
+        let old_row_ordering: i64 = Self::conn_set_ordering(&trans, table_oid, row_oid, ordering)?;
 
         // Commit the transaction
         trans.commit()?;
-        Ok(new_row_oid)
+        Ok(old_row_ordering)
+    }
+
+    /// Reorders a row in a table.
+    /// Returns the old row ordering.
+    pub fn set_ordering(table_oid: i64, row_oid: i64, new_row_ordering: i64) -> Result<i64, Error> {
+        // Start a transaction
+        let mut conn = db::open()?;
+        let trans: Transaction = conn.transaction()?;
+
+        // Set the row ordering
+        let old_row_ordering: i64 = Self::conn_set_ordering(&trans, table_oid, row_oid, new_row_ordering)?;
+
+        // Commit the transaction
+        trans.commit()?;
+        Ok(old_row_ordering)
+    }
+
+    /// Reorders a row in a table.
+    /// Uses the given connection.
+    /// Returns the old row ordering.
+    fn conn_set_ordering(conn: &Connection, table_oid: i64, row_oid: i64, new_row_ordering: i64) -> Result<i64, Error> {
+        let old_row_ordering: i64 = sql_one(
+            conn, 
+            format!("SELECT ORDERING FROM __TABLE{table_oid} WHERE OID = ?1"), 
+            params![row_oid], 
+            |row| row.get("ORDERING")
+        )?;
+
+        // Make room for the row ordering
+        sql_execute(
+            conn, 
+            format!(
+                "
+UPDATE __TABLE{table_oid} SET 
+    ORDERING = -ORDERING 
+WHERE ORDERING >= ?1 
+                "
+            ), 
+            params![new_row_ordering]
+        )?;
+
+        // Change the row OID
+        sql_execute(
+            conn, 
+            format!(
+                "
+UPDATE __TABLE{table_oid} SET 
+    ORDERING = ?1 
+WHERE OID = ?2
+                "
+            ), 
+            params![new_row_ordering, row_oid]
+        )?;
+
+        // Move back the other row OIDs
+        sql_execute(
+            conn, 
+            format!(
+                "
+UPDATE __TABLE{table_oid} SET 
+    ORDERING = 1 - ORDERING
+WHERE ORDERING < 0
+                "), 
+                []
+        )?;
+
+        Ok(old_row_ordering)
     }
 }
 

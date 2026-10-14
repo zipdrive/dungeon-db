@@ -1,5 +1,5 @@
 use crate::util::channel::Sender;
-use crate::util::db;
+use crate::util::db::{self, sql_execute_batch};
 use crate::util::db::{sql_execute, sql_iter, sql_one, sql_collect};
 use crate::util::encode::json_encode_string;
 use crate::util::error::Error;
@@ -51,16 +51,16 @@ impl TableListItem {
             sql_iter(
                 &conn, 
                 "
-    SELECT 
-        t.OID, 
-        t.NAME,
-        (inh.MASTER_TABLE_OID IS NOT NULL OR t.OID = ?1) AS DISABLED
-    FROM METADATA_TABLE t 
-    LEFT JOIN METADATA_TABLE_INHERITANCE_PATH inh 
-        ON inh.INHERITOR_TABLE_OID = t.OID
-            AND inh.MASTER_TABLE_OID = ?1
-    ORDER BY t.NAME
-    ", 
+SELECT 
+    t.OID, 
+    t.NAME,
+    (inh.MASTER_TABLE_OID IS NOT NULL OR t.OID = ?1) AS DISABLED
+FROM METADATA_TABLE t 
+LEFT JOIN METADATA_TABLE_INHERITANCE_PATH inh 
+    ON inh.INHERITOR_TABLE_OID = t.OID
+        AND inh.MASTER_TABLE_OID = ?1
+ORDER BY t.NAME
+                ", 
                 params![table_oid], 
                 |row| {
                     sender.send(Self {
@@ -95,7 +95,7 @@ SELECT
     t.OID, 
     t.NAME
 FROM METADATA_TABLE t 
-LEFT JOIN METADATA_TABLE_INHERITANCE_PATH inh 
+INNER JOIN METADATA_TABLE_INHERITANCE_PATH inh 
     ON inh.INHERITOR_TABLE_OID = t.OID
         AND inh.MASTER_TABLE_OID = ?1
         
@@ -231,18 +231,21 @@ WHERE NAME = ?1
         )?;
 
         // Create the storage table
-        sql_execute(
+        sql_execute_batch(
             &trans, 
             format!(
                 "
 CREATE TABLE __TABLE{} (
     OID INTEGER PRIMARY KEY, 
-    TRASH INTEGER NOT NULL DEFAULT 0
+    TRASH INTEGER NOT NULL DEFAULT 0,
+    ORDERING INTEGER NOT NULL
 ) STRICT;
+CREATE UNIQUE INDEX __TABLE{}_INDEX_BY_ORDERING ON __TABLE{} (ORDERING);
                 ",
+                self.oid,
+                self.oid,
                 self.oid
-            ), 
-            []
+            )
         )?;
 
         // Overwrite master OIDs

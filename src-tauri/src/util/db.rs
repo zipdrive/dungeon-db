@@ -103,6 +103,9 @@ CREATE TABLE IF NOT EXISTS __METADATA_REPORT (
     TRASH BOOLEAN NOT NULL DEFAULT FALSE,
     NAME TEXT NOT NULL,
 
+    BASELINE TEXT,
+        -- A formula for the baseline table. The baseline table can be specified to add new rows to a table via a report.
+
     FILTER TEXT
         -- A formula applied to filter the rows of the report
 );
@@ -112,6 +115,7 @@ CREATE VIEW METADATA_REPORT AS
     SELECT 
         OID,
         NAME,
+        BASELINE,
         FILTER
     FROM __METADATA_REPORT 
     WHERE NOT TRASH

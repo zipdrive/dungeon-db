@@ -153,6 +153,8 @@ CTE{} AS (
     SELECT
         -- The row OID
         t.OID AS {}
+        -- The row ordering
+        {}
         -- Columns directly owned by this table
         {}
         -- Columns from master tables
@@ -165,6 +167,7 @@ CTE{} AS (
                 ",
                 self.table_oid,
                 if is_root { String::from("OID") } else { format!("MASTER{}_OID", self.table_oid) },
+                if is_root { String::from(", t.ORDERING") } else { String::from("") },
 
                 // Columns directly owned by this table
                 self.columns.iter()
@@ -216,7 +219,8 @@ pub fn rebuild(conn: &Connection, table_oid: i64) -> Result<(), Error> {
                 "
 CREATE VIEW TABLE{table_oid} AS 
     SELECT 
-        OID
+        OID,
+        ORDERING
     FROM __TABLE{table_oid}
     WHERE NOT TRASH
                 "

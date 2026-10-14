@@ -1,8 +1,14 @@
 import { ICellEditorComp, ICellEditorParams, ICellRendererComp, ICellRendererParams } from 'ag-grid-community';
 import Choices, { EventChoice, InputChoice } from 'choices.js';
-import { DropdownValue, queryAsync, SelectedHierarchicalListItemMetadata } from '../../api/query';
 import classNames from 'classnames';
 import { Channel } from '@tauri-apps/api/core';
+import { TableListItem } from '../../../api/model/table';
+
+type SubtypeCellParams = ICellEditorParams & {
+    subtypes: TableListItem[],
+    subtypeTableOid: number,
+    onError: (e: unknown) => void,
+};
 
 export class SubtypeEditor implements ICellEditorComp {
     private gui: HTMLDivElement;
@@ -52,7 +58,7 @@ export class SubtypeEditor implements ICellEditorComp {
         });
     }
 
-    init(params: ICellEditorParams) {
+    init(params: ICellEditorParams<SubtypeCellParams>) {
         this.refresh(params);
     }
 
@@ -71,14 +77,14 @@ export class SubtypeEditor implements ICellEditorComp {
         }
     }
 
-    refresh(params: ICellEditorParams): boolean {
+    refresh(params: ICellEditorParams<SubtypeCellParams>): boolean {
         this.choices.setChoices(
-            (params.data.inheritorTables as DropdownValue[])
-                .map(({ value, label }) => { 
+            params.data.subtypes
+                .map(({ oid, name }) => { 
                     return { 
-                        value: value.toString(), 
-                        label,
-                        selected: value == params.data.subtypeTableOid
+                        value: oid.toString(), 
+                        label: name,
+                        selected: oid == params.data.subtypeTableOid
                     }; 
                 }),
             'value',

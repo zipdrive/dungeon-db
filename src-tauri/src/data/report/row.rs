@@ -8,9 +8,9 @@ use finetime;
 use std::borrow::Borrow;
 use crate::data::file::File;
 use crate::data::formula::context::Context;
-use crate::data::formula::func::Func;
+use crate::data::formula::func::{Func, RecordFunc};
 use crate::data::formula::query::RecordFuncQuery;
-use crate::data::report::ReportMetadata;
+use crate::data::report::{ReportBaselineTable, ReportMetadata};
 use crate::data::report::column::ReportColumnMetadata;
 use crate::data::report::column_type::ReportColumnType;
 use crate::data::table::row::{TableCellContent, TableCellTextContentFormat};
@@ -56,7 +56,7 @@ pub struct ReportRow {
 
 impl ReportRow {
     /// Queries for multiple rows from the given report.
-    pub fn send(mut column_sender: Sender<ReportColumnMetadata>, mut row_sender: Sender<Self>, report_oid: i64, oid_filters: Vec<(String, Vec<i64>)>) -> Result<(), Error> {
+    pub fn send(mut column_sender: Sender<ReportColumnMetadata>, row_sender: Sender<Self>, report_oid: i64, oid_filters: Vec<(String, Vec<i64>)>) -> Result<(), Error> {
         let conn = db::open()?;
 
         // Send the columns of the report
@@ -196,6 +196,11 @@ FROM (
             // Filters on the query, applied pre-grouping
             {
                 let mut filters: Vec<String> = Vec::new();
+
+                // Filter for only rows of baseline table
+                if let Some(ReportBaselineTable { oid_name, .. }) = &report.baseline {
+                    filters.push(format!("{oid_name} IS NOT NULL"));
+                }
 
                 // Report built-in filter
                 if let Some(filter_func) = &filter_func {

@@ -348,9 +348,13 @@ pub enum Action {
     EditTableColumnMetadata {
         metadata: table::column::TableColumnMetadata,
     },
+    MoveTableColumnBefore {
+        metadata: table::column::TableColumnMetadata,
+        before_column_oid: Option<i64>
+    },
     EditTableColumnOrdering {
         metadata: table::column::TableColumnMetadata,
-        ordering: Option<i64>
+        ordering: i64
     },
     TrashTableColumn {
         column_oid: i64,
@@ -376,9 +380,13 @@ pub enum Action {
     EditReportColumnMetadata {
         metadata: report::column::ReportColumnMetadata,
     },
+    MoveReportColumnBefore {
+        metadata: report::column::ReportColumnMetadata,
+        before_column_oid: Option<i64>
+    },
     EditReportColumnOrdering {
         metadata: report::column::ReportColumnMetadata,
-        ordering: Option<i64>
+        ordering: i64
     },
     TrashReportColumn {
         report_oid: i64,
@@ -397,12 +405,20 @@ pub enum Action {
     CreateTableRow {
         table_oid: i64,
         row_oid: Option<i64>,
-        fixed_parent_datasource: Option<(i64, i64, table::column::TableColumnMetadata)>,
+
+        /// The first item of the tuple is a formula for a record func.
+        /// The second item of the tuple is the row OID of the parent table in that record func which is fixed.
+        fixed_parent: Option<(String, i64)>,
     },
-    EditTableRowOid {
+    MoveTableRowBefore {
         table_oid: i64,
         row_oid: i64,
-        new_row_oid: Option<i64>,
+        before_row_oid: Option<i64>
+    },
+    EditTableRowOrdering {
+        table_oid: i64,
+        row_oid: i64,
+        new_row_ordering: i64,
     },
     TrashTableRow {
         table_oid: i64,
@@ -537,11 +553,11 @@ impl Action {
 
                 // Adjust the ordering of the column
                 if let Some(ordering) = ordering {
-                    let (_, old_ordering) = metadata.set_ordering(Some(ordering))?;
+                    let (_, old_ordering) = metadata.set_ordering(ordering)?;
                     record_action(
                         Self::EditTableColumnOrdering { 
                             metadata, 
-                            ordering: Some(old_ordering)
+                            ordering: old_ordering
                         }, 
                         is_forward
                     );
@@ -584,6 +600,23 @@ impl Action {
                 // Send signal to update table
                 table::TableListItem::send_inheritors(Sender::Event(app, "table"), table_oid)?;
             }
+            Self::MoveTableColumnBefore { 
+                metadata, 
+                before_column_oid 
+            } => {
+                // Update the column ordering
+                let (table_oid, old_column_ordering) = metadata.set_ordering_before(before_column_oid)?;
+                record_action(
+                    Self::EditTableColumnOrdering {
+                        metadata: metadata.clone(),
+                        ordering: old_column_ordering,
+                    },
+                    is_forward,
+                );
+
+                // Send signal to update table
+                table::TableListItem::send_inheritors(Sender::Event(app, "table"), table_oid)?;
+            }
             Self::EditTableColumnOrdering {
                 metadata,
                 ordering,
@@ -593,7 +626,7 @@ impl Action {
                 record_action(
                     Self::EditTableColumnOrdering {
                         metadata: metadata.clone(),
-                        ordering: Some(old_column_ordering),
+                        ordering: old_column_ordering,
                     },
                     is_forward,
                 );
@@ -673,11 +706,11 @@ impl Action {
 
                 // Adjust the ordering of the column
                 if let Some(ordering) = ordering {
-                    let (_, old_ordering) = metadata.set_ordering(Some(ordering))?;
+                    let (_, old_ordering) = metadata.set_ordering(ordering)?;
                     record_action(
                         Self::EditReportColumnOrdering { 
                             metadata, 
-                            ordering: Some(old_ordering)
+                            ordering: old_ordering
                         }, 
                         is_forward
                     );
@@ -715,13 +748,27 @@ impl Action {
                 // Send signal to update report
                 app.emit("report", report_oid)?;
             }
+            Self::MoveReportColumnBefore { metadata, before_column_oid } => {
+                // Update the column style
+                let (report_oid, old_column_ordering) = metadata.set_ordering_before(before_column_oid)?;
+                record_action(
+                    Self::EditReportColumnOrdering {
+                        metadata: metadata.clone(),
+                        ordering: old_column_ordering,
+                    },
+                    is_forward,
+                );
+
+                // Send signal to update report
+                app.emit("report", report_oid)?;
+            }
             Self::EditReportColumnOrdering { metadata, ordering } => {
                 // Update the column style
                 let (report_oid, old_column_ordering) = metadata.set_ordering(ordering)?;
                 record_action(
                     Self::EditReportColumnOrdering {
                         metadata: metadata.clone(),
-                        ordering: Some(old_column_ordering),
+                        ordering: old_column_ordering,
                     },
                     is_forward,
                 );
@@ -782,10 +829,10 @@ impl Action {
             Self::CreateTableRow {
                 table_oid,
                 row_oid,
-                fixed_parent_datasource,
+                fixed_parent,
             } => {
                 // Create the row
-                let row_oid: i64 = table::row::TableRow::insert(table_oid, row_oid)?;
+                let row_oid: i64 = table::row::TableRow::insert(table_oid, row_oid, fixed_parent)?;
                 record_action(
                     Self::TrashTableRow { 
                         table_oid, 
@@ -797,17 +844,35 @@ impl Action {
                 // Send signal to update table
                 table::TableListItem::send_inheritors(Sender::Event(app, "table"), table_oid)?;
             }
-            Self::EditTableRowOid {
+            Self::MoveTableRowBefore {
                 table_oid,
                 row_oid,
-                new_row_oid,
+                before_row_oid,
             } => {
-                let new_row_oid: i64 = table::row::TableRow::reorder(table_oid, row_oid, new_row_oid)?;
+                let old_row_ordering: i64 = table::row::TableRow::set_ordering_before(table_oid, row_oid, before_row_oid)?;
                 record_action(
-                    Self::EditTableRowOid {
+                    Self::EditTableRowOrdering {
                         table_oid,
-                        row_oid: new_row_oid,
-                        new_row_oid: Some(row_oid),
+                        row_oid,
+                        new_row_ordering: old_row_ordering,
+                    },
+                    is_forward,
+                );
+
+                // Send signal to update table
+                table::TableListItem::send_inheritors(Sender::Event(app, "table"), table_oid)?;
+            }
+            Self::EditTableRowOrdering {
+                table_oid,
+                row_oid,
+                new_row_ordering,
+            } => {
+                let old_row_ordering: i64 = table::row::TableRow::set_ordering(table_oid, row_oid, new_row_ordering)?;
+                record_action(
+                    Self::EditTableRowOrdering {
+                        table_oid,
+                        row_oid,
+                        new_row_ordering: old_row_ordering,
                     },
                     is_forward,
                 );
@@ -855,7 +920,12 @@ impl Action {
                 app.emit("tableCell", cell)?;
             }
             Self::CreateObject { table_oid, column_oid, row_oid, object_table_oid } => {
-                let object_row_oid: i64 = table::row::TableRow::insert(object_table_oid, None)?;
+                let object_row_oid: i64 = table::row::TableRow::insert(object_table_oid, None, None)?;
+                record_action(Self::TrashTableRow { 
+                    table_oid: object_table_oid, 
+                    row_oid: object_row_oid.clone() 
+                }, is_forward);
+
                 let cell: table::row::TableCell = table::row::TableCell {
                     table_oid,
                     column_oid,

@@ -422,15 +422,58 @@ WHERE OID = ?5
         Ok(table_oid)
     }
 
-    /// Sets the ordering for the column.
-    /// Returns the old ordering of the column.
-    pub fn set_ordering(&self, ordering: Option<i64>) -> Result<(i64, i64), Error> {
+    /// Sets the ordering to be to the immediate left of another column.
+    /// Returns the owning table OID and the old ordering of the column.
+    pub fn set_ordering_before(&self, before_column_oid: Option<i64>) -> Result<(i64, i64), Error> {
         let mut conn = db::open()?;
         let trans = conn.transaction()?;
 
+        // Query the ordering
+        let ordering: i64 = if let Some(before_column_oid) = before_column_oid {
+            sql_one(
+                &trans,
+                "SELECT ORDERING FROM METADATA_TABLE_COLUMN WHERE OID = ?1",
+                params![before_column_oid],
+                |row| row.get("ORDERING")
+            )?
+        } else {
+            sql_zero_or_one(
+                &trans, 
+                format!("SELECT COALESCE(MAX(c.ORDERING), 0) + 1 FROM __METADATA_TABLE_COLUMN c"), 
+                [], 
+                |row| row.get::<_, i64>(0)
+            )?.unwrap_or(1)
+        };
+
+        // Set the ordering
+        let (table_oid, old_ordering) = self.conn_set_ordering(&trans, ordering)?;
+        
+        // Commit the transaction
+        trans.commit()?;
+        Ok((table_oid, old_ordering))
+    }
+
+    /// Sets the ordering for the column.
+    /// Returns the old ordering of the column.
+    pub fn set_ordering(&self, ordering: i64) -> Result<(i64, i64), Error> {
+        let mut conn = db::open()?;
+        let trans = conn.transaction()?;
+
+        // Set the ordering
+        let (table_oid, old_ordering) = self.conn_set_ordering(&trans, ordering)?;
+        
+        // Commit the transaction
+        trans.commit()?;
+        Ok((table_oid, old_ordering))
+    }
+
+    /// Sets the ordering for the column.
+    /// Uses the given connection.
+    /// Returns the old ordering of the column.
+    fn conn_set_ordering(&self, conn: &Connection, ordering: i64) -> Result<(i64, i64), Error> {
         // Query for the OID of the table that owns the column being replaced
         let table_oid: i64 = sql_one(
-            &trans, 
+            conn, 
             "SELECT TABLE_OID FROM METADATA_TABLE_COLUMN WHERE OID = ?1", 
             params![self.oid], 
             |row| row.get("TABLE_OID")
@@ -438,46 +481,31 @@ WHERE OID = ?5
 
         // Query for the old ordering of the column
         let old_ordering: i64 = sql_one(
-            &trans,
+            conn,
             "SELECT ORDERING FROM METADATA_TABLE_COLUMN WHERE OID = ?1",
             params![self.oid],
             |row| row.get("ORDERING")
         )?;
 
-        if let Some(ordering) = ordering {
-            // Make space for the inserted ordering
-            sql_execute(
-                &trans, 
-                "UPDATE __METADATA_TABLE_COLUMN SET ORDERING = -ORDERING WHERE ORDERING >= ?1",
-                params![ordering]
-            )?;
-            // Set the specified column's ordering
-            sql_execute(
-                &trans, 
-                "UPDATE __METADATA_TABLE_COLUMN SET ORDERING = ?1 WHERE OID = ?2", 
-                params![ordering, self.oid]
-            )?;
-            // Shift all greater orderings to ensure there is space
-            sql_execute(
-                &trans, 
-                "UPDATE __METADATA_TABLE_COLUMN SET ORDERING = 1-ORDERING WHERE ORDERING < 0", 
-                []
-            )?;
-        } else {
-            // Set the specified column's ordering to 1 + the maximum ordering of any other column
-            sql_execute(
-                &trans, 
-                "
-UPDATE __METADATA_TABLE_COLUMN SET 
-    ORDERING = (SELECT COALESCE(MAX(c.ORDERING) + 1, 1) FROM __METADATA_TABLE_COLUMN c) 
-WHERE OID = ?1
-                ", 
-                params![self.oid]
-            )?;
-        }
+        // Make space for the inserted ordering
+        sql_execute(
+            conn, 
+            "UPDATE __METADATA_TABLE_COLUMN SET ORDERING = -ORDERING WHERE ORDERING >= ?1",
+            params![ordering]
+        )?;
+        // Set the specified column's ordering
+        sql_execute(
+            conn, 
+            "UPDATE __METADATA_TABLE_COLUMN SET ORDERING = ?1 WHERE OID = ?2", 
+            params![ordering, self.oid]
+        )?;
+        // Shift all greater orderings to ensure there is space
+        sql_execute(
+            conn, 
+            "UPDATE __METADATA_TABLE_COLUMN SET ORDERING = 1-ORDERING WHERE ORDERING < 0", 
+            []
+        )?;
 
-        // Commit the transaction
-        trans.commit()?;
         Ok((table_oid, old_ordering))
     }
 

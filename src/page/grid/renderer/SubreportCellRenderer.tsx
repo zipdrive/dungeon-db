@@ -31,7 +31,6 @@ export class SubreportCellRenderer implements ICellRendererComp {
     refresh(params: SubreportCellRendererParams): boolean {
         const onRequestOpenDrillDownReport = params.onRequestOpenDrillDownReport;
         const onError: (e: unknown) => void = params.onError;
-        console.log('onError:', onError);
         if (!onError)
             return false;
 

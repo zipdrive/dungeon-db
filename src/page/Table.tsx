@@ -11,7 +11,7 @@ import { gridTheme } from "./Grid";
 import { AgGridReact } from "ag-grid-react";
 import { CellEditRequestEvent, ColDef, ColumnResizedEvent } from "ag-grid-community";
 import classNames from "classnames";
-import { Menu, MenuItem } from "@tauri-apps/api/menu";
+import { Menu, MenuItem, Submenu } from "@tauri-apps/api/menu";
 import { ColumnHeaderRenderer } from "./grid/renderer/ColumnHeaderRenderer";
 import { AddNewColumnButton } from "./grid/ColDef";
 import { selectRenderer } from "./grid/RendererSelector";
@@ -130,7 +130,7 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
             const tempColumnList: (TableColumnMetadata & { tableOid: number })[] = [];
             const tempRowList: TableRow[] = [];
             try {
-                const dropdownTableOid: Set<number> = new Set();
+                const dropdownTableOid: Set<number> = new Set([props.tableOid]);
                 await queryAsync({
                     tableCells: {
                         tableOid: props.tableOid,
@@ -171,7 +171,7 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
                 createTableRow: {
                     tableOid: props.tableOid,
                     rowOid: null,
-                    fixedParentDatasource: null
+                    fixedParent: null
                 }
             });
         } catch (e) {
@@ -248,6 +248,33 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
                     const menu = await Menu.new({
                         items: [
                             await MenuItem.new({
+                                text: "Insert Row Above",
+                                action: async () => {
+                                    try {
+                                        await executeAsync({
+                                            createTableRow: {
+                                                tableOid: props.tableOid,
+                                                rowOid,
+                                                fixedParent: null
+                                            }
+                                        });
+                                    } catch (e) {
+                                        props.onError(e);
+                                    }
+                                }
+                            }),
+                            await MenuItem.new({
+                                text: "Edit",
+                                action: () => {
+                                    props.onRequestOpenObject({
+                                        page: 'object',
+                                        name: `#${event.data?.index}`,
+                                        tableOid: props.tableOid,
+                                        rowOid
+                                    });
+                                }
+                            }),
+                            await MenuItem.new({
                                 text: "Delete",
                                 action: async () => {
                                     try {
@@ -261,7 +288,52 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
                                         props.onError(e);
                                     }
                                 }
-                            })
+                            }),
+                            await Submenu.new({
+                                text: "Move Before...",
+                                items: props.tableOid in dropdownValues ? await Promise.all(dropdownValues[props.tableOid].map((item) => {
+                                    return MenuItem.new({
+                                        text: item.label,
+                                        enabled: rowOid != item.oid,
+                                        action: async () => {
+                                            try {
+                                                await executeAsync({
+                                                    moveTableRowBefore: {
+                                                        tableOid: props.tableOid,
+                                                        rowOid,
+                                                        beforeRowOid: item.oid
+                                                    }
+                                                });
+                                            } catch (e) {
+                                                props.onError(e);
+                                            }
+                                        }
+                                    });
+                                })) : []
+                            }),
+                            await Submenu.new({
+                                text: "Move After...",
+                                items: props.tableOid in dropdownValues ? await Promise.all(dropdownValues[props.tableOid].map((item, idx) => {
+                                    const next = idx < dropdownValues[props.tableOid].length - 1 ? dropdownValues[props.tableOid][idx + 1] : null;
+                                    return MenuItem.new({
+                                        text: item.label,
+                                        enabled: rowOid != item.oid,
+                                        action: async () => {
+                                            try {
+                                                await executeAsync({
+                                                    moveTableRowBefore: {
+                                                        tableOid: props.tableOid,
+                                                        rowOid,
+                                                        beforeRowOid: next?.oid || null
+                                                    }
+                                                });
+                                            } catch (e) {
+                                                props.onError(e);
+                                            }
+                                        }
+                                    });
+                                })) : []
+                            }),
                         ]
                     });
                     menu.popup();

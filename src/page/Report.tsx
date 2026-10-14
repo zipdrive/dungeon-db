@@ -1,14 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { ObjectPageBreadcrumb, ReportPageBreadcrumb } from "../breadcrumb"
 import { TableCell, TableCellContent, TableRowLabel } from "../api/model/tableRow";
-import { queryAsync } from "../api/query";
+import { getReportMetadataAsync, queryAsync } from "../api/query";
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Button, Spinner } from "@material-tailwind/react";
 import { executeAsync } from "../api/action";
 import { gridTheme } from "./Grid";
 import { AgGridReact } from "ag-grid-react";
-import { CellEditRequestEvent, ColDef, ColumnResizedEvent } from "ag-grid-community";
+import { CellContextMenuEvent, CellEditRequestEvent, ColDef, ColumnResizedEvent } from "ag-grid-community";
 import classNames from "classnames";
 import { Menu, MenuItem } from "@tauri-apps/api/menu";
 import { ColumnHeaderRenderer } from "./grid/renderer/ColumnHeaderRenderer";
@@ -21,6 +21,7 @@ import { TableListItem } from "../api/model/table";
 import { ReportCell, ReportRow } from "../api/model/reportRow";
 import { ReportColumnMetadata } from "../api/model/reportColumn";
 import './Grid.css';
+import { ReportMetadata } from "../api/model/report";
 
 type ReportPageProps = Omit<ReportPageBreadcrumb, 'key' | 'name'> & {
     onRequestCreateReportColumn: (reportOid: number, ordering: number | null) => void,
@@ -33,6 +34,7 @@ type ReportPageProps = Omit<ReportPageBreadcrumb, 'key' | 'name'> & {
 
 type ReportRowData = {
     index: number;
+    baseline: number[];
     blank: null;
 } & {
     [key: `column${number}`]: ReportCell;
@@ -85,6 +87,8 @@ export function ReportPage(props: ReportPageProps): React.JSX.Element {
     }, [dropdownValues]);
 
 
+    // Stores the report metadata
+    const [report, setReport] = useState<ReportMetadata | null>(null);
 
     // Stores the list of columns
     const [columnList, setColumnList] = useState<ReportColumnMetadata[]>([]);
@@ -127,6 +131,7 @@ export function ReportPage(props: ReportPageProps): React.JSX.Element {
      */
     const updateReport = useCallback(() => {
         startRowListTransition(async () => {
+            const tempReport: ReportMetadata = await getReportMetadataAsync(props.reportOid);
             const tempColumnList: ReportColumnMetadata[] = [];
             const tempRowList: ReportRow[] = [];
             try {
@@ -159,6 +164,7 @@ export function ReportPage(props: ReportPageProps): React.JSX.Element {
                 props.onError(e);
             }
             startRowListTransition(() => {
+                setReport(tempReport);
                 setColumnList(tempColumnList);
                 setRowList(tempRowList);
             });
@@ -212,6 +218,25 @@ export function ReportPage(props: ReportPageProps): React.JSX.Element {
         };
     }, [columnList]);
 
+
+    /**
+     * Creates a new row in the baseline table. 
+     */
+    const createBaselineTableRow = useCallback(() => {
+        const parentOidFilters: number[] = props.oidFilters.find(([ord, _]) => ord === report?.baseline?.parentOidName)?.[1] || [];
+        if (report?.baseline) {
+            executeAsync({
+                createTableRow: {
+                    tableOid: report.baseline.tableOid,
+                    rowOid: null,
+                    fixedParent: report.baseline.parentOidName && parentOidFilters.length == 1 ? [report.baseline.formula, parentOidFilters[0]] : null
+                }
+            }).catch(props.onError);
+        } else {
+            props.onError(`Cannot create new row in a report that has no baseline table.`);
+        }
+    }, [report?.baseline, props.onError, props.oidFilters]);
+
     
 
 
@@ -226,10 +251,45 @@ export function ReportPage(props: ReportPageProps): React.JSX.Element {
             pinned: 'left',
             lockPinned: true,
             onCellContextMenu: async (event) => {
-                const menu = await Menu.new({
-                    items: [] // TODO Delete unique row
-                });
-                menu.popup();
+                const oidFilters: number[] = event.data?.baseline || [];
+                if (report?.baseline && oidFilters.length > 0) {
+                    const reportBaseline = report.baseline;
+                    const menu = await Menu.new({
+                        items: [
+                            ...(oidFilters.length == 1 ? [
+                                await MenuItem.new({
+                                    text: "Edit Baseline Row",
+                                    action: () => {
+                                        props.onRequestOpenObject({
+                                            page: 'object',
+                                            name: `#${event.data?.index}`,
+                                            tableOid: reportBaseline.tableOid,
+                                            rowOid: oidFilters[0]
+                                        });
+                                    }
+                                }),
+                            ] : []),
+                            await MenuItem.new({
+                                text: oidFilters.length == 1 ? "Delete Baseline Row" : "Delete Baseline Rows",
+                                action: async () => {
+                                    try {
+                                        for (const rowOid of oidFilters) {
+                                            await executeAsync({
+                                                trashTableRow: {
+                                                    tableOid: reportBaseline.tableOid,
+                                                    rowOid: rowOid
+                                                }
+                                            });
+                                        }
+                                    } catch (e) {
+                                        props.onError(e);
+                                    }
+                                }
+                            })
+                        ]
+                    });
+                    menu.popup();
+                }
             },
         };
         const addNewColumn: ColDef<ReportRowData> = {
@@ -317,6 +377,7 @@ export function ReportPage(props: ReportPageProps): React.JSX.Element {
     }, [
         columnList, 
         props.reportOid, 
+        report?.baseline,
         dropdownValues, 
         loadDropdownValues,
         props.onRequestCreateReportColumn, 
@@ -332,6 +393,7 @@ export function ReportPage(props: ReportPageProps): React.JSX.Element {
             return Object.fromEntries(
                 ([
                     ['index', row.index],
+                    ['baseline', row.oidFilters.find(([ord, _]) => ord === report?.baseline?.oidName)?.[1] || []],
                     ['blank', null]
                 ] as {[K in keyof ReportRowData]: [K, ReportRowData[K]]}[keyof ReportRowData][])
                 .concat(row.cells.map<[`column${number}`, ReportCell]>((cell) => {
@@ -339,7 +401,7 @@ export function ReportPage(props: ReportPageProps): React.JSX.Element {
                 }))
             );
         });
-    }, [rowList]);
+    }, [rowList, report?.baseline]);
 
 
     // Correct for subpixels
@@ -373,15 +435,15 @@ export function ReportPage(props: ReportPageProps): React.JSX.Element {
                 suppressRowVirtualisation={true}
                 suppressColumnVirtualisation={true}
             />)}
-            {/*<div>
+            {report?.baseline && (<div>
                 <Button
                     variant="gradient"
                     className="cursor-pointer"
-                    onClick={createTableRow}
+                    onClick={createBaselineTableRow}
                 >
                     Add New Row
                 </Button>
-            </div>*/}
+            </div>)}
         </div>
         {/*
         <div className="h-10 border-t-1 border-t-[rgb(var(--color-surface-dark)/1)] bg-[rgb(var(--color-surface)/1)] flex flex-row gap-x-4 justify-center items-center">

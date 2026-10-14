@@ -745,7 +745,12 @@ impl Func {
     /// Parse a formula.
     pub fn parse(formula: String) -> Result<Self, Error> {
         let conn = db::open()?;
-        
+        Self::conn_parse(&conn, formula)
+    }
+
+    /// Parse a formula.
+    /// Uses the given connection.
+    pub fn conn_parse(conn: &Connection, formula: String) -> Result<Self, Error> {   
         // Parse as a function
         let (expr, remainder) = Expression::conn_parse_expr(&conn, &formula, &formula)?;
 
@@ -760,6 +765,34 @@ impl Func {
         } else {
             // If all remainder is whitespace or empty, formula is valid
             expr.into_func()
+        }
+    }
+}
+
+impl RecordFunc {
+    /// Parse a formula for a record.
+    pub fn parse(formula: String) -> Result<Self, Error> {
+        let conn = db::open()?;
+        Self::conn_parse(&conn, formula)
+    }
+
+    /// Parse a formula for a record.
+    /// Uses the given connection.
+    pub fn conn_parse(conn: &Connection, formula: String) -> Result<Self, Error> {
+        // Parse as a record function
+        let (expr, remainder) = Expression::conn_parse_expr(&conn, &formula, &formula)?;
+
+        // If there is any non-whitespace in remainder, formula is invalid
+        let nonwhitespace_regex: Regex = Regex::new(r#"\S"#).unwrap();
+        if let Some(_) = nonwhitespace_regex.captures(&remainder) {
+            Err(Error::FormulaSyntaxError { 
+                msg: String::from("Expected end of expression."), 
+                full_formula: formula, 
+                substring_with_error: remainder 
+            })
+        } else {
+            // If all remainder is whitespace or empty, formula is valid
+            expr.into_record()
         }
     }
 }

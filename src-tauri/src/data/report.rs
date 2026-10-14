@@ -1,3 +1,4 @@
+use crate::data::formula;
 use crate::util::channel::Sender;
 use crate::util::db::{sql_collect, sql_one, sql_execute, sql_iter};
 use crate::util::db;
@@ -40,6 +41,14 @@ impl ReportListItem {
 }
 
 
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+#[serde(rename_all="camelCase")]
+pub struct ReportBaselineTable {
+    formula: String,
+    table_oid: i64,
+    oid_name: String,
+    parent_oid_name: Option<String>
+}
 
 /// Data structure representing the report metadata
 #[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
@@ -47,6 +56,7 @@ impl ReportListItem {
 pub struct ReportMetadata {
     pub oid: i64,
     pub name: String,
+    pub baseline: Option<ReportBaselineTable>,
     pub filter_formula: Option<String>,
     pub group_by_column_oids: Vec<i64>,
     pub order_by_column_oids: Vec<(i64, bool)>
@@ -74,12 +84,13 @@ impl ReportMetadata {
     /// Gets the metadata for a report.
     pub fn conn_get(conn: &Connection, oid: i64) -> Result<Self, Error> {
         // Get the OID, name, and filter formula from the report metadata view
-        let (oid, name, filter_formula) = sql_one(
+        let (oid, name, baseline_formula, filter_formula) = sql_one(
             &conn, 
             "
 SELECT
     OID,
     NAME,
+    BASELINE,
     FILTER
 FROM METADATA_REPORT
 WHERE OID = ?1
@@ -89,6 +100,7 @@ WHERE OID = ?1
                 return Ok((
                     row.get::<_, i64>("OID")?,
                     row.get::<_, String>("NAME")?,
+                    row.get::<_, Option<String>>("BASELINE")?,
                     row.get::<_, Option<String>>("FILTER")?
                 ));
             }
@@ -129,6 +141,17 @@ ORDER BY OID
         Ok(Self {
             oid,
             name,
+            baseline: if let Some(baseline_formula) = baseline_formula {
+                let baseline_record_func: formula::func::RecordFunc = formula::func::RecordFunc::parse(baseline_formula.clone())?;
+                Some(ReportBaselineTable {
+                    formula: baseline_formula, 
+                    table_oid: baseline_record_func.table_oid()?, 
+                    oid_name: format!("{}_OID", baseline_record_func.alias()),
+                    parent_oid_name: if let Some(parent_alias) = baseline_record_func.fixed_parent_alias() { Some(format!("{parent_alias}_OID")) } else { None }
+                })
+            } else {
+                None
+            },
             filter_formula,
             group_by_column_oids,
             order_by_column_oids
@@ -142,8 +165,12 @@ ORDER BY OID
 
         // Create row in report metadata
         trans.execute(
-            "INSERT INTO __METADATA_REPORT (NAME, FILTER) VALUES (?1, ?2)", 
-            params![self.name, self.filter_formula]
+            "INSERT INTO __METADATA_REPORT (NAME, BASELINE, FILTER) VALUES (?1, ?2, ?3)", 
+            params![
+                self.name, 
+                if let Some(ReportBaselineTable { formula, .. }) = &self.baseline { Some(formula) } else { None },
+                self.filter_formula
+            ]
         )?;
         self.oid = trans.last_insert_rowid();
 
@@ -165,10 +192,16 @@ ORDER BY OID
             "
 UPDATE __METADATA_REPORT SET 
     NAME = ?1, 
-    FILTER = ?2 
-WHERE OID = ?3
+    BASELINE = ?2,
+    FILTER = ?3
+WHERE OID = ?4
             ", 
-            params![self.name, self.filter_formula, self.oid]
+            params![
+                self.name, 
+                if let Some(ReportBaselineTable { formula, .. }) = &self.baseline { Some(formula) } else { None }, 
+                self.filter_formula, 
+                self.oid
+            ]
         )?;
 
         // Overwrite the GROUP BY and ORDER BY columns

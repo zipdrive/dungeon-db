@@ -46,6 +46,19 @@ impl RecordFunc {
         }
     }
 
+    /// Gets the alias of a parent table with a one-to-many relationship with the record's table.
+    pub fn fixed_parent_alias(&self) -> Option<String> {
+        match self {
+            Self::Source(_) => None,
+            Self::Cast { record, .. } => record.fixed_parent_alias(),
+            Self::Reference { record, column } => match column.column_type {
+                TableColumnType::MultiSelect { .. } => Some(record.alias()),
+                _ => record.fixed_parent_alias()
+            }
+            Self::Backreference { record, .. } => Some(record.alias())
+        }
+    }
+
     /// Gets the OID of the record's table.
     pub fn table_oid(&self) -> Result<i64, Error> {
         Ok(match self {
