@@ -108,7 +108,8 @@ export function selectRenderer(cell: TableCell | ReportCell, dropdownValues: {[t
             component: SubreportCellRenderer,
             params: {
                 deferRender: true,
-                onRequestOpenSchema: onRequestOpenDrillDownReport
+                onRequestOpenDrillDownReport,
+                onError
             }
         };
     }

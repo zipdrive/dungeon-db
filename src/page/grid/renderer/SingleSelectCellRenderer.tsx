@@ -35,7 +35,6 @@ export class SingleSelectCellRenderer implements ICellRendererComp {
             // Get the cell and the Single-Select Dropdown content
             const cell: TableCell<{ singleSelectDropdown: SingleSelectDropdownTableCellContent }> | ReportCell<{ singleSelectDropdown: SingleSelectDropdownTableCellContent }> | null = params.getValue ? params.getValue() : null;
             const content: SingleSelectDropdownTableCellContent | null = cell?.content.singleSelectDropdown ?? null;
-            console.log(`Rendering:`, content);
 
             if (content && content.value && content.tableOid in params.dropdownValues) {
                 const dropdownValues = params.dropdownValues[content.tableOid];

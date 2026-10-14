@@ -1,4 +1,5 @@
 use rusqlite::{Connection, params};
+use crate::data::report;
 use crate::data::table::row::{TableCellContent, TableCellTextContentFormat, TableRow};
 use crate::data::table::column::TableColumnMetadata;
 use crate::util::encode::json_encode_string;
@@ -120,7 +121,7 @@ fn conn_get_keys(conn: &Connection, table_oid: i64, row_oid: i64, block_recursio
                             )
                         }
                         TableCellContent::Subreport { oid_filters, report_oid } => {
-                            let label: String = String::from("[]"); // TODO
+                            let label: String = report::label::conn_get_subreport_label(conn, report_oid.clone(), oid_filters.clone(), block_recursion)?;
                             (
                                 column.name,
                                 Some(label.clone()),
@@ -135,7 +136,7 @@ fn conn_get_keys(conn: &Connection, table_oid: i64, row_oid: i64, block_recursio
     Ok(keys)
 }
 
-fn conn_get_label(conn: &Connection, table_oid: i64, row_oid: i64, block_recursion: &Vec<(i64, i64)>) -> Result<(Option<String>, String), Error> {
+pub fn conn_get_label(conn: &Connection, table_oid: i64, row_oid: i64, block_recursion: &Vec<(i64, i64)>) -> Result<(Option<String>, String), Error> {
     // Block infinite recursion
     if block_recursion.iter().any(|(recurs_table_oid, recurs_row_oid)| *recurs_table_oid == table_oid && *recurs_row_oid == row_oid) {
         return Ok((Some(String::from("...")), String::from("{ ... }")));
@@ -162,7 +163,7 @@ fn conn_get_label(conn: &Connection, table_oid: i64, row_oid: i64, block_recursi
     ))
 }
 
-fn conn_get_json_label(conn: &Connection, table_oid: i64, row_oid: i64, block_recursion: &Vec<(i64, i64)>) -> Result<String, Error> {
+pub fn conn_get_json_label(conn: &Connection, table_oid: i64, row_oid: i64, block_recursion: &Vec<(i64, i64)>) -> Result<String, Error> {
     // Block infinite recursion
     if block_recursion.iter().any(|(recurs_table_oid, recurs_row_oid)| *recurs_table_oid == table_oid && *recurs_row_oid == row_oid) {
         return Ok(String::from("{ ... }"));
@@ -180,7 +181,7 @@ fn conn_get_json_label(conn: &Connection, table_oid: i64, row_oid: i64, block_re
     })
 }
 
-fn conn_get_object_label(conn: &Connection, table_oid: i64, row_oid: i64, block_recursion: &Vec<(i64, i64)>) -> Result<String, Error> {
+pub fn conn_get_object_label(conn: &Connection, table_oid: i64, row_oid: i64, block_recursion: &Vec<(i64, i64)>) -> Result<String, Error> {
     // Get the table and row of the object
     let (object_table_oid, object_table_name, object_row_oid) = sql_one(
         &conn, 

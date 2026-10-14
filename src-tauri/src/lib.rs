@@ -34,6 +34,7 @@ pub fn run() {
             data::get_table_metadata,
             data::get_table_column_metadata,
             data::get_object_label,
+            data::get_subreport_label,
             data::get_report_metadata,
             data::get_report_column_metadata,
             data::get_row,

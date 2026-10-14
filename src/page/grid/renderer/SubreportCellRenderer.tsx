@@ -2,7 +2,10 @@ import { ICellRendererComp, ICellRendererParams } from 'ag-grid-community';
 import classNames from 'classnames';
 import { ReportPageBreadcrumb } from '../../../breadcrumb';
 import { SubreportTableCellContent, TableCell } from '../../../api/model/tableRow';
-import { getTableColumnMetadataAsync } from '../../../api/query';
+import { getDrillDownReportLabelAsync, getReportColumnMetadataAsync, getTableColumnMetadataAsync } from '../../../api/query';
+import { ReportCell } from '../../../api/model/reportRow';
+import { TableColumnMetadata } from '../../../api/model/tableColumn';
+import { ReportColumnMetadata } from '../../../api/model/reportColumn';
 
 type SubreportCellRendererParams = ICellRendererParams<any, any, any> & {
     onRequestOpenDrillDownReport: (report: ReportPageBreadcrumb) => void,
@@ -14,7 +17,7 @@ export class SubreportCellRenderer implements ICellRendererComp {
 
     constructor() {
         this.gui = document.createElement('div');
-        this.gui.className = classNames('flex', 'justify-center', 'h-full');
+        this.gui.className = classNames('flex');
     }
 
     init(params: SubreportCellRendererParams) {
@@ -28,6 +31,9 @@ export class SubreportCellRenderer implements ICellRendererComp {
     refresh(params: SubreportCellRendererParams): boolean {
         const onRequestOpenDrillDownReport = params.onRequestOpenDrillDownReport;
         const onError: (e: unknown) => void = params.onError;
+        console.log('onError:', onError);
+        if (!onError)
+            return false;
 
         try {
             // Clear prior children
@@ -35,32 +41,48 @@ export class SubreportCellRenderer implements ICellRendererComp {
                 this.gui.removeChild(child);
             }
             
-            // 
-            const link: HTMLAnchorElement = document.createElement('a');
-            link.className = classNames(
-                'text-[rgb(var(--color-primary)/1)]',
-                'cursor-pointer',
-                'w-full',
-                'h-full',
-                'inline-block'
-            );
-            this.gui.appendChild(link);
-
-            const cell: TableCell<{ subreport: SubreportTableCellContent }> | null = params.getValue ? params.getValue() : null;
+            // Get the cell and the Drill-Down Report content
+            const cell: TableCell<{ subreport: SubreportTableCellContent }> | ReportCell<{ subreport: SubreportTableCellContent }> | null = params.getValue ? params.getValue() : null;
             const content: SubreportTableCellContent | null = cell?.content.subreport ?? null;
-            // TODO link label?
-            //link.innerText = content?.label ?? '';
-            link.onclick = async (_e) => {
-                if (cell && content) {
-                    const columnMetadata = await getTableColumnMetadataAsync(cell.columnOid);
-                    onRequestOpenDrillDownReport({
-                        page: 'report',
-                        name: columnMetadata.name,
-                        reportOid: content.reportOid,
-                        oidFilters: content.oidFilters
-                    });
-                }
-            };
+
+            if (cell && content) {
+                // Create a link to the Drill-Down Report page
+                const link: HTMLAnchorElement = document.createElement('a');
+                link.className = classNames(
+                    'text-[rgb(var(--color-primary)/1)]',
+                    'absolute',
+                    'left-0',
+                    'right-0',
+                    'top-0',
+                    'bottom-0',
+                    'cursor-pointer'
+                );
+                this.gui.appendChild(link);
+
+                // Set label of Drill-Down Report
+                getDrillDownReportLabelAsync(content.reportOid, content.oidFilters)
+                    .then((label) => {
+                        link.innerText = label;
+                    })
+                    .catch(onError);
+                
+                link.onclick = async (_e) => {
+                    try {
+                        const columnOid: number = cell.columnOid;
+                        const columnMetadata: TableColumnMetadata | ReportColumnMetadata = 'reference' in cell
+                            ? await getReportColumnMetadataAsync(columnOid)
+                            : await getTableColumnMetadataAsync(columnOid);
+                        onRequestOpenDrillDownReport({
+                            page: 'report',
+                            name: columnMetadata.name,
+                            reportOid: content.reportOid,
+                            oidFilters: content.oidFilters
+                        });
+                    } catch (e) {
+                        onError(e);
+                    }
+                };
+            }
             return true;
         } catch (e) {
             onError(e);

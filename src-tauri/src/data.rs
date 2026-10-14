@@ -260,6 +260,12 @@ pub fn get_object_label(table_oid: i64, row_oid: i64) -> Result<String, Error> {
 }
 
 #[tauri::command]
+/// Gets the label for a Drill-Down Report.
+pub fn get_subreport_label(report_oid: i64, oid_filters: Vec<(String, Vec<i64>)>) -> Result<String, Error> {
+    report::label::get_subreport_label(report_oid, oid_filters)
+}
+
+#[tauri::command]
 /// Gets the metadata for a report.
 pub fn get_report_metadata(report_oid: i64) -> Result<report::ReportMetadata, Error> {
     report::ReportMetadata::get(report_oid)

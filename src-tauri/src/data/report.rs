@@ -10,6 +10,7 @@ use std::hash::{Hash, Hasher};
 mod column_type;
 pub mod column;
 pub mod row;
+pub mod label;
 
 
 #[derive(Serialize, Clone)]

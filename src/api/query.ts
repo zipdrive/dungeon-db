@@ -88,6 +88,10 @@ export async function getObjectLabelAsync(tableOid: number, rowOid: number): Pro
     return await invoke('get_object_label', { tableOid, rowOid });
 }
 
+export async function getDrillDownReportLabelAsync(reportOid: number, oidFilters: [string, number[]][]): Promise<string> {
+    return await invoke('get_subreport_label', { reportOid, oidFilters });
+}
+
 export async function getTableRow(tableOid: number, rowOid: number): Promise<[[number, TableColumnMetadata][], TableRow]> {
     return await invoke('get_row', { tableOid, rowOid });
 }
