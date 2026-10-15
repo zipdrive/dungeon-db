@@ -4,6 +4,7 @@ use std::collections::{HashSet, HashMap};
 
 use crate::data::file::File;
 use crate::data::formula::func::RecordFunc;
+use crate::data::report;
 use crate::data::table::column::TableColumnMetadata; 
 use crate::data::table::column_type::{Primitive, TableColumnType};
 use crate::data::table::label;
@@ -51,6 +52,7 @@ pub enum TableCellContent {
     Object {
         table_oid: i64,
         value: Option<i64>,
+        label: Option<String>
     },
     SingleSelectDropdown {
         table_oid: i64,
@@ -62,7 +64,8 @@ pub enum TableCellContent {
     },
     Subreport {
         report_oid: i64,
-        oid_filters: Vec<(String, Vec<i64>)>
+        oid_filters: Vec<(String, Vec<i64>)>,
+        label: Option<String>
     }
 }
 
@@ -76,7 +79,7 @@ pub struct TableCell {
 }
 
 impl TableCell {
-    pub fn new(table_oid: i64, column: &TableColumnMetadata, column_base_alias: String, row_oid: i64, row: &RowWrapper) -> Result<Self, Error> {
+    pub fn new(table_oid: i64, column: &TableColumnMetadata, column_base_alias: String, row_oid: i64, row: &RowWrapper, include_label: bool) -> Result<Self, Error> {
         Ok(Self {  
             content: match &column.column_type {
                 TableColumnType::Primitive { primitive, .. } => {
@@ -137,9 +140,19 @@ impl TableCell {
                 }
                 TableColumnType::Object { table_oid: referenced_table_oid, .. } => {
                     let ord: String = column_base_alias;
+                    let value: Option<i64> = row.get::<&str, _>(&ord)?;
                     TableCellContent::Object { 
                         table_oid: referenced_table_oid.clone(), 
-                        value: row.get::<&str, _>(&ord)?,
+                        label: if include_label {
+                            if let Some(value) = &value {
+                                Some(label::get_object_label(referenced_table_oid.clone(), value.clone())?)
+                            } else {
+                                None 
+                            }
+                        } else {
+                            None 
+                        },
+                        value,
                     }
                 }
                 TableColumnType::SingleSelect { table_oid: referenced_table_oid, .. } => {
@@ -164,12 +177,18 @@ impl TableCell {
                     }
                 }
                 TableColumnType::Subreport { report_oid, .. } => {
+                    let oid_filters: Vec<(String, Vec<i64>)> = vec![(
+                        format!("TABLE{table_oid}_OID"),
+                        vec![row_oid.clone()]
+                    )];
                     TableCellContent::Subreport { 
                         report_oid: report_oid.clone(),
-                        oid_filters: vec![(
-                            format!("TABLE{table_oid}_OID"),
-                            vec![row_oid.clone()]
-                        )]
+                        label: if include_label {
+                            Some(report::label::get_subreport_label(report_oid.clone(), oid_filters.clone())?)
+                        } else {
+                            None 
+                        },
+                        oid_filters
                     }
                 }
             },
@@ -180,12 +199,12 @@ impl TableCell {
     }
 
     /// Retrieves a specific cell.
-    pub fn conn_get(conn: &Connection, table_oid: i64, column: &TableColumnMetadata, row_oid: i64) -> Result<Self, Error> {
+    pub fn conn_get(conn: &Connection, table_oid: i64, column: &TableColumnMetadata, row_oid: i64, include_label: bool) -> Result<Self, Error> {
         sql_one(
             conn, 
             format!("SELECT * FROM TABLE{table_oid} WHERE OID = ?1"), 
             params![row_oid], 
-            |row| Self::new(table_oid, column, format!("COLUMN{}", column.oid), row_oid, row)
+            |row| Self::new(table_oid, column, format!("COLUMN{}", column.oid), row_oid, row, include_label)
         )
     }
 
@@ -194,7 +213,7 @@ impl TableCell {
     fn conn_set(&self, conn: &Connection) -> Result<Self, Error> {
         // Retrieve the old cell's value
         let (_, column) = TableColumnMetadata::conn_get(&conn, self.column_oid)?;
-        let old_cell: Self = Self::conn_get(&conn, self.table_oid, &column, self.row_oid)?;
+        let old_cell: Self = Self::conn_get(&conn, self.table_oid, &column, self.row_oid, false)?;
 
         // 
         macro_rules! update_scalar {
@@ -298,6 +317,7 @@ INSERT INTO __MULTISELECT{} (SOURCE_OID, TARGET_OID) VALUES (?1, ?2)
             row_oid,
             content: TableCellContent::Object { 
                 table_oid: object_table_oid, 
+                label: None,
                 value: Some(object_row_oid) 
             }
         };
@@ -321,7 +341,7 @@ pub struct TableRow {
 
 impl TableRow {
     /// Constructs a new row from a row of the TABLE{table_oid} view + a ROW_INDEX column for tracking the index.
-    fn new(row: &RowWrapper, table_oid: &i64, columns: &Vec<(i64, TableColumnMetadata)>) -> Result<Self, Error> {
+    fn new(row: &RowWrapper, table_oid: &i64, columns: &Vec<(i64, TableColumnMetadata)>, include_label: bool) -> Result<Self, Error> {
         let mut data: Self = Self {
             oid: row.get("OID")?,
             index: row.get("ROW_INDEX")?,
@@ -340,7 +360,8 @@ impl TableRow {
                     let row_oid_ord: String = format!("MASTER{column_table_oid}_OID");
                     row.get::<&str, _>(&row_oid_ord)?
                 }, 
-                row
+                row,
+                include_label.clone()
             )?);
         }
 
@@ -348,14 +369,14 @@ impl TableRow {
     }
 
     /// Gets a single row from the given table.
-    pub fn get(table_oid: i64, row_oid: i64) -> Result<(Vec<(i64, TableColumnMetadata)>, Self), Error> {
+    pub fn get(table_oid: i64, row_oid: i64, include_label: bool) -> Result<(Vec<(i64, TableColumnMetadata)>, Self), Error> {
         let conn = db::open()?;
-        Self::conn_get(&conn, table_oid, row_oid)
+        Self::conn_get(&conn, table_oid, row_oid, include_label)
     }
 
     /// Gets a single row from the given table.
     /// Uses the given connection.
-    pub fn conn_get(conn: &Connection, table_oid: i64, row_oid: i64) -> Result<(Vec<(i64, TableColumnMetadata)>, Self), Error> {
+    pub fn conn_get(conn: &Connection, table_oid: i64, row_oid: i64, include_label: bool) -> Result<(Vec<(i64, TableColumnMetadata)>, Self), Error> {
         // Send the columns of the table
         let columns: Vec<(i64, TableColumnMetadata)> = TableColumnMetadata::conn_query_all(&conn, table_oid)?
             .into_iter().map(|(owning_table_oid, _, column)| (owning_table_oid, column)).collect();
@@ -368,7 +389,7 @@ impl TableRow {
                 format!("SELECT ROW_NUMBER() OVER (ORDER BY ORDERING) AS ROW_INDEX, * FROM TABLE{table_oid} WHERE OID = ?1"), 
                 params![row_oid], 
                 |row| {
-                    Self::new(row, &table_oid, &columns)
+                    Self::new(row, &table_oid, &columns, include_label)
                 }
             )?
         ))
@@ -376,15 +397,15 @@ impl TableRow {
 
     /// Gets a single row from the given table.
     /// Takes polymorphism into account.
-    pub fn get_object(table_oid: i64, row_oid: i64) -> Result<(i64, Vec<(i64, TableColumnMetadata)>, Self), Error> {
+    pub fn get_object(table_oid: i64, row_oid: i64, include_label: bool) -> Result<(i64, Vec<(i64, TableColumnMetadata)>, Self), Error> {
         let conn = db::open()?;
-        Self::conn_get_object(&conn, table_oid, row_oid)
+        Self::conn_get_object(&conn, table_oid, row_oid, include_label)
     }
 
     /// Gets a single row from the given table.
     /// Takes polymorphism into account.
     /// Uses the given connection.
-    pub fn conn_get_object(conn: &Connection, table_oid: i64, row_oid: i64) -> Result<(i64, Vec<(i64, TableColumnMetadata)>, Self), Error> {
+    pub fn conn_get_object(conn: &Connection, table_oid: i64, row_oid: i64, include_label: bool) -> Result<(i64, Vec<(i64, TableColumnMetadata)>, Self), Error> {
         // Query for object table and row
         let (table_oid, row_oid) = sql_one(
             &conn,
@@ -396,7 +417,7 @@ impl TableRow {
             ))
         )?;
         // Query that row in the object table
-        let (columns, row) = Self::conn_get(&conn, table_oid.clone(), row_oid)?;
+        let (columns, row) = Self::conn_get(&conn, table_oid.clone(), row_oid, include_label)?;
         Ok((
             table_oid,
             columns,
@@ -405,7 +426,7 @@ impl TableRow {
     }
 
     /// Queries for multiple rows from the given table.
-    pub fn send(mut column_sender: Sender<(i64, TableColumnMetadata)>, row_sender: Sender<Self>, table_oid: i64) -> Result<(), Error> {
+    pub fn send(mut column_sender: Sender<(i64, TableColumnMetadata)>, row_sender: Sender<Self>, table_oid: i64, include_label: bool) -> Result<(), Error> {
         let conn = db::open()?;
 
         // Send the columns of the table
@@ -420,12 +441,12 @@ impl TableRow {
         };
 
         // Send the rows of the table
-        Self::conn_send(&conn, row_sender, table_oid, columns)
+        Self::conn_send(&conn, row_sender, table_oid, columns, include_label)
     }
 
     /// Queries for multiple rows from the given table.
     /// Uses the given connection.
-    pub fn conn_send(conn: &Connection, mut row_sender: Sender<Self>, table_oid: i64, columns: Vec<(i64, TableColumnMetadata)>) -> Result<(), Error> {
+    pub fn conn_send(conn: &Connection, mut row_sender: Sender<Self>, table_oid: i64, columns: Vec<(i64, TableColumnMetadata)>, include_label: bool) -> Result<(), Error> {
         // Send the rows of the table
         sql_iter(
             &conn, 
@@ -435,7 +456,7 @@ impl TableRow {
             ), 
             [], 
             |row| {
-                let payload: Self = Self::new(row, &table_oid, &columns)?;
+                let payload: Self = Self::new(row, &table_oid, &columns, include_label)?;
                 row_sender.send(payload)?;
                 Ok(None::<()>)
             }
@@ -781,7 +802,7 @@ WHERE MASTER_TABLE_OID = ?1
                             "
 SELECT 
     OID 
-FROM TABLE{inheritor_schema_oid} 
+FROM __TABLE{inheritor_schema_oid} 
 WHERE MASTER{table_oid}_OID = ?1
                             "
                         ), 
@@ -860,7 +881,7 @@ WHERE INHERITOR_TABLE_OID = ?1
                             "
 SELECT 
     MASTER{master_table_oid}_OID 
-FROM TABLE{table_oid} 
+FROM __TABLE{table_oid} 
 WHERE OID = ?1
                             "
                         ), 
@@ -970,7 +991,7 @@ WHERE MASTER{table_oid}_OID = ?1
                 "
 SELECT 
     OID
-FROM __TABLE{inheritor_table_oid}
+FROM TABLE{inheritor_table_oid}
 WHERE {} = ?1
                 ",
                 if table_oid == inheritor_table_oid {
@@ -1132,7 +1153,7 @@ impl TableRowLabel {
         let conn = db::open()?;
         sql_iter(
             &conn,
-            format!("SELECT OID FROM TABLE{table_oid}"),
+            format!("SELECT OID FROM TABLE{table_oid} ORDER BY ORDERING"),
             [],
             |row| {
                 let oid: i64 = row.get("OID")?;

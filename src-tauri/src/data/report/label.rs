@@ -102,7 +102,7 @@ pub fn conn_get_subreport_label(conn: &Connection, report_oid: i64, oid_filters:
                                 label
                             )
                         }
-                        TableCellContent::Subreport { oid_filters, report_oid } => {
+                        TableCellContent::Subreport { oid_filters, report_oid, .. } => {
                             let label: String = conn_get_subreport_label(conn, report_oid.clone(), oid_filters.clone(), block_recursion)?;
                             (
                                 column.name.clone(),
@@ -129,7 +129,8 @@ pub fn conn_get_subreport_label(conn: &Connection, report_oid: i64, oid_filters:
         })),
         report_oid, 
         oid_filters,
-        key_columns.clone()
+        key_columns.clone(),
+        false
     )?;
     Ok(match items.into_iter().reduce(|acc, e| format!("{acc}, {e}")) {
         Some(items) => format!("[ {items} ]"),

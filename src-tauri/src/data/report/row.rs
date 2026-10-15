@@ -10,9 +10,10 @@ use crate::data::file::File;
 use crate::data::formula::context::Context;
 use crate::data::formula::func::{Func, RecordFunc};
 use crate::data::formula::query::RecordFuncQuery;
-use crate::data::report::{ReportBaselineTable, ReportMetadata};
+use crate::data::report::{ReportBaselineTable, ReportMetadata, label};
 use crate::data::report::column::ReportColumnMetadata;
 use crate::data::report::column_type::ReportColumnType;
+use crate::data::table;
 use crate::data::table::row::{TableCellContent, TableCellTextContentFormat};
 use crate::data::formula::value::{TableCellReference, Value};
 use crate::util::db::{sql_collect, sql_iter, sql_one};
@@ -56,7 +57,7 @@ pub struct ReportRow {
 
 impl ReportRow {
     /// Queries for multiple rows from the given report.
-    pub fn send(mut column_sender: Sender<ReportColumnMetadata>, row_sender: Sender<Self>, report_oid: i64, oid_filters: Vec<(String, Vec<i64>)>) -> Result<(), Error> {
+    pub fn send(mut column_sender: Sender<ReportColumnMetadata>, row_sender: Sender<Self>, report_oid: i64, oid_filters: Vec<(String, Vec<i64>)>, include_label: bool) -> Result<(), Error> {
         let conn = db::open()?;
 
         // Send the columns of the report
@@ -69,12 +70,12 @@ impl ReportRow {
         };
 
         // Send the rows of the report
-        Self::conn_send(&conn, row_sender, report_oid, oid_filters, columns)
+        Self::conn_send(&conn, row_sender, report_oid, oid_filters, columns, include_label)
     }
 
     /// Queries for multiple rows from the given report.
     /// Uses the given connection.
-    pub fn conn_send(conn: &Connection, mut row_sender: Sender<Self>, report_oid: i64, oid_filters: Vec<(String, Vec<i64>)>, columns: Vec<ReportColumnMetadata>) -> Result<(), Error> {
+    pub fn conn_send(conn: &Connection, mut row_sender: Sender<Self>, report_oid: i64, oid_filters: Vec<(String, Vec<i64>)>, columns: Vec<ReportColumnMetadata>, include_label: bool) -> Result<(), Error> {
         let columns: Vec<ParsedReportColumn> = {
             let mut output: Vec<ParsedReportColumn> = Vec::new();
             for column in columns {
@@ -430,9 +431,19 @@ FROM (
                                         let Ok(table_oid) = i64::from_str_radix(table_oid_str, 10) else {
                                             return Err(Error::adhoc("An invalid referenced table OID was in formula's return value type."));
                                         };
+                                        let value: Option<i64> = row.get::<&str, _>(&ord)?;
                                         TableCellContent::Object { 
                                             table_oid, 
-                                            value: row.get::<&str, _>(&ord)?
+                                            label: if include_label {
+                                                if let Some(value) = value {
+                                                    Some(table::label::get_object_label(table_oid, value)?)
+                                                } else {
+                                                    None 
+                                                }
+                                            } else {
+                                                None 
+                                            },
+                                            value
                                         }
                                     } else if known_type.starts_with("SingleSelect") {
                                         let Some((_, table_oid_str)) = known_type.split_once('/') else {
@@ -479,6 +490,11 @@ FROM (
                                 reference: None,
                                 content: TableCellContent::Subreport { 
                                     report_oid: report_oid.clone(),
+                                    label: if include_label {
+                                        Some(label::get_subreport_label(report_oid.clone(), oid_filters.clone())?)
+                                    } else {
+                                        None 
+                                    },
                                     oid_filters: oid_filters.clone()
                                 }
                             }

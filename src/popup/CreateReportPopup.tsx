@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { executeAsync } from "../api/action";
 import {
+    Alert,
   Button,
   Dialog,
 } from "@material-tailwind/react";
@@ -14,6 +15,8 @@ export type CreateReportPopupProps = {
 export function CreateReportPopup(props: CreateReportPopupProps): React.JSX.Element {
     const [reportName, setReportName] = useState<string>('');
     const [baselineFormula, setBaselineFormula] = useState<string>('');
+
+    const [confirmAlert, setConfirmAlert] = useState<string | null>(null);
 
     /**
      * Creates a new schema from the inputted information.
@@ -52,6 +55,7 @@ export function CreateReportPopup(props: CreateReportPopupProps): React.JSX.Elem
                 onSetValue={setBaselineFormula} 
             />
         </Form>
+        {confirmAlert && (<Alert color="error">{confirmAlert}</Alert>)}
         <div className="flex flex-row gap-y-2 justify-end">
             <Dialog.DismissTrigger
                 as={Button}

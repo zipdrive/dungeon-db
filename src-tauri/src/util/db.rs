@@ -846,17 +846,20 @@ WHERE c.TRASH
                     let table_name: String = format!("__TABLE{table_oid}");
 
                     // Drop the multiselect *-to-* mapping table
-                    sql_execute(
+                    sql_execute_batch(
                         &trans, 
-                        format!("DROP TABLE IF EXISTS MULTISELECT{column_oid}"), 
-                        []
+                        format!("
+DROP VIEW IF EXISTS MULTISELECT{column_oid};
+DROP TABLE IF EXISTS __MULTISELECT{column_oid};
+                        ")
                     )?;
 
                     // Drop the column from its host table
-                    sql_execute(
+                    sql_execute_batch(
                         &trans, 
-                        format!("ALTER TABLE {table_name} DROP COLUMN COLUMN{column_oid}"), 
-                        []
+                        format!("
+ALTER TABLE {table_name} DROP COLUMN COLUMN{column_oid};
+                        ")
                     )?;
 
                     Ok(None::<()>)
@@ -871,9 +874,7 @@ SELECT
     inh.MASTER_TABLE_OID,
     inh.INHERITOR_TABLE_OID
 FROM __METADATA_TABLE_INHERITANCE inh 
-INNER JOIN __METADATA_TABLE t1 ON t1.OID = inh.MASTER_TABLE_OID 
-INNER JOIN __METADATA_TABLE t2 ON t2.OID = inh.INHERITOR_TABLE_OID 
-WHERE inh.TRASH OR t1.TRASH OR t2.TRASH 
+WHERE inh.TRASH 
                 ", 
                 [], 
                 |row| Ok((
@@ -881,12 +882,14 @@ WHERE inh.TRASH OR t1.TRASH OR t2.TRASH
                     row.get::<_, i64>("INHERITOR_TABLE_OID")?
                 )), 
                 |(master_table_oid, inheritor_table_oid)| {
-                    let inheritor_table_name: String = format!("TABLE{inheritor_table_oid}");
+                    let inheritor_table_name: String = format!("__TABLE{inheritor_table_oid}");
 
                     // Drop the inheritance definition column from the inheriting table
                     sql_execute(
                         &trans, 
-                        format!("ALTER TABLE {inheritor_table_name} DROP COLUMN MASTER{master_table_oid}_OID"), 
+                        format!("
+ALTER TABLE {inheritor_table_name} DROP COLUMN MASTER{master_table_oid}_OID;
+                        "), 
                         []
                     )?;
 
@@ -901,12 +904,13 @@ WHERE inh.TRASH OR t1.TRASH OR t2.TRASH
                 [], 
                 |row| row.get::<_, i64>("OID"), 
                 |table_oid| {
+                    println!("Transaction is {}", trans.is_busy());
                     sql_execute_batch(
                         &trans, 
                         format!(
                             "
-DROP VIEW IF EXISTS TABLE{table_oid};
 DROP VIEW IF EXISTS OBJECT{table_oid};
+DROP VIEW IF EXISTS TABLE{table_oid};
 DROP TABLE IF EXISTS __TABLE{table_oid};
                             "
                         )
@@ -945,27 +949,10 @@ DELETE FROM __METADATA_REPORT WHERE TRASH;
 
 /// Maps all rows of a query, then iterates over the mapped values.
 pub fn sql_map_then_iter<T, U, S, P, F1, F2>(conn: &Connection, sql: S, params: P, row_parser: F1, mut row_fn: F2) -> Result<Option<U>, Error> where S : AsRef<str>, P : Params, F1 : Fn(&Row) -> Result<T, RusqliteError>, F2 : FnMut(T) -> Result<Option<U>, Error> {
-    match conn.prepare(sql.as_ref()) {
+    let collected_rows: Vec<Result<T, rusqlite::Error>> = match conn.prepare(sql.as_ref()) {
         Ok(mut stmt) => {
             match stmt.query_map(params, row_parser) {
-                Ok(mapped_rows) => {
-                    for mapped_row_result in mapped_rows {
-                        match mapped_row_result {
-                            Ok(mapped_row) => {
-                                if let Some(u) = row_fn(mapped_row)? {
-                                    return Ok(Some(u));
-                                }
-                            }
-                            Err(err) => {
-                                return Err(Error::SqlError {
-                                    sql: String::from(sql.as_ref()),
-                                    backtrace: Backtrace::new_unresolved(),
-                                    err
-                                });
-                            }
-                        }
-                    }
-                }
+                Ok(mapped_rows) => mapped_rows.collect(),
                 Err(err) => {
                     return Err(Error::SqlError {
                         sql: String::from(sql.as_ref()),
@@ -981,6 +968,22 @@ pub fn sql_map_then_iter<T, U, S, P, F1, F2>(conn: &Connection, sql: S, params: 
                 backtrace: Backtrace::new_unresolved(),
                 err
             });
+        }
+    };
+    for mapped_row_result in collected_rows {
+        match mapped_row_result {
+            Ok(mapped_row) => {
+                if let Some(u) = row_fn(mapped_row)? {
+                    return Ok(Some(u));
+                }
+            }
+            Err(err) => {
+                return Err(Error::SqlError {
+                    sql: String::from(sql.as_ref()),
+                    backtrace: Backtrace::new_unresolved(),
+                    err
+                });
+            }
         }
     }
     Ok(None)

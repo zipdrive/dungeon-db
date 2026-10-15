@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, useTransition
 import { TableColumnMetadata } from "../api/model/tableColumn";
 import { ObjectPageBreadcrumb, ReportPageBreadcrumb, TablePageBreadcrumb } from "../breadcrumb"
 import { TableCell, TableCellContent, TableRow, TableRowLabel } from "../api/model/tableRow";
-import { queryAsync } from "../api/query";
+import { getDrillDownReportLabelAsync, getObjectLabelAsync, queryAsync } from "../api/query";
 import { Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Button, Spinner } from "@material-tailwind/react";
@@ -161,6 +161,92 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
             });
         });
     }, [props.tableOid, props.onError]);
+
+
+    // Load Object and Drill-Down Report labels separately
+    const [isLabelsLoading, startLabelsLoadingTransition] = useTransition();
+    useEffect(() => {
+        startLabelsLoadingTransition(async () => {
+            const objectLabels: Map<`column${number}row${number}`, string> = new Map();
+            const subreportLabels: Map<`column${number}row${number}`, string> = new Map();
+
+            for (const row of rowList) {
+                for (const cell of row.cells) {
+                    const key: `column${number}row${number}` = `column${cell.columnOid}row${cell.rowOid}`;
+                    if ('object' in cell.content) {
+                        if (cell.content.object.label === null && cell.content.object.value !== null) {
+                            if (!objectLabels.has(key)) {
+                                try {
+                                    objectLabels.set(key, await getObjectLabelAsync(cell.content.object.tableOid, cell.content.object.value));
+                                } catch (e) {
+                                    props.onError(e);
+                                }
+                            }
+                        }
+                    } else if ('subreport' in cell.content) {
+                        if (cell.content.subreport.label === null) {
+                            if (!subreportLabels.has(key)) {
+                                try {
+                                    //subreportLabels.set(key, await getDrillDownReportLabelAsync(cell.content.subreport.reportOid, cell.content.subreport.oidFilters));
+                                } catch (e) {
+                                    props.onError(e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            startLabelsLoadingTransition(() => {
+                if (objectLabels.size > 0) {
+                    setRowList((oldRowList) => {
+                        return oldRowList.map((row) => {
+                            return {
+                                ...row,
+                                cells: row.cells.map((cell) => {
+                                    const key: `column${number}row${number}` = `column${cell.columnOid}row${cell.rowOid}`;
+                                    if ('object' in cell.content) {
+                                        if (cell.content.object.label === null && cell.content.object.value !== null) {
+                                            const label = objectLabels.get(key);
+                                            if (label !== undefined) {
+                                                return {
+                                                    ...cell,
+                                                    content: {
+                                                        object: {
+                                                            ...cell.content.object,
+                                                            label
+                                                        }
+                                                    }
+                                                };
+                                            }
+                                        }
+                                    } else if ('subreport' in cell.content) {
+                                        if (cell.content.subreport.label === null) {
+                                            const label = subreportLabels.get(key);
+                                            if (label !== undefined) {
+                                                return {
+                                                    ...cell,
+                                                    content: {
+                                                        subreport: {
+                                                            ...cell.content.subreport,
+                                                            label
+                                                        }
+                                                    }
+                                                };
+                                            }
+                                        }
+                                    }
+                                    return cell;
+                                })
+                            };
+                        });
+                    });
+                }
+            });
+        });
+    }, [rowList, props.onError]);
+
+
 
     /**
      * Creates a new row in the table.

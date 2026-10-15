@@ -10,6 +10,7 @@ import {
   List,
   ListItem,
   Spinner,
+  Alert,
 } from "@material-tailwind/react";
 import { queryAsync } from "../api/query";
 import { Channel } from "@tauri-apps/api/core";
@@ -27,6 +28,8 @@ export function CreateTablePopup(props: CreateTablePopupProps): React.JSX.Elemen
     const [tableMastersList, setTableMastersList] = useState<TableListItem[]>([]);
     const [isTableMastersListPending, startTableMastersListTransition] = useTransition();
     const [selectedTableMasters, setSelectedTableMasters] = useState<string[]>([]);
+
+    const [confirmAlert, setConfirmAlert] = useState<string | null>(null);
 
     useEffect(() => {
         loadTableMasters();
@@ -106,6 +109,7 @@ export function CreateTablePopup(props: CreateTablePopupProps): React.JSX.Elemen
                 onSetValue={setSelectedTableMasters}
             />))}
         </Form>
+        {confirmAlert && (<Alert color="error">{confirmAlert}</Alert>)}
         <div className="flex flex-row gap-y-2 justify-end">
             <Dialog.DismissTrigger
                 as={Button}

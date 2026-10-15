@@ -59,11 +59,7 @@ export class SubreportCellRenderer implements ICellRendererComp {
                 this.gui.appendChild(link);
 
                 // Set label of Drill-Down Report
-                getDrillDownReportLabelAsync(content.reportOid, content.oidFilters)
-                    .then((label) => {
-                        link.innerText = label;
-                    })
-                    .catch(onError);
+                link.innerText = content.label || '';
                 
                 link.onclick = async (_e) => {
                     try {

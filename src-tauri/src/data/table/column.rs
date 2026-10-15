@@ -166,7 +166,12 @@ impl TableColumnMetadata {
     pub fn conn_find(conn: &Connection, table_oid: i64, name: String) -> Result<(i64, Self), Error> {
         let matching_oids: Vec<i64> = sql_collect(
             conn, 
-            "SELECT OID FROM METADATA_TABLE_COLUMN WHERE TABLE_OID = ?1 AND NAME = ?2", 
+            "
+SELECT 
+    c.OID 
+FROM METADATA_TABLE_COLUMN_PATH c 
+WHERE TABLE_OID = ?1 AND NAME = ?2
+            ", 
             params![table_oid, name], 
             |row| row.get("OID")
         )?;

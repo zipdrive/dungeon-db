@@ -24,10 +24,17 @@ export function EditTablePopup(props: EditTablePopupProps): React.JSX.Element {
 
     const [tableColumnList, setTableColumnList] = useState<TableColumnMetadata[]>([]);
     const [isTableColumnListPending, startTableColumnListTransition] = useTransition();
+
+    const [confirmAlert, setConfirmAlert] = useState<string | null>(null);
     
+    useEffect(() => {
+        setSelectedTableMasters(props.metadata.masterOids.map((oid) => oid.toString()));
+    }, [props.metadata.masterOids]);
+
     useEffect(() => {
         setTableName(props.metadata.name);
         
+        loadTableMasters();
         const unlistenTableMasters = listen<TableListItem>('table', () => {
             loadTableMasters();
         });
@@ -65,7 +72,7 @@ export function EditTablePopup(props: EditTablePopupProps): React.JSX.Element {
             }
             startTableMastersListTransition(() => {
                 setTableMastersList(temp);
-                setSelectedTableMasters(selectedTableMasters.filter((selectedTableMaster) => {
+                setSelectedTableMasters((oldSelectedTableMasters) => oldSelectedTableMasters.filter((selectedTableMaster) => {
                     const selectedTableMasterOid: number = parseInt(selectedTableMaster);
                     return temp.findIndex((tableMaster) => tableMaster.oid == selectedTableMasterOid) >= 0;
                 }));
@@ -170,6 +177,7 @@ export function EditTablePopup(props: EditTablePopupProps): React.JSX.Element {
                 }
             ]}
         />
+        {confirmAlert && (<Alert color="error">{confirmAlert}</Alert>)}
         <div className="flex flex-row justify-end gap-y-2">
             <Button
                 variant="ghost"

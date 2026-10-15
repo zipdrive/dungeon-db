@@ -69,7 +69,7 @@ fn construct_value(
         | TableCellContent::SingleSelectDropdown { value, .. } => json!(value),
         TableCellContent::MultiSelectDropdown { value, .. } => json!(value),
         TableCellContent::Number { value } => json!(value),
-        TableCellContent::Object { table_oid, value } => match value {
+        TableCellContent::Object { table_oid, value, .. } => match value {
             Some(row_oid) => {
                 export_object_row_json_object(
                     conn, 
@@ -84,7 +84,7 @@ fn construct_value(
             }
             None => json!(None::<Value>)
         },
-        TableCellContent::Subreport { report_oid, oid_filters } => {
+        TableCellContent::Subreport { report_oid, oid_filters, .. } => {
             // Export the rows of the subreport
             export_report(
                 conn, 
@@ -233,7 +233,7 @@ fn export_object_row_json_object(
     index_column: &Option<String>,
     oid_column: &Option<String>,
 ) -> Result<Value, Error> {
-    let (table_oid, column_tuples, row) = TableRow::conn_get_object(conn, table_oid.clone(), row_oid)?;
+    let (table_oid, column_tuples, row) = TableRow::conn_get_object(conn, table_oid.clone(), row_oid, false)?;
 
     // Add columns to storage
     if !columns_by_table.contains_key(&table_oid) {
@@ -344,7 +344,8 @@ fn export_table_batch(
             Ok(())
         })), 
         table_oid,
-        columns
+        columns,
+        false
     )?;
     Ok(json!(array_rows))
 }
@@ -428,7 +429,8 @@ fn export_report(
         })), 
         report_oid, 
         oid_filters, 
-        columns
+        columns,
+        false
     )?;
     Ok(json!(array_rows))
 }

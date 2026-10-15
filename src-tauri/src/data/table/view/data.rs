@@ -5,11 +5,11 @@ use std::collections::{
     HashSet
 };
 use regex::Regex;
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 
 use crate::data::table::column::TableColumnMetadata;
 use crate::data::table::column_type::{Primitive, TableColumnType};
-use crate::util::db::sql_execute;
+use crate::util::db::{sql_execute, sql_iter, sql_one};
 use crate::util::error::Error;
 use crate::util::mapping::oid_list;
 
@@ -71,6 +71,25 @@ impl DataCte {
             columns: Vec::new(),
             master_ctes: HashSet::new()
         }
+    }
+
+    fn _add_master(&mut self, path: &[i64]) -> Result<(), Error> {
+        if path.len() > 0 {
+            // Extract table OID and remaining path
+            let table_oid = path[0];
+            let path: &[i64] = &path[1..];
+
+            // Get or create CTE for the datasource
+            let mut cte: Self = self.master_ctes.take(&table_oid)
+                .unwrap_or(Self::new(table_oid));
+
+            // Add datasources from remaining path, if any
+            cte._add_master(path)?;
+
+            // Reinsert the CTE back into the set
+            self.master_ctes.insert(cte);
+        }
+        Ok(())
     }
 
     fn _add_column(&mut self, path: &[i64], column: TableColumnMetadata) -> Result<(), Error> {
@@ -139,6 +158,12 @@ impl DataCte {
     }
 
     /// Registers a child datasource of this datasource via path.
+    pub fn add_master<S>(&mut self, path: S) -> Result<(), Error> where S : AsRef<str> {
+        let path: Vec<i64> = oid_list(path);
+        self._add_master(&path)
+    }
+
+    /// Registers a column to this datasource or a child datasource via path.
     pub fn add_column<S>(&mut self, path: S, column: TableColumnMetadata) -> Result<(), Error> where S : AsRef<str> {
         let path: Vec<i64> = oid_list(path);
         self._add_column(&path, column)
@@ -210,43 +235,50 @@ pub fn rebuild(conn: &Connection, table_oid: i64) -> Result<(), Error> {
     // Drop the old data view, if it exists
     sql_execute(conn, format!("DROP VIEW IF EXISTS TABLE{table_oid}"), [])?;
 
+    // If table is trashed, do not recreate
+    if sql_one(conn, "SELECT TRASH FROM __METADATA_TABLE WHERE OID = ?1", params![table_oid], |row| row.get::<_, bool>("TRASH"))? {
+        return Ok(());
+    }
+    
+    // Start constructing new data view
+    let mut cte: DataCte = DataCte::new(table_oid);
+
+    // Query for all master tables
+    sql_iter(
+        conn, 
+        "
+SELECT 
+    MASTER_DATASOURCE_PATH
+FROM METADATA_TABLE_INHERITANCE_PATH
+WHERE INHERITOR_TABLE_OID = ?1
+        ", 
+        params![table_oid], 
+        |row| {
+            let datasource_path = row.get::<_, String>("MASTER_DATASOURCE_PATH")?;
+            cte.add_master(datasource_path)?;
+            Ok(None::<()>)
+        }
+    )?;
+
     // Query for all columns
     let columns: Vec<(i64, String, TableColumnMetadata)> = TableColumnMetadata::conn_query_all(conn, table_oid)?;
-    if columns.len() == 0 {
-        sql_execute(
-            conn, 
-            format!(
-                "
-CREATE VIEW TABLE{table_oid} AS 
-    SELECT 
-        OID,
-        ORDERING
-    FROM __TABLE{table_oid}
-    WHERE NOT TRASH
-                "
-            ), 
-            []
-        )?;
-    } else {
-        let mut cte: DataCte = DataCte::new(table_oid);
-        for (_, datasource_path, column) in columns {
-            cte.add_column(datasource_path, column)?;
-        }
+    for (_, datasource_path, column) in columns {
+        cte.add_column(datasource_path, column)?;
+    }
 
-        sql_execute(
-            conn,
-            format!(
-                "
+    sql_execute(
+        conn,
+        format!(
+            "
 CREATE VIEW TABLE{table_oid} AS 
     WITH {}
     SELECT 
         *
     FROM CTE{table_oid}
-                ",
-                cte.to_sql(true)?
-            ), 
-            []
-        )?;
-    }
+            ",
+            cte.to_sql(true)?
+        ), 
+        []
+    )?;
     Ok(())
 }

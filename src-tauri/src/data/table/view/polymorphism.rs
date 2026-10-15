@@ -3,7 +3,7 @@ use std::collections::{HashSet};
 use std::hash::Hash;
 use regex::Regex;
 use rusqlite::{Connection, params};
-use crate::util::db::{sql_collect, sql_execute};
+use crate::util::db::{sql_collect, sql_execute, sql_one};
 use crate::util::error::Error;
 use crate::util::mapping::oid_list;
 
@@ -127,6 +127,11 @@ CTE{} AS (
 pub fn rebuild(conn: &Connection, table_oid: i64) -> Result<(), Error> {
     // Drop the old polymorphism view, if it exists
     sql_execute(conn, format!("DROP VIEW IF EXISTS OBJECT{table_oid}"), [])?;
+
+    // If table is trashed, do not recreate
+    if sql_one(conn, "SELECT TRASH FROM __METADATA_TABLE WHERE OID = ?1", params![table_oid], |row| row.get::<_, bool>("TRASH"))? {
+        return Ok(());
+    }
 
     // Query for all inheritor tables
     let inheritor_datasource_paths: Vec<String> = sql_collect(

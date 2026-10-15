@@ -2,7 +2,8 @@ import { File } from "./file"
 
 export type ObjectTableCellContent = {
     tableOid: number,
-    value: number | null 
+    value: number | null,
+    label: string | null
 };
 export type SingleSelectDropdownTableCellContent = {
     tableOid: number,
@@ -14,7 +15,8 @@ export type MultiSelectDropdownTableCellContent = {
 };
 export type SubreportTableCellContent = {
     reportOid: number,
-    oidFilters: [string, number[]][]
+    oidFilters: [string, number[]][],
+    label: string | null
 };
 
 export type TableCellContent = {

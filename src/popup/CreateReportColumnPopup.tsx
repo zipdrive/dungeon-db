@@ -169,8 +169,8 @@ export function CreateReportColumnPopup(props: CreateReportColumnPopupProps): Re
                 }
             ]}
         />
+        {confirmAlert && (<Alert color="error">{confirmAlert}</Alert>)}
         <div className="flex flex-row justify-end gap-y-2">
-            {confirmAlert && (<Alert color="error">{confirmAlert}</Alert>)}
             <Dialog.DismissTrigger
                 as={Button}
                 variant="ghost"

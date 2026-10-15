@@ -9,7 +9,7 @@ use crate::util::error::Error;
 
 fn conn_get_keys(conn: &Connection, table_oid: i64, row_oid: i64, block_recursion: &Vec<(i64, i64)>) -> Result<Vec<(String, Option<String>, String)>, Error> {
     // Get the values from the row
-    let (columns, row) = TableRow::conn_get(conn, table_oid, row_oid)?;
+    let (columns, row) = TableRow::conn_get(conn, table_oid, row_oid, false)?;
     
     // Get the primary keys
     let mut keys: Vec<(String, Option<String>, String)> = Vec::new();
@@ -120,7 +120,7 @@ fn conn_get_keys(conn: &Connection, table_oid: i64, row_oid: i64, block_recursio
                                 label
                             )
                         }
-                        TableCellContent::Subreport { oid_filters, report_oid } => {
+                        TableCellContent::Subreport { oid_filters, report_oid, .. } => {
                             let label: String = report::label::conn_get_subreport_label(conn, report_oid.clone(), oid_filters.clone(), block_recursion)?;
                             (
                                 column.name,

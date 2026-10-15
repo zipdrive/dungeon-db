@@ -337,7 +337,7 @@ REFERENCES __TABLE{master_oid} (OID)
         let trans = conn.transaction()?;
 
         // Trash the table
-        Self::conn_trash(&trans, table_oid)?;
+        Self::conn_trash(&trans, table_oid.clone())?;
 
         // Commit the transaction
         trans.commit()?;
@@ -352,6 +352,9 @@ REFERENCES __TABLE{master_oid} (OID)
             "UPDATE __METADATA_TABLE SET TRASH = TRUE WHERE OID = ?1", 
             params![oid]
         )?;
+
+        // Rebuild the table views
+        view::rebuild(conn, oid)?;
         Ok(())
     }
 
@@ -376,6 +379,9 @@ REFERENCES __TABLE{master_oid} (OID)
             "UPDATE __METADATA_TABLE SET TRASH = FALSE WHERE OID = ?1", 
             params![oid]
         )?;
+
+        // Rebuild the table views
+        view::rebuild(conn, oid)?;
         Ok(())
     }
 }

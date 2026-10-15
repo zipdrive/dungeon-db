@@ -312,7 +312,7 @@ impl Value {
                 Some(value) => Self::Text { value: TextValue { text: value.clone(), format: format.clone() }, reference },
                 None => Self::Null { reference }
             },
-            TableCellContent::Object { table_oid, value } => match value {
+            TableCellContent::Object { table_oid, value, .. } => match value {
                 Some(value) => Self::ObjectCellReference { table_oid: table_oid.clone(), value: value.clone(), reference: reference.unwrap() },
                 None => Self::Null { reference }
             }

@@ -32,7 +32,8 @@ impl<'a> Context<'a> {
                 };
                 self.row.get::<&str, _>(&ord)?
             },
-            self.row
+            self.row,
+            false
         )
     }
 }

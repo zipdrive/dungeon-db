@@ -23,6 +23,8 @@ export function EditReportPopup(props: EditReportPopupProps): React.JSX.Element 
 
     const [reportColumnList, setReportColumnList] = useState<ReportColumnMetadata[]>([]);
     const [isReportColumnListPending, startReportColumnListTransition] = useTransition();
+
+    const [confirmAlert, setConfirmAlert] = useState<string | null>(null);
     
     useEffect(() => {
         setReportName(props.metadata.name);
@@ -214,6 +216,7 @@ export function EditReportPopup(props: EditReportPopupProps): React.JSX.Element 
                 }
             ]}
         />
+        {confirmAlert && (<Alert color="error">{confirmAlert}</Alert>)}
         <div className="flex flex-row justify-end gap-y-2">
             <Button
                 variant="ghost"

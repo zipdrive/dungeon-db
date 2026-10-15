@@ -267,8 +267,8 @@ export function CreateTableColumnPopup(props: CreateTableColumnPopupProps): Reac
                 }
             ]}
         />
+        {confirmAlert && (<Alert color="error">{confirmAlert}</Alert>)}
         <div className="flex flex-row justify-end gap-y-2">
-            {confirmAlert && (<Alert color="error">{confirmAlert}</Alert>)}
             <Dialog.DismissTrigger
                 as={Button}
                 variant="ghost"

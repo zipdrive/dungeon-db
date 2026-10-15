@@ -180,7 +180,7 @@ export function ObjectPage(props: ObjectPageProps): React.JSX.Element {
                 setRow(tempRow);
             });
         });
-    }, [props.tableOid, props.onError]);
+    }, [props.tableOid, props.rowOid, props.onError]);
 
     useEffect(() => {
         updateRow();
@@ -194,7 +194,32 @@ export function ObjectPage(props: ObjectPageProps): React.JSX.Element {
         return () => {
             unlistenForTable.then(f => f());
         };
-    }, [updateRow, props.tableOid]);
+    }, [updateRow, props.tableOid, props.rowOid]);
+    
+    useEffect(() => {
+        const unlistenTableCell = listen<TableCell>('tableCell', (event) => {
+            const colIndex: number = columnList.findIndex((col) => col.oid == event.payload.columnOid);
+            if (colIndex >= 0) {
+                setRow((oldRow) => {
+                    if (oldRow 
+                        && oldRow.cells[colIndex].tableOid == event.payload.tableOid 
+                        && oldRow.cells[colIndex].rowOid == event.payload.rowOid
+                    ) {
+                        return {
+                            ...oldRow,
+                            cells: oldRow.cells.slice(0, colIndex).concat([event.payload]).concat(oldRow.cells.slice(colIndex + 1))
+                        };
+                    } else {
+                        return oldRow;
+                    }
+                });
+            }
+        });
+
+        return () => {
+            unlistenTableCell.then(f => f());
+        };
+    }, [columnList]);
 
 
 

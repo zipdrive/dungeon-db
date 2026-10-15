@@ -209,6 +209,7 @@ impl QueryStream {
                 Sender::Channel(column_channel.channel_on(webview.clone())),
                 Sender::Channel(row_channel.channel_on(webview)),
                 table_oid,
+                false
             ),
 
             Self::ReportCells { 
@@ -220,7 +221,8 @@ impl QueryStream {
                 Sender::Channel(column_channel.channel_on(webview.clone())),
                 Sender::Channel(row_channel.channel_on(webview)), 
                 report_oid,
-                oid_filters
+                oid_filters,
+                false
             ),
 
             Self::TableRowLabels { 
@@ -281,13 +283,13 @@ pub fn get_report_column_metadata(column_oid: i64) -> Result<report::column::Rep
 #[tauri::command]
 /// Gets the columns and cells of a row in a table.
 pub fn get_row(table_oid: i64, row_oid: i64) -> Result<(Vec<(i64, table::column::TableColumnMetadata)>, table::row::TableRow), Error> {
-    table::row::TableRow::get(table_oid, row_oid)
+    table::row::TableRow::get(table_oid, row_oid, true)
 }
 
 #[tauri::command]
 /// Gets the table, columns, and cells of an Object.
 pub fn get_object_row(table_oid: i64, row_oid: i64) -> Result<(i64, Vec<(i64, table::column::TableColumnMetadata)>, table::row::TableRow), Error> {
-    table::row::TableRow::get_object(table_oid, row_oid)
+    table::row::TableRow::get_object(table_oid, row_oid, true)
 }
 
 
@@ -904,12 +906,15 @@ impl Action {
                     table::row::TableRow::change_object_type(table_oid, row_oid, inheritor_table_oid)?;
                 record_action(
                     Self::EditTableRowSubtype {
-                        table_oid,
+                        table_oid: table_oid.clone(),
                         row_oid,
                         inheritor_table_oid: old_inheritor_table_oid,
                     },
                     is_forward,
                 );
+
+                // Send signal to update table
+                table::TableListItem::send_inheritors(Sender::Event(app, "table"), table_oid)?;
             }
 
             Self::EditTableCellContents(cell) => {
@@ -932,7 +937,8 @@ impl Action {
                     row_oid,
                     content: table::row::TableCellContent::Object { 
                         table_oid: object_table_oid, 
-                        value: Some(object_row_oid) 
+                        value: Some(object_row_oid),
+                        label: None
                     }
                 };
                 let old_cell = cell.set()?;
