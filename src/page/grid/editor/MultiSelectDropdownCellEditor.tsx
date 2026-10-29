@@ -2,7 +2,7 @@ import React, { useEffect } from "react";
 import { TableCellReference } from "../../../api/model/reportRow";
 import { TableRowLabel } from "../../../api/model/tableRow";
 import AsyncSelect from 'react-select/async';
-import { MultiValue } from 'react-select';
+import { GetOptionValue, MultiValue } from 'react-select';
 import { executeAsync } from "../../../api/action";
 
 export type MultiSelectDropdownCellEditorProps = {
@@ -15,6 +15,8 @@ export type MultiSelectDropdownCellEditorProps = {
 };
 
 export function MultiSelectDropdownCellEditor(props: MultiSelectDropdownCellEditorProps): React.JSX.Element {
+    const getOptionValue: GetOptionValue<TableRowLabel> = React.useCallback(({ oid }) => oid.toString(), []);
+    
     const [value, setValue] = React.useState<TableRowLabel[] | null>(null);
 
     // Sets the value of the dropdown.
@@ -105,6 +107,7 @@ export function MultiSelectDropdownCellEditor(props: MultiSelectDropdownCellEdit
             }),
         }}
         value={value}
+        getOptionValue={getOptionValue}
         onChange={onChange}
         onBlur={onBlur}
         isClearable

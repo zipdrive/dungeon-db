@@ -2,7 +2,7 @@ import React, { useEffect } from "react";
 import { TableCellReference } from "../../../api/model/reportRow";
 import { TableRowLabel } from "../../../api/model/tableRow";
 import AsyncSelect from 'react-select/async';
-import { SingleValue } from 'react-select';
+import { GetOptionValue, SingleValue } from 'react-select';
 import { executeAsync } from "../../../api/action";
 
 export type SingleSelectDropdownCellEditorProps = {
@@ -15,6 +15,8 @@ export type SingleSelectDropdownCellEditorProps = {
 };
 
 export function SingleSelectDropdownCellEditor(props: SingleSelectDropdownCellEditorProps): React.JSX.Element {
+    const getOptionValue: GetOptionValue<TableRowLabel> = React.useCallback(({ oid }) => oid.toString(), []);
+    
     const [value, setValue] = React.useState<TableRowLabel | null>(null);
 
     // Sets the value of the dropdown.
@@ -29,7 +31,7 @@ export function SingleSelectDropdownCellEditor(props: SingleSelectDropdownCellEd
      */
     const loadOptions = React.useCallback(async (inputValue: string) => {
         const items = await props.items;
-        return items.filter(({ label }) => label.includes(inputValue));
+        return items.filter(({ label }) => label.toLowerCase().includes(inputValue.toLowerCase()));
     }, [props.value, props.items]);
 
     /**
@@ -103,6 +105,7 @@ export function SingleSelectDropdownCellEditor(props: SingleSelectDropdownCellEd
             }),
         }}
         value={value}
+        getOptionValue={getOptionValue}
         onChange={onChange}
         onBlur={onBlur}
         isClearable

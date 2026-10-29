@@ -16,7 +16,7 @@ export function MultiSelectDropdownCellRenderer(props: MultiSelectDropdownCellRe
     }, [props.value, props.items]);
     
     if (labels !== null) {
-        return <div>
+        return <div className="flex flex-wrap gap-2">
             {labels.map((item) => <Chip key={`multiselect-${item.oid}`} className="px-2">{item.label}</Chip>)}
         </div>;
     } else {

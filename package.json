@@ -23,7 +23,7 @@
     "classnames": "^2.5.1",
     "code-colors-react": "^3.5.0",
     "dompurify": "^3.4.17",
-    "dungeon-grid-react": "^1.0.1",
+    "dungeon-grid-react": "file:../../dungeon-grid/dungeon-grid",
     "marked": "^18.1.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
