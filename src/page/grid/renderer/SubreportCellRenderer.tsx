@@ -1,87 +1,30 @@
-import { ICellRendererComp, ICellRendererParams } from 'ag-grid-community';
-import classNames from 'classnames';
-import { ReportPageBreadcrumb } from '../../../breadcrumb';
-import { SubreportTableCellContent, TableCell } from '../../../api/model/tableRow';
-import { getDrillDownReportLabelAsync, getReportColumnMetadataAsync, getTableColumnMetadataAsync } from '../../../api/query';
-import { ReportCell } from '../../../api/model/reportRow';
-import { TableColumnMetadata } from '../../../api/model/tableColumn';
-import { ReportColumnMetadata } from '../../../api/model/reportColumn';
+import React from "react";
+import { getDrillDownReportLabelAsync, getObjectLabelAsync } from "../../../api/query";
+import { Spinner } from "@material-tailwind/react";
 
-type SubreportCellRendererParams = ICellRendererParams<any, any, any> & {
-    onRequestOpenDrillDownReport: (report: ReportPageBreadcrumb) => void,
+export type SubreportCellRendererProps = {
+    reportOid: number,
+    oidFilters: [string, number[]][],
     onError: (e: unknown) => void,
 };
 
-export class SubreportCellRenderer implements ICellRendererComp {
-    private gui: HTMLDivElement;
-
-    constructor() {
-        this.gui = document.createElement('div');
-        this.gui.className = classNames('flex');
-    }
-
-    init(params: SubreportCellRendererParams) {
-        this.refresh(params);
-    }
-
-    getGui(): HTMLElement {
-        return this.gui;
-    }
-
-    refresh(params: SubreportCellRendererParams): boolean {
-        const onRequestOpenDrillDownReport = params.onRequestOpenDrillDownReport;
-        const onError: (e: unknown) => void = params.onError;
-        if (!onError)
-            return false;
-
-        try {
-            // Clear prior children
-            for (const child of this.gui.childNodes) {
-                this.gui.removeChild(child);
+export function SubreportCellRenderer(props: SubreportCellRendererProps): React.JSX.Element {
+    const [label, setLabel] = React.useState<string | null>(null);
+    const [isLabelPending, startLabelTransition] = React.useTransition();
+    React.useEffect(() => {
+        startLabelTransition(async () => {
+            let subreportLabel: string = '';
+            try {
+                subreportLabel = await getDrillDownReportLabelAsync(props.reportOid, props.oidFilters);
+            } catch (e) {
+                props.onError(e);
             }
-            
-            // Get the cell and the Drill-Down Report content
-            const cell: TableCell<{ subreport: SubreportTableCellContent }> | ReportCell<{ subreport: SubreportTableCellContent }> | null = params.getValue ? params.getValue() : null;
-            const content: SubreportTableCellContent | null = cell?.content.subreport ?? null;
 
-            if (cell && content) {
-                // Create a link to the Drill-Down Report page
-                const link: HTMLAnchorElement = document.createElement('a');
-                link.className = classNames(
-                    'text-[rgb(var(--color-primary)/1)]',
-                    'absolute',
-                    'left-0',
-                    'right-0',
-                    'top-0',
-                    'bottom-0',
-                    'cursor-pointer'
-                );
-                this.gui.appendChild(link);
+            startLabelTransition(() => {
+                setLabel(subreportLabel);
+            });
+        });
+    }, [props.reportOid, props.oidFilters, props.onError]);
 
-                // Set label of Drill-Down Report
-                link.innerText = content.label || '';
-                
-                link.onclick = async (_e) => {
-                    try {
-                        const columnOid: number = cell.columnOid;
-                        const columnMetadata: TableColumnMetadata | ReportColumnMetadata = 'reference' in cell
-                            ? await getReportColumnMetadataAsync(columnOid)
-                            : await getTableColumnMetadataAsync(columnOid);
-                        onRequestOpenDrillDownReport({
-                            page: 'report',
-                            name: columnMetadata.name,
-                            reportOid: content.reportOid,
-                            oidFilters: content.oidFilters
-                        });
-                    } catch (e) {
-                        onError(e);
-                    }
-                };
-            }
-            return true;
-        } catch (e) {
-            onError(e);
-            return false;
-        }
-    }
+    return isLabelPending ? <Spinner /> : <>{label}</>;
 }

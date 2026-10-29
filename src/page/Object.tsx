@@ -12,7 +12,7 @@ import { AutoSizeStrategy, CellEditRequestEvent, ColDef, ColumnResizedEvent } fr
 import classNames from "classnames";
 import { selectRenderer } from "./grid/RendererSelector";
 import { selectEditor } from "./grid/EditorSelector";
-import { SubtypeEditor } from "./grid/editor/SubtypeEditor";
+import { SubtypeEditor } from "./grid/editor/old/SubtypeEditor";
 import { getValue } from "./grid/ValueGetter";
 import { editCellContents } from "./grid/CellEditRequest";
 import { executeAsync } from "../api/action";

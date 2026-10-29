@@ -1,4 +1,4 @@
-.ag-cell {
+.dngrid-cell {
     padding: var(--spacing);
 
     /* Reimplement default CSS, more or less */
@@ -160,6 +160,17 @@
     & .json-string {
         color: rgb(var(--color-warning)/1);
     }
+}
+
+.dngrid-cell-invisible {
+    background-color: transparent;
+    border: none;
+}
+
+.dngrid-editor-select {
+    border-radius: 0;
+    border: none;
+    padding: 0;
 }
 
 .choices {

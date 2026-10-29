@@ -1,6 +1,6 @@
 import { CellEditorSelectorResult } from 'ag-grid-community';
-import { SingleSelectCellEditor } from './editor/SingleSelectCellEditor';
-import { AdhocMultiSelectCellEditor } from './editor/MultiSelectCellEditor';
+import { SingleSelectCellEditor } from './editor/old/SingleSelectCellEditor';
+import { AdhocMultiSelectCellEditor } from './editor/old/MultiSelectCellEditor';
 import { TableCell, TableCellContent, TableRowLabel } from '../../api/model/tableRow';
 import { ReportCell } from '../../api/model/reportRow';
 

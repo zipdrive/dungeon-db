@@ -304,6 +304,12 @@ pub fn check_formula(formula: String) -> Result<(), Error> {
 
 
 #[tauri::command]
+/// Gets a file by OID.
+pub fn get_file(oid: i64) -> Result<file::File, Error> {
+    file::File::get(oid)
+}
+
+#[tauri::command]
 /// Gets the content of a file as a base64 string.
 pub fn get_src(file: file::File) -> Result<String, Error> {
     file.get_src()

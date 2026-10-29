@@ -2,15 +2,16 @@ import { ICellEditorComp, ICellEditorParams, ICellRendererComp, ICellRendererPar
 import Choices, { EventChoice, InputChoice } from 'choices.js';
 import classNames from 'classnames';
 import { Channel } from '@tauri-apps/api/core';
-import { TableListItem } from '../../../api/model/table';
+import { SingleSelectDropdownTableCellContent, TableRowLabel } from '../../../../api/model/tableRow';
 
-type SubtypeCellParams = ICellEditorParams & {
-    subtypes: TableListItem[],
-    subtypeTableOid: number,
+type SingleSelectDropdownCellParams = ICellEditorParams & {
+    singleSelectDropdown: SingleSelectDropdownTableCellContent,
+    dropdownValues: {[tableOid: number]: TableRowLabel[]},
+    loadDropdownValues: (tableOid: number) => void,
     onError: (e: unknown) => void,
 };
 
-export class SubtypeEditor implements ICellEditorComp {
+export class SingleSelectCellEditor implements ICellEditorComp {
     private gui: HTMLDivElement;
     private choices: Choices;
 
@@ -22,7 +23,9 @@ export class SubtypeEditor implements ICellEditorComp {
 
         this.choices = new Choices(select, {
             choices: [],
+            shouldSort: false,
             itemSelectText: '',
+            resetScrollPosition: false,
             classNames: {
                 containerOuter: ['choices', 'size-full'],
                 containerInner: ['choices__inner', 'border-none!', 'bg-transparent!'],
@@ -58,7 +61,7 @@ export class SubtypeEditor implements ICellEditorComp {
         });
     }
 
-    init(params: ICellEditorParams<SubtypeCellParams>) {
+    init(params: SingleSelectDropdownCellParams) {
         this.refresh(params);
     }
 
@@ -69,29 +72,38 @@ export class SubtypeEditor implements ICellEditorComp {
     getValue() {
         const value = this.choices?.getValue();
         if (Array.isArray(value)) {
-            return value.length > 0 ? value[0].value : null;
+            if (value.length > 0) {
+                const intValue = parseInt(value[0].value);
+                return Number.isFinite(intValue) ? intValue : null;
+            }
         } else if (value) {
-            return value.value;
-        } else {
-            return null;
+            const intValue = parseInt(value.value);
+            return Number.isFinite(intValue) ? intValue : null;
         }
+        return null;
     }
 
-    refresh(params: ICellEditorParams<SubtypeCellParams>): boolean {
-        this.choices.setChoices(
-            params.data.subtypes
-                .map(({ oid, name }) => { 
-                    return { 
-                        value: oid.toString(), 
-                        label: name,
-                        selected: oid == params.data.subtypeTableOid
-                    }; 
-                }),
-            'value',
-            'label',
-            true
-        );
-        //this.choices.setValue([params.data.subtypeTableOid.toString()]);
+    refresh(params: SingleSelectDropdownCellParams): boolean {
+        const { tableOid, value } = params.singleSelectDropdown;
+        const dropdownValues = params.dropdownValues;
+        if (tableOid in dropdownValues) {
+            this.choices.setChoices(
+                dropdownValues[tableOid].map((item) => {
+                    return {
+                        value: item.oid.toString(),
+                        label: item.label ? item.label : ' ',
+                        selected: item.oid == value
+                    };
+                }), 
+                'value', 
+                'label', 
+                true
+            );
+        } else {
+            this.choices.setChoices([]);
+            params.loadDropdownValues(tableOid);
+        }
+        
         this.choices.showDropdown(false);
         return true;
     }

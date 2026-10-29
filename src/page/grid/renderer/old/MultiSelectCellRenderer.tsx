@@ -1,7 +1,7 @@
 import { ICellRendererComp, ICellRendererParams } from 'ag-grid-community';
 import classNames from 'classnames';
-import { MultiSelectDropdownTableCellContent, SingleSelectDropdownTableCellContent, TableCell, TableRowLabel } from '../../../api/model/tableRow';
-import { ReportCell } from '../../../api/model/reportRow';
+import { MultiSelectDropdownTableCellContent, SingleSelectDropdownTableCellContent, TableCell, TableRowLabel } from '../../../../api/model/tableRow';
+import { ReportCell } from '../../../../api/model/reportRow';
 
 type MultiSelectCellRendererParams = ICellRendererParams<any, any, any> & {
     dropdownValues: {[tableOid: number]: TableRowLabel[]},

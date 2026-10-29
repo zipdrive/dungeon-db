@@ -11,7 +11,7 @@ import { AgGridReact } from "ag-grid-react";
 import { CellContextMenuEvent, CellEditRequestEvent, ColDef, ColumnResizedEvent } from "ag-grid-community";
 import classNames from "classnames";
 import { Menu, MenuItem } from "@tauri-apps/api/menu";
-import { TableColumnHeaderRenderer } from "./grid/renderer/TableColumnHeaderRenderer";
+import { TableColumnHeaderRenderer } from "./grid/renderer/old/TableColumnHeaderRenderer";
 import { AddNewColumnButton } from "./grid/ColDef";
 import { selectRenderer } from "./grid/RendererSelector";
 import { selectEditor } from "./grid/EditorSelector";
@@ -22,7 +22,7 @@ import { ReportCell, ReportRow } from "../api/model/reportRow";
 import { ReportColumnMetadata } from "../api/model/reportColumn";
 import './Grid.css';
 import { ReportMetadata } from "../api/model/report";
-import { ReportColumnHeaderRenderer } from "./grid/renderer/ReportColumnHeaderRenderer";
+import { ReportColumnHeaderRenderer } from "./grid/renderer/old/ReportColumnHeaderRenderer";
 
 type ReportPageProps = Omit<ReportPageBreadcrumb, 'key' | 'name'> & {
     onRequestCreateReportColumn: (reportOid: number, columnOid: number | null) => void,

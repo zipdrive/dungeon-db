@@ -1,26 +1,26 @@
 import { AgPromise, IHeaderParams, IInnerHeaderComponent } from 'ag-grid-community';
 import { Menu } from '@tauri-apps/api/menu';
 import classNames from 'classnames';
-import { executeAsync } from '../../../api/action';
-import { TableColumnMetadata } from '../../../api/model/tableColumn';
+import { executeAsync } from '../../../../api/action';
+import { ReportColumnMetadata } from '../../../../api/model/reportColumn';
 
-type TableColumnHeaderParams = IHeaderParams & {
-    tableOid: number,
-    columnMetadata: TableColumnMetadata,
-    columnList: TableColumnMetadata[],
-    onRequestCreateTableColumn: (tableOid: number, columnOid: number | null) => void,
-    onRequestEditTableColumn: (columnMetadata: TableColumnMetadata) => void,
+type ReportColumnHeaderParams = IHeaderParams & {
+    reportOid: number,
+    columnMetadata: ReportColumnMetadata,
+    columnList: ReportColumnMetadata[],
+    onRequestCreateReportColumn: (tableOid: number, columnOid: number | null) => void,
+    onRequestEditReportColumn: (columnMetadata: ReportColumnMetadata) => void,
     onError: (e: unknown) => void,
 };
 
-export class TableColumnHeaderRenderer implements IInnerHeaderComponent {
+export class ReportColumnHeaderRenderer implements IInnerHeaderComponent {
     private gui: HTMLDivElement;
 
     constructor() {
         this.gui = document.createElement('div');
     }
 
-    init(params: TableColumnHeaderParams) {
+    init(params: ReportColumnHeaderParams) {
         this.refresh(params);
     }
 
@@ -28,7 +28,7 @@ export class TableColumnHeaderRenderer implements IInnerHeaderComponent {
         return this.gui;
     }
 
-    refresh(params: TableColumnHeaderParams): boolean {
+    refresh(params: ReportColumnHeaderParams): boolean {
         const div = document.createElement('div');
         div.className = classNames('size-full', 'content-center');
         div.innerText = `${params.columnMetadata.isPrimaryKey ? '🔑 ' : ''}${params.columnMetadata.name}`;
@@ -38,13 +38,13 @@ export class TableColumnHeaderRenderer implements IInnerHeaderComponent {
                     {
                         text: "Insert Column Before",
                         action: () => {
-                            params.onRequestCreateTableColumn(params.tableOid, params.columnMetadata.oid);
+                            params.onRequestCreateReportColumn(params.reportOid, params.columnMetadata.oid);
                         }
                     },
                     {
                         text: "Edit",
                         action: () => {
-                            params.onRequestEditTableColumn(params.columnMetadata);
+                            params.onRequestEditReportColumn(params.columnMetadata);
                         }
                     },
                     {
@@ -52,7 +52,8 @@ export class TableColumnHeaderRenderer implements IInnerHeaderComponent {
                         action: async () => {
                             try {
                                 await executeAsync({
-                                    trashTableColumn: {
+                                    trashReportColumn: {
+                                        reportOid: params.reportOid,
                                         columnOid: params.columnMetadata.oid,
                                     }
                                 });
@@ -66,11 +67,11 @@ export class TableColumnHeaderRenderer implements IInnerHeaderComponent {
                         items: params.columnList.map((item) => {
                             return {
                                 text: item.name,
-                                enabled: item.oid != params.columnMetadata.oid,
+                                enabled: item.oid == params.columnMetadata.oid,
                                 action: async () => {
                                     try {
                                         await executeAsync({
-                                            moveTableColumnBefore: {
+                                            moveReportColumnBefore: {
                                                 metadata: params.columnMetadata,
                                                 beforeColumnOid: item.oid
                                             }
@@ -88,11 +89,10 @@ export class TableColumnHeaderRenderer implements IInnerHeaderComponent {
                             const next = idx < params.columnList.length - 1 ? params.columnList[idx + 1] : null;
                             return {
                                 text: item.name,
-                                enabled: item.oid != params.columnMetadata.oid,
                                 action: async () => {
                                     try {
                                         await executeAsync({
-                                            moveTableColumnBefore: {
+                                            moveReportColumnBefore: {
                                                 metadata: params.columnMetadata,
                                                 beforeColumnOid: next?.oid || null
                                             }

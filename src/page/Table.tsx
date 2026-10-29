@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState, useTransition } from "react";
 import { TableColumnMetadata } from "../api/model/tableColumn";
 import { ObjectPageBreadcrumb, ReportPageBreadcrumb, TablePageBreadcrumb } from "../breadcrumb"
 import { TableCell, TableCellContent, TableRow, TableRowLabel } from "../api/model/tableRow";
@@ -8,18 +8,20 @@ import { listen } from "@tauri-apps/api/event";
 import { Button, Spinner } from "@material-tailwind/react";
 import { executeAsync } from "../api/action";
 import { gridTheme } from "./Grid";
-import { AgGridReact } from "ag-grid-react";
 import { CellEditRequestEvent, ColDef, ColumnResizedEvent } from "ag-grid-community";
 import classNames from "classnames";
 import { Menu, MenuItem, Submenu } from "@tauri-apps/api/menu";
-import { TableColumnHeaderRenderer } from "./grid/renderer/TableColumnHeaderRenderer";
+import { TableColumnHeaderRenderer } from "./grid/renderer/old/TableColumnHeaderRenderer";
 import { AddNewColumnButton } from "./grid/ColDef";
 import { selectRenderer } from "./grid/RendererSelector";
 import { selectEditor } from "./grid/EditorSelector";
 import { getValue } from "./grid/ValueGetter";
 import { editCellContents } from "./grid/CellEditRequest";
 import { TableListItem } from "../api/model/table";
+import { DungeonGrid, DungeonGridCell, DungeonGridColumn, DungeonGridRow } from 'dungeon-grid-react';
 import './Grid.css';
+import { cellEntry } from "./grid/DungeonGridCell";
+import { LogicalPosition } from "@tauri-apps/api/dpi";
 
 type TablePageProps = Omit<TablePageBreadcrumb, 'key' | 'name'> & {
     onRequestCreateTableColumn: (tableOid: number, columnOid: number | null) => void,
@@ -40,34 +42,36 @@ type TableGridRowData = {
 
 export function TablePage(props: TablePageProps): React.JSX.Element {
     // Stores dropdown values used in single-select and multi-select columns
-    const [dropdownValues, setDropdownValues] = useState<{[tableOid: number]: TableRowLabel[]}>({});
+    const [dropdownValues, setDropdownValues] = useState<{[tableOid: number]: Promise<TableRowLabel[]>}>({});
 
     /**
      * Loads in dropdown values.
      */
-    const loadDropdownValues = useCallback((tableOid: number) => {
-        (async () => {
-            const temp: TableRowLabel[] = [];
-            try {
-                await queryAsync({
-                    tableRowLabels: {
-                        tableOid,
-                        channel: new Channel<TableRowLabel>((item) => {
-                            temp.push(item);
-                        })
-                    }
-                });
-            } catch (e) {
-                props.onError(e);
-            }
-            return temp;
-        })().then((items) => {
-            setDropdownValues((oldDropdownValues) => {
+    const loadDropdownValues = useCallback((tableOid: number, overwrite: boolean = true) => {
+        setDropdownValues((oldDropdownValues) => {
+            if (overwrite || tableOid in oldDropdownValues) {
                 return {
                     ...oldDropdownValues,
-                    [tableOid]: items
+                    [tableOid]: (async () => {
+                        const temp: TableRowLabel[] = [];
+                        try {
+                            await queryAsync({
+                                tableRowLabels: {
+                                    tableOid,
+                                    channel: new Channel<TableRowLabel>((item) => {
+                                        temp.push(item);
+                                    })
+                                }
+                            });
+                        } catch (e) {
+                            props.onError(e);
+                        }
+                        return temp;
+                    })()
                 };
-            });
+            } else {
+                return oldDropdownValues;
+            }
         });
     }, [props.onError]);
 
@@ -121,6 +125,136 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
     // Stores the list of rows
     const [rowList, setRowList] = useState<TableRow[]>([]);
     const [isRowListPending, startRowListTransition] = useTransition();
+    
+    // Stores the DungeonGridCells of the grid
+    const [cells, setCells] = useState<DungeonGridCell[][]>([]);
+    type DispatchCellUpdateFlagAction = [{
+        type: 'setFlag',
+        rowOid: number,
+        columnOid: number
+    } | {
+        type: 'unsetFlag',
+        rowIndex: number,
+        columnIndex: number
+    }];
+    const [cellUpdateFlags, dispatchCellUpdateFlag] = useReducer<Set<`row${number}column${number}`>, DispatchCellUpdateFlagAction>((prevCellUpdateFlags, action) => {
+        switch (action.type) {
+            case 'setFlag': {
+                const newSet: Set<`row${number}column${number}`> = new Set(prevCellUpdateFlags);
+                newSet.add(`row${action.rowOid}column${action.columnOid}`);
+                return newSet;
+            }
+            case 'unsetFlag': {
+                const newSet: Set<`row${number}column${number}`> = new Set(prevCellUpdateFlags);
+                if (action.columnIndex !== null) {
+                    const cell = rowList[action.rowIndex].cells[action.columnIndex];
+                    newSet.delete(`row${cell.rowOid}column${cell.columnOid}`);
+                }
+                return newSet;
+            }
+        }
+    }, new Set());
+    useEffect(() => {
+        setCells(rowList.map((row, rowIndex) => {
+            return row.cells.map((cell, columnIndex) => {
+                // Flag that the cell has been updated
+                dispatchCellUpdateFlag({ type: 'setFlag', rowOid: cell.rowOid, columnOid: cell.columnOid });
+                const columnMetadata = columnList[columnIndex];
+                return cellEntry(
+                    columnMetadata,
+                    cell.content,
+                    {
+                        tableOid: cell.tableOid,
+                        columnOid: cell.columnOid,
+                        rowOid: cell.rowOid
+                    },
+                    dropdownValues,
+                    props.onRequestOpenDrillDownReport,
+                    props.onRequestOpenObject,
+                    props.onRequestUploadFile,
+                    props.onError
+                )
+            });
+        }));
+    }, [rowList, columnList, props.onRequestOpenDrillDownReport, props.onRequestOpenObject, props.onRequestUploadFile, props.onError]);
+    useEffect(() => {
+        const unlistenForCellUpdate = listen<TableCell>('tableCell', (event) => {
+            const columnIndex: number = columnList.findIndex((col) => col.oid == event.payload.columnOid);
+            if (columnIndex >= 0) {
+                const rowIndex: number = rowList.findIndex((row) => row.cells[columnIndex].rowOid == event.payload.rowOid);
+                if (rowIndex >= 0) {
+                    dispatchCellUpdateFlag({ type: 'setFlag', rowOid: event.payload.rowOid, columnOid: event.payload.columnOid });
+                    setCells((oldCells) => {
+                        return oldCells.map((mappedRow, mappedRowIndex) => {
+                            if (mappedRowIndex == rowIndex) {
+                                return mappedRow.map((mappedCell, mappedColumnIndex) => {
+                                    if (mappedColumnIndex == columnIndex) {
+                                        if ('singleSelectDropdown' in event.payload.content) {
+                                            loadDropdownValues(event.payload.content.singleSelectDropdown.tableOid, false);
+                                        } else if ('multiSelectDropdown' in event.payload.content) {
+                                            loadDropdownValues(event.payload.content.multiSelectDropdown.tableOid, false);
+                                        }
+
+                                        const columnMetadata = columnList[columnIndex];
+                                        return cellEntry(
+                                            columnMetadata,
+                                            event.payload.content,
+                                            {
+                                                tableOid: event.payload.tableOid,
+                                                columnOid: event.payload.columnOid,
+                                                rowOid: event.payload.rowOid
+                                            },
+                                            dropdownValues,
+                                            props.onRequestOpenDrillDownReport,
+                                            props.onRequestOpenObject,
+                                            props.onRequestUploadFile,
+                                            props.onError
+                                        );
+                                    } else {
+                                        return mappedCell;
+                                    }
+                                });
+                            } else {
+                                return mappedRow;
+                            }
+                        });
+                    });
+                }
+            }
+        });
+
+        return () => {
+            unlistenForCellUpdate.then(f => f());
+        };
+    }, [rowList, columnList, props.onRequestOpenDrillDownReport, props.onRequestOpenObject, props.onRequestUploadFile, props.onError]);
+
+    const getCellContent = useCallback((rowIndex: number, columnIndex: number | null) => {
+        if (columnIndex === null) {
+            return {
+                className: classNames('dngrid-cell-invisible'),
+                selectable: false,
+                editor: null
+            };
+        } else if (rowIndex < cells.length && columnIndex < cells[rowIndex].length) {
+            return cells[rowIndex][columnIndex];
+        } else {
+            return {
+                editor: null 
+            };
+        }
+    }, [cells]);
+    const getCellUpdate = useCallback((rowIndex: number, columnIndex: number | null) => {
+        if (columnIndex !== null) {
+            if (rowIndex < cells.length && columnIndex < cells[rowIndex].length) {
+                const cell = rowList[rowIndex].cells[columnIndex];
+                if (cellUpdateFlags.has(`row${cell.rowOid}column${cell.columnOid}`)) {
+                    dispatchCellUpdateFlag({ type: 'unsetFlag', rowIndex, columnIndex });
+                    return true;
+                }
+            }
+        }
+        return false;
+    }, [rowList, cellUpdateFlags]);
 
     /**
      * Updates the columns and rows of the table.
@@ -162,92 +296,7 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
         });
     }, [props.tableOid, props.onError]);
 
-
-    // Load Object and Drill-Down Report labels separately
-    const [isLabelsLoading, startLabelsLoadingTransition] = useTransition();
-    useEffect(() => {
-        startLabelsLoadingTransition(async () => {
-            const objectLabels: Map<`column${number}row${number}`, string> = new Map();
-            const subreportLabels: Map<`column${number}row${number}`, string> = new Map();
-
-            for (const row of rowList) {
-                for (const cell of row.cells) {
-                    const key: `column${number}row${number}` = `column${cell.columnOid}row${cell.rowOid}`;
-                    if ('object' in cell.content) {
-                        if (cell.content.object.label === null && cell.content.object.value !== null) {
-                            if (!objectLabels.has(key)) {
-                                try {
-                                    objectLabels.set(key, await getObjectLabelAsync(cell.content.object.tableOid, cell.content.object.value));
-                                } catch (e) {
-                                    props.onError(e);
-                                }
-                            }
-                        }
-                    } else if ('subreport' in cell.content) {
-                        if (cell.content.subreport.label === null) {
-                            if (!subreportLabels.has(key)) {
-                                try {
-                                    //subreportLabels.set(key, await getDrillDownReportLabelAsync(cell.content.subreport.reportOid, cell.content.subreport.oidFilters));
-                                } catch (e) {
-                                    props.onError(e);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            startLabelsLoadingTransition(() => {
-                if (objectLabels.size > 0) {
-                    setRowList((oldRowList) => {
-                        return oldRowList.map((row) => {
-                            return {
-                                ...row,
-                                cells: row.cells.map((cell) => {
-                                    const key: `column${number}row${number}` = `column${cell.columnOid}row${cell.rowOid}`;
-                                    if ('object' in cell.content) {
-                                        if (cell.content.object.label === null && cell.content.object.value !== null) {
-                                            const label = objectLabels.get(key);
-                                            if (label !== undefined) {
-                                                return {
-                                                    ...cell,
-                                                    content: {
-                                                        object: {
-                                                            ...cell.content.object,
-                                                            label
-                                                        }
-                                                    }
-                                                };
-                                            }
-                                        }
-                                    } else if ('subreport' in cell.content) {
-                                        if (cell.content.subreport.label === null) {
-                                            const label = subreportLabels.get(key);
-                                            if (label !== undefined) {
-                                                return {
-                                                    ...cell,
-                                                    content: {
-                                                        subreport: {
-                                                            ...cell.content.subreport,
-                                                            label
-                                                        }
-                                                    }
-                                                };
-                                            }
-                                        }
-                                    }
-                                    return cell;
-                                })
-                            };
-                        });
-                    });
-                }
-            });
-        });
-    }, [rowList, props.onError]);
-
-
-
+    
     /**
      * Creates a new row in the table.
      */
@@ -283,6 +332,8 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
         const unlistenTable = listen<TableListItem>('table', (event) => {
             if (event.payload.oid == props.tableOid) {
                 updateTable();
+            } else {
+                loadDropdownValues(event.payload.oid);
             }
         });
 
@@ -291,221 +342,124 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
         };
     }, [props.tableOid, updateTable]);
 
-    useEffect(() => {
-        const unlistenTableCell = listen<TableCell>('tableCell', (event) => {
-            const colIndex: number = columnList.findIndex((col) => col.oid == event.payload.columnOid);
-            if (colIndex >= 0) {
-                setRowList((oldRowList) => {
-                    return oldRowList.map((row) => {
-                        if (row.cells[colIndex].tableOid == event.payload.tableOid && row.cells[colIndex].rowOid == event.payload.rowOid) {
-                            return {
-                                ...row,
-                                cells: row.cells.slice(0, colIndex).concat([event.payload]).concat(row.cells.slice(colIndex + 1))
-                            };
-                        } else {
-                            return row;
-                        }
-                    });
-                });
-            }
-        });
-
-        return () => {
-            unlistenTableCell.then(f => f());
-        };
-    }, [columnList]);
-
     
 
-
-    // Construct column definitions for AgGrid
-    const columnDefs = useMemo<ColDef<TableGridRowData>[]>(() => {
-        const indexColumn: ColDef<TableGridRowData> = {
-            field: 'index',
-            headerName: "",
-            cellClass: classNames('text-center', 'opacity-30'),
-            width: 55,
-            editable: false,
-            pinned: 'left',
-            lockPinned: true,
-            onCellContextMenu: async (event) => {
-                const rowOid: number | undefined = event.data?.oid;
-                if (rowOid !== undefined) {
-                    const menu = await Menu.new({
-                        items: [
-                            await MenuItem.new({
-                                text: "Insert Row Above",
-                                action: async () => {
-                                    try {
-                                        await executeAsync({
-                                            createTableRow: {
-                                                tableOid: props.tableOid,
-                                                rowOid,
-                                                fixedParent: null
-                                            }
-                                        });
-                                    } catch (e) {
-                                        props.onError(e);
-                                    }
-                                }
-                            }),
-                            await MenuItem.new({
-                                text: "Edit",
-                                action: () => {
-                                    props.onRequestOpenObject({
-                                        page: 'object',
-                                        name: `#${event.data?.index}`,
-                                        tableOid: props.tableOid,
-                                        rowOid
-                                    });
-                                }
-                            }),
-                            await MenuItem.new({
-                                text: "Delete",
-                                action: async () => {
-                                    try {
-                                        await executeAsync({
-                                            trashTableRow: {
-                                                tableOid: props.tableOid,
-                                                rowOid: rowOid
-                                            }
-                                        });
-                                    } catch (e) {
-                                        props.onError(e);
-                                    }
-                                }
-                            }),
-                            await Submenu.new({
-                                text: "Move Before...",
-                                items: props.tableOid in dropdownValues ? await Promise.all(dropdownValues[props.tableOid].map((item) => {
-                                    return MenuItem.new({
-                                        text: item.label,
-                                        enabled: rowOid != item.oid,
-                                        action: async () => {
-                                            try {
-                                                await executeAsync({
-                                                    moveTableRowBefore: {
-                                                        tableOid: props.tableOid,
-                                                        rowOid,
-                                                        beforeRowOid: item.oid
-                                                    }
-                                                });
-                                            } catch (e) {
-                                                props.onError(e);
-                                            }
-                                        }
-                                    });
-                                })) : []
-                            }),
-                            await Submenu.new({
-                                text: "Move After...",
-                                items: props.tableOid in dropdownValues ? await Promise.all(dropdownValues[props.tableOid].map((item, idx) => {
-                                    const next = idx < dropdownValues[props.tableOid].length - 1 ? dropdownValues[props.tableOid][idx + 1] : null;
-                                    return MenuItem.new({
-                                        text: item.label,
-                                        enabled: rowOid != item.oid,
-                                        action: async () => {
-                                            try {
-                                                await executeAsync({
-                                                    moveTableRowBefore: {
-                                                        tableOid: props.tableOid,
-                                                        rowOid,
-                                                        beforeRowOid: next?.oid || null
-                                                    }
-                                                });
-                                            } catch (e) {
-                                                props.onError(e);
-                                            }
-                                        }
-                                    });
-                                })) : []
-                            }),
-                        ]
-                    });
-                    menu.popup();
-                }
+    // Construct column definitions for DungeonGrid
+    const columns = useMemo<DungeonGridColumn<number | null>[]>(() => {
+        // Column with a button to add a new column
+        const addNewColumn: DungeonGridColumn<null> = {
+            key: null,
+            label: {
+                className: classNames('dngrid-cell-invisible'),
+                component: <AddNewColumnButton
+                    onClick={() => {
+                        props.onRequestCreateTableColumn(props.tableOid, null);
+                    }}
+                />
             },
+            width: 'auto'
         };
-        const addNewColumn: ColDef<TableGridRowData> = {
-            field: 'blank',
-            headerName: "Add New Column",
-            editable: false,
-            resizable: false,
-            width: 200,
-            headerComponent: AddNewColumnButton,
-            headerComponentParams: {
-                onClick: () => {
-                    props.onRequestCreateTableColumn(props.tableOid, null);
-                }
-            }
-        };
-        return [
-            indexColumn,
-            ...columnList.map((columnMetadata): ColDef<TableGridRowData> => {
-                const key: `column${number}` = `column${columnMetadata.oid}`;
 
+        return [
+            ...columnList.map<DungeonGridColumn<number>>((columnMetadata, columnIndex) => {
                 return {
-                    colId: key,
-                    headerComponent: TableColumnHeaderRenderer,
-                    headerComponentParams: {
-                        tableOid: props.tableOid,
-                        columnMetadata,
-                        columnList,
-                        onRequestCreateTableColumn: props.onRequestCreateTableColumn,
-                        onRequestEditTableColumn: props.onRequestEditTableColumn,
-                        onError: props.onError,
-                    },
-                    cellClass({ data }) {
-                        if (data) {
-                            const content: TableCellContent = data[key].content;
-                            return classNames(
-                                key,
-                                { 'ag-allow-overflow': 'singleSelectDropdown' in content || 'multiSelectDropdown' in content }
-                            );
+                    key: columnIndex,
+                    label: {
+                        text: `${(columnMetadata.isPrimaryKey ? '🔑 ' : '')}${columnMetadata.name}`,
+                        className: "text-center",
+                        onContextMenu: async (e) => {
+                            e.preventDefault();
+                            const menu = await Menu.new({
+                                items: [
+                                    {
+                                        text: "Insert Column Before",
+                                        action: () => {
+                                            props.onRequestCreateTableColumn(props.tableOid, columnMetadata.oid);
+                                        }
+                                    },
+                                    {
+                                        text: "Edit",
+                                        action: () => {
+                                            props.onRequestEditTableColumn(columnMetadata);
+                                        }
+                                    },
+                                    {
+                                        text: "Delete",
+                                        action: async () => {
+                                            try {
+                                                await executeAsync({
+                                                    trashTableColumn: {
+                                                        columnOid: columnMetadata.oid,
+                                                    }
+                                                });
+                                            } catch (e) {
+                                                props.onError(e);
+                                            }
+                                        }
+                                    },
+                                    {
+                                        text: "Move Before...",
+                                        items: columnList.map((item) => {
+                                            return {
+                                                text: item.name,
+                                                enabled: item.oid != columnMetadata.oid,
+                                                action: async () => {
+                                                    try {
+                                                        await executeAsync({
+                                                            moveTableColumnBefore: {
+                                                                metadata: columnMetadata,
+                                                                beforeColumnOid: item.oid
+                                                            }
+                                                        });
+                                                    } catch (e) {
+                                                        props.onError(e);
+                                                    }
+                                                }
+                                            }
+                                        })
+                                    },
+                                    {
+                                        text: "Move After...",
+                                        items: columnList.map((item, idx) => {
+                                            const next = idx < columnList.length - 1 ? columnList[idx + 1] : null;
+                                            return {
+                                                text: item.name,
+                                                enabled: item.oid != columnMetadata.oid,
+                                                action: async () => {
+                                                    try {
+                                                        await executeAsync({
+                                                            moveTableColumnBefore: {
+                                                                metadata: columnMetadata,
+                                                                beforeColumnOid: next?.oid || null
+                                                            }
+                                                        });
+                                                    } catch (e) {
+                                                        props.onError(e);
+                                                    }
+                                                }
+                                            }
+                                        })
+                                    }
+                                ]
+                            });
+                            await menu.popup(new LogicalPosition(e.clientX, e.clientY));
                         }
-                        return classNames(key);
                     },
                     width: columnMetadata.size,
                     resizable: true,
-                    wrapText: true,
-                    autoHeight: true,
-                    editable({ data }) {
-                        if (data) {
-                            if (key in data) {
-                                const content: TableCellContent = data[key].content;
-                                return !('subreport' in content);
-                            }
+                    onResizeColumn: async (width) => {
+                        try {
+                            await executeAsync({
+                                editTableColumnMetadata: {
+                                    metadata: {
+                                        ...columnMetadata,
+                                        size: width 
+                                    }
+                                }
+                            });
+                        } catch (e) {
+                            props.onError(e);
                         }
-                        return false;
-                    },
-                    cellRendererSelector({ data }) {
-                        if (data) {
-                            if (key in data) {
-                                const cell: TableCell = data[key];
-                                return selectRenderer(cell, dropdownValues, props.onRequestOpenDrillDownReport, props.onRequestOpenObject, props.onError);
-                            }
-                        }
-                        return undefined;
-                    },
-                    cellEditorSelector({ data }) {
-                        if (data) {
-                            if (key in data) {
-                                const cell: TableCell = data[key];
-                                return selectEditor(cell, dropdownValues, loadDropdownValues, props.onError);
-                            }
-                        }
-                        return {
-                            component: 'agTextCellEditor'
-                        };
-                    },
-                    valueGetter({ data }) {
-                        if (data) {
-                            if (key in data) {
-                                const cell: TableCell = data[key];
-                                return getValue(cell);
-                            }
-                        }
-                        return null;
                     }
                 };
             }),
@@ -514,61 +468,145 @@ export function TablePage(props: TablePageProps): React.JSX.Element {
     }, [
         columnList, 
         props.tableOid, 
-        dropdownValues, 
-        loadDropdownValues,
         props.onRequestCreateTableColumn, 
         props.onRequestEditTableColumn, 
-        props.onRequestOpenDrillDownReport,
-        props.onRequestOpenObject, 
         props.onError
     ]);
 
-    // Construct row data for AgGrid
-    const rowData = useMemo<TableGridRowData[]>(() => {
-        return rowList.map((row) => {
-            return Object.fromEntries(
-                ([
-                    ['oid', row.oid],
-                    ['index', row.index],
-                    ['blank', null]
-                ] as {[K in keyof TableGridRowData]: [K, TableGridRowData[K]]}[keyof TableGridRowData][])
-                .concat(row.cells.map<[`column${number}`, TableCell]>((cell) => [`column${cell.columnOid}`, cell]))
-            );
+    // Construct row data for DungeonGrid
+    const rows = useMemo<DungeonGridRow<number>[]>(() => {
+        return rowList.map<DungeonGridRow<number>>((row, rowIndex) => {
+            return {
+                key: rowIndex,
+                label: {
+                    text: `${row.index}`,
+                    onContextMenu: async (e) => {
+                        // Display context menu for row label
+                        const menu = await Menu.new({
+                            items: [
+                                {
+                                    text: "Insert Row Above",
+                                    action: async () => {
+                                        try {
+                                            await executeAsync({
+                                                createTableRow: {
+                                                    tableOid: props.tableOid,
+                                                    rowOid: row.oid,
+                                                    fixedParent: null
+                                                }
+                                            });
+                                        } catch (e) {
+                                            props.onError(e);
+                                        }
+                                    }
+                                },
+                                {
+                                    text: "Edit",
+                                    action: () => {
+                                        props.onRequestOpenObject({
+                                            page: 'object',
+                                            name: `#${rowIndex}`,
+                                            tableOid: props.tableOid,
+                                            rowOid: row.oid
+                                        });
+                                    }
+                                },
+                                {
+                                    text: "Delete",
+                                    action: async () => {
+                                        try {
+                                            await executeAsync({
+                                                trashTableRow: {
+                                                    tableOid: props.tableOid,
+                                                    rowOid: row.oid
+                                                }
+                                            });
+                                        } catch (e) {
+                                            props.onError(e);
+                                        }
+                                    }
+                                },
+                                {
+                                    text: "Move Before...",
+                                    items: props.tableOid in dropdownValues ? (await dropdownValues[props.tableOid]).map((item) => {
+                                        return {
+                                            text: item.label,
+                                            enabled: row.oid != item.oid,
+                                            action: async () => {
+                                                try {
+                                                    await executeAsync({
+                                                        moveTableRowBefore: {
+                                                            tableOid: props.tableOid,
+                                                            rowOid: row.oid,
+                                                            beforeRowOid: item.oid
+                                                        }
+                                                    });
+                                                } catch (e) {
+                                                    props.onError(e);
+                                                }
+                                            }
+                                        };
+                                    }) : []
+                                },
+                                {
+                                    text: "Move After...",
+                                    items: props.tableOid in dropdownValues ? await dropdownValues[props.tableOid].then((labels) => {
+                                        return labels.map((item, idx) => {
+                                            const next = idx < labels.length - 1 ? labels[idx + 1] : null;
+                                            return {
+                                                text: item.label,
+                                                enabled: row.oid != item.oid,
+                                                action: async () => {
+                                                    try {
+                                                        await executeAsync({
+                                                            moveTableRowBefore: {
+                                                                tableOid: props.tableOid,
+                                                                rowOid: row.oid,
+                                                                beforeRowOid: next?.oid || null
+                                                            }
+                                                        });
+                                                    } catch (e) {
+                                                        props.onError(e);
+                                                    }
+                                                }
+                                            };
+                                        });
+                                    }) : []
+                                },
+                            ]
+                        });
+                        await menu.popup(new LogicalPosition(e.clientX, e.clientY));
+                    }
+                },
+                resizable: true
+            };
         });
     }, [rowList]);
 
 
-    // Correct for subpixels
-    const grid = useRef<AgGridReact | null>(null);
-    const subPixelCorrectionDiv = useRef<HTMLDivElement | null>(null);
-    useEffect(() => {
-        if (subPixelCorrectionDiv.current) {
-            const subPixelWidth: number = subPixelCorrectionDiv.current.clientWidth;
-            const subPixelHeight: number = subPixelCorrectionDiv.current.clientHeight;
-            subPixelCorrectionDiv.current.style.maxWidth = `${Math.floor(subPixelWidth)-1}px`;
-            subPixelCorrectionDiv.current.style.maxHeight = `${Math.floor(subPixelHeight)-1}px`;
-        }
-    }, [subPixelCorrectionDiv]);
-
     return (<div className="grid grid-col grid-rows-[calc(100vh-(var(--spacing)*20))_calc(var(--spacing)*10)] w-full">
         {columnList.map((columnMetadata) => (<style>{`.column${columnMetadata.oid}`} &#123; {columnMetadata.style} &#125;</style>))}
         <div 
-            ref={subPixelCorrectionDiv}
             className="relative m-4 mr-8 grid grid-col grid-rows-[1fr_auto] gap-y-2"
         >
-            {isRowListPending ? (<Spinner />) : (<AgGridReact
-                ref={grid}
-                columnDefs={columnDefs}
-                onColumnResized={onColumnResized}
-                rowData={rowData}
-                getRowId={({ data }) => data.index.toString()}
-                readOnlyEdit={true}
-                onCellEditRequest={onCellEditRequest}
-                theme={gridTheme}
-                animateRows={false}
-                suppressRowVirtualisation={true}
-                suppressColumnVirtualisation={true}
-            />)}
+            <div className="relative overflow-auto pr-2">
+                <DungeonGrid
+                    rows={rows}
+                    columns={columns}
+                    getCellContent={getCellContent}
+                    getCellUpdate={getCellUpdate}
+                    style={{
+                        fontFamily: 'var(--font-sans), sans-serif',
+                        ["--dngrid-background-color"]: "rgb(var(--color-surface)/1)",
+                        ["--dngrid-border-color"]: "rgb(var(--color-surface-dark)/1)",
+                        ["--dngrid-cell-cursor-border-color"]: "rgb(var(--color-primary)/1)",
+                        ["--dngrid-cell-selected-background-color"]: "color-mix(in oklch, rgb(var(--color-primary-light)/1) 25%, var(--dngrid-background-color) 75%)",
+                        ["--dngrid-cell-selected-border-color"]: "color-mix(in oklch, rgb(var(--color-primary-light)/1) 50%, var(--dngrid-border-color) 50%)",
+                        ["--dngrid-editor-background-color"]: "rgb(var(--color-surface-light)/1)"
+                    } as React.CSSProperties}
+                />
+                {isRowListPending && (<div className="absolute w-full h-full flex justify-center items-center"><Spinner /></div>)}
+            </div>
             <div>
                 <Button
                     variant="gradient"

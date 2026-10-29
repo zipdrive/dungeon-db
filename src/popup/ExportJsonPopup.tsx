@@ -32,7 +32,7 @@ export function ExportJsonPopup(props: ExportJsonPopupProps): React.JSX.Element 
 
     const [selectedTables, setSelectedTables] = useState<string[]>([]);
     const [selectedReports, setSelectedReports] = useState<string[]>([]);
-    const [typeColumn, setTypeColumn] = useState<string>('');
+    const [typeColumn, setTypeColumn] = useState<string>('$type');
     const [tableConfigs, setTableConfigs] = useState<{[tableOid: string]: { oidColumn: string, indexColumn: string, isPolymorphic: boolean }}>({});
     const [reportConfigs, setReportConfigs] = useState<{[reportOid: string]: { indexColumn: string }}>({});
 

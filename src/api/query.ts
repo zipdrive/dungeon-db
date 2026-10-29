@@ -6,6 +6,7 @@ import { message } from "@tauri-apps/plugin-dialog";
 import { ReportColumnMetadata } from "./model/reportColumn";
 import { TableRow, TableRowLabel } from "./model/tableRow";
 import { ReportRow } from "./model/reportRow";
+import { File } from "./model/file";
 
 export type Limit = {
     page: {
@@ -125,6 +126,10 @@ export async function checkFormula(formula: string): Promise<{ success: true } |
             };
         }
     }
+}
+
+export async function getFileAsync(oid: number): Promise<File> {
+    return await invoke('get_file', { oid });
 }
 
 export async function getSrcAsync(data: { file: File }): Promise<string> {

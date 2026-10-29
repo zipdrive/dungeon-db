@@ -2,16 +2,16 @@ import { ICellEditorComp, ICellEditorParams, ICellRendererComp, ICellRendererPar
 import Choices, { EventChoice, InputChoice } from 'choices.js';
 import classNames from 'classnames';
 import { Channel } from '@tauri-apps/api/core';
-import { SingleSelectDropdownTableCellContent, TableRowLabel } from '../../../api/model/tableRow';
+import { MultiSelectDropdownTableCellContent, TableRowLabel } from '../../../../api/model/tableRow';
 
-type SingleSelectDropdownCellParams = ICellEditorParams & {
-    singleSelectDropdown: SingleSelectDropdownTableCellContent,
+type AdhocMultiSelectDropdownCellParams = ICellEditorParams & {
+    multiSelectDropdown: MultiSelectDropdownTableCellContent,
     dropdownValues: {[tableOid: number]: TableRowLabel[]},
     loadDropdownValues: (tableOid: number) => void,
     onError: (e: unknown) => void,
 };
 
-export class SingleSelectCellEditor implements ICellEditorComp {
+export class AdhocMultiSelectCellEditor implements ICellEditorComp {
     private gui: HTMLDivElement;
     private choices: Choices;
 
@@ -19,6 +19,7 @@ export class SingleSelectCellEditor implements ICellEditorComp {
         this.gui = document.createElement('div');
         this.gui.className = classNames('size-full');
         const select = document.createElement('select');
+        select.multiple = true;
         this.gui.appendChild(select);
 
         this.choices = new Choices(select, {
@@ -57,11 +58,12 @@ export class SingleSelectCellEditor implements ICellEditorComp {
                 addChoice: ['choices__item--selectable', 'add-choice'],
                 noResults: ['has-no-results'],
                 noChoices: ['has-no-choices'],
-            }
+            },
+            
         });
     }
 
-    init(params: SingleSelectDropdownCellParams) {
+    init(params: AdhocMultiSelectDropdownCellParams) {
         this.refresh(params);
     }
 
@@ -73,26 +75,27 @@ export class SingleSelectCellEditor implements ICellEditorComp {
         const value = this.choices?.getValue();
         if (Array.isArray(value)) {
             if (value.length > 0) {
-                const intValue = parseInt(value[0].value);
-                return Number.isFinite(intValue) ? intValue : null;
+                return value.map((item) => typeof item.value === 'string' ? parseInt(item.value) : null)
+                    .filter((item) => item !== null && Number.isFinite(item));
             }
         } else if (value) {
             const intValue = parseInt(value.value);
-            return Number.isFinite(intValue) ? intValue : null;
+            return Number.isFinite(intValue) ? [intValue] : [];
         }
-        return null;
+        return [];
     }
 
-    refresh(params: SingleSelectDropdownCellParams): boolean {
-        const { tableOid, value } = params.singleSelectDropdown;
+    refresh(params: AdhocMultiSelectDropdownCellParams): boolean {
+        const { tableOid, value } = params.multiSelectDropdown;
         const dropdownValues = params.dropdownValues;
+
         if (tableOid in dropdownValues) {
             this.choices.setChoices(
                 dropdownValues[tableOid].map((item) => {
                     return {
                         value: item.oid.toString(),
-                        label: item.label ? item.label : ' ',
-                        selected: item.oid == value
+                        label: item.label,
+                        selected: value.indexOf(item.oid) >= 0
                     };
                 }), 
                 'value', 
@@ -101,7 +104,6 @@ export class SingleSelectCellEditor implements ICellEditorComp {
             );
         } else {
             this.choices.setChoices([]);
-            params.loadDropdownValues(tableOid);
         }
         
         this.choices.showDropdown(false);

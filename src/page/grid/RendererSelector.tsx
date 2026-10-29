@@ -1,19 +1,19 @@
 import { CellRendererSelectorResult } from 'ag-grid-community';
-import { PlainTextCellRenderer } from './renderer/PlainTextCellRenderer';
-import { CheckboxCellRenderer } from './renderer/CheckboxCellRenderer';
-import { DateCellRenderer } from './renderer/DateCellRenderer';
-import { DatetimeCellRenderer } from './renderer/DatetimeCellRenderer';
-import { ObjectCellRenderer } from './renderer/ObjectCellRenderer';
-import { SubreportCellRenderer } from './renderer/SubreportCellRenderer';
+import { PlainTextCellRenderer } from './renderer/old/PlainTextCellRenderer';
+import { CheckboxCellRenderer } from './renderer/old/CheckboxCellRenderer';
+import { DateCellRenderer } from './renderer/old/DateCellRenderer';
+import { DatetimeCellRenderer } from './renderer/old/DatetimeCellRenderer';
+import { ObjectCellRenderer } from './renderer/old/ObjectCellRenderer';
+import { SubreportCellRenderer } from './renderer/old/SubreportCellRenderer';
 import { TableCell, TableCellContent, TableRowLabel } from '../../api/model/tableRow';
 import { ObjectPageBreadcrumb, ReportPageBreadcrumb } from '../../breadcrumb';
-import { SingleSelectCellRenderer } from './renderer/SingleSelectCellRenderer';
-import { MultiSelectCellRenderer } from './renderer/MultiSelectCellRenderer';
+import { SingleSelectCellRenderer } from './renderer/old/SingleSelectCellRenderer';
+import { MultiSelectCellRenderer } from './renderer/old/MultiSelectCellRenderer';
 import { ReportCell } from '../../api/model/reportRow';
-import { MarkdownTextCellRenderer } from './renderer/MarkdownTextCellRenderer';
-import { JsonTextCellRenderer } from './renderer/JsonTextCellRenderer';
-import { XmlTextCellRenderer } from './renderer/XmlTextCellRenderer';
-import { BBCodeTextCellRenderer } from './renderer/BBCodeTextCellRenderer';
+import { MarkdownTextCellRenderer } from './renderer/old/MarkdownTextCellRenderer';
+import { JsonTextCellRenderer } from './renderer/old/JsonTextCellRenderer';
+import { XmlTextCellRenderer } from './renderer/old/XmlTextCellRenderer';
+import { BBCodeTextCellRenderer } from './renderer/old/BBCodeTextCellRenderer';
 
 export function selectRenderer(cell: TableCell | ReportCell, dropdownValues: {[tableOid: number]: TableRowLabel[]}, onRequestOpenDrillDownReport: (report: ReportPageBreadcrumb) => void, onRequestOpenObject: (object: ObjectPageBreadcrumb) => void, onError: (e: unknown) => void): CellRendererSelectorResult | undefined {
     const content: TableCellContent = cell.content;

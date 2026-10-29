@@ -1,5 +1,8 @@
-import { ICellRendererComp, ICellRendererParams } from 'ag-grid-community';
 import DOMPurify from 'dompurify';
+
+//#region BBCode Parser
+
+import React from "react";
 
 /* 
  * Javascript BBCode Parser
@@ -12,9 +15,7 @@ type TagParams = string;
 
 type Tag = {
     noParse?: boolean;
-    openTag: (parser: BBCodeParser, tagParams: TagParams, tagContents: string) => string;
-    content?: (parser: BBCodeParser, tagParams: TagParams, tagContents: string) => string;
-    closeTag: (parser: BBCodeParser, tagParams: TagParams, tagContents: string) => string;
+    createReactNode: (parser: BBCodeParser, tagParams: TagParams, tagContents: React.ReactNode) => React.ReactNode;
     validChildLookup?: {[tagName: string]: boolean};
     validParentLookup?: {[tagName: string]: boolean};
     restrictParentsTo?: string[];
@@ -84,13 +85,45 @@ class BBCodeParser {
 	 * @param {type} tagsArray - the array of tags to capture
 	 * @returns {RegExp}
 	 */
-	private createInnermostTagRegExp(tagsArray: string[]) {
+	private createInnermostTagRegExp(tagsArray: string[]): RegExp {
 		const openingTag = '\\[(' + tagsArray.join('|') + ')\\b(?:[ =]([\\w"#\\-\\:\\/= ]*?))?\\]',
 			notContainingOpeningTag = '((?:(?=([^\\[]+))\\4|\\[(?!\\1\\b(?:[ =](?:[\\w"#\\-\\:\\/= ]*?))?\\]))*?)',
 			closingTag = '\\[\\/\\1\\]';
 			
 		return new RegExp( openingTag + notContainingOpeningTag + closingTag, 'i');
 	}
+
+    /**
+     * Create a regular expression that captures the innermost instance of a tag in an array of tags that is opened and not closed before the end of the string.
+	 * The returned RegExp captures the following in order:
+	 * 1) the tag from the array that was matched
+	 * 2) all (optional) parameters included in the opening tag
+	 * 3) the contents surrounded by the tag
+     * 
+	 * @param {type} tagsArray - the array of tags to capture
+	 * @returns {RegExp}
+     */
+    private createInnermostOpenOnlyTagRegExp(tagsArray: string[]): RegExp {
+        const openingTag = '\\[(' + tagsArray.join('|') + ')\\b(?:[ =]([\\w"#\\-\\:\\/= ]*?))?\\]',
+			notContainingOpeningTag = '((?:(?=([^\\[]+))\\4|\\[(?!\\1\\b(?:[ =](?:[\\w"#\\-\\:\\/= ]*?))?\\]))*?)$';
+
+        return new RegExp( openingTag + notContainingOpeningTag , 'i');
+    }
+
+    /**
+     * Create a regular expression that captures the innermost instance of a tag in an array of tags that is opened and not closed before the end of the string.
+	 * The returned RegExp captures the following in order:
+	 * 1) the contents surrounded by the tag
+     * 
+	 * @param {type} tagName - the array of tags to capture
+	 * @returns {RegExp}
+     */
+    private createInnermostCloseOnlyTagRegExp(tagName: string): RegExp {
+        const notContainingOpeningTag = '^((?:(?=([^\\[]+))\\4|\\[(?!\\1\\b(?:[ =](?:[\\w"#\\-\\:\\/= ]*?))?\\]))*?)',
+			closingTag = '\\[\\/' + tagName + '\\]';
+
+        return new RegExp( notContainingOpeningTag + closingTag , 'i');
+    }
 
     /*
 	 * Escape the contents of a tag and mark the tag with a null unicode character.
@@ -103,7 +136,7 @@ class BBCodeParser {
 	 * @param {type} tagContents - everything between the opening and closing tags
 	 * @returns {String} - the full match with the tag contents escaped and the tag marked with \u0000
 	 */
-	private escapeInnerTags(matchStr: string, tagName: string, tagParams: TagParams, tagContents: string) {
+	private escapeInnerTags(matchStr: string, tagName: string, tagParams: TagParams, tagContents: string): string {
 		tagParams = tagParams || "";
 		tagContents = tagContents || "";
 		tagContents = tagContents.replace(/\[/g, "&#91;").replace(/\]/g, "&#93;");
@@ -117,7 +150,7 @@ class BBCodeParser {
 	 * @param {string[]} tags - the tags to search for
 	 * @returns {string} - the full text with the required code escaped
 	 */
-	private escapeBBCodesInsideTags(text: string, tags: string[]) {
+	private escapeBBCodesInsideTags(text: string, tags: string[]): string {
 		var innerMostRegExp;
 		if (tags.length === 0 || text.length < 7)
 			return text;
@@ -128,27 +161,60 @@ class BBCodeParser {
 		return text.replace(/\u0000/g,'');
 	}
 
-    private processTags(text: string, tagNames: string[]) {
-		var innerMostRegExp;
-		
+    private processNestedTags(left: string, center: React.ReactNode, right: string, tagNames: string[]): React.ReactNode {
+        const openRegExp = this.createInnermostOpenOnlyTagRegExp(tagNames);
+        while (true) {
+            const leftMatch = openRegExp.exec(left);
+            if (leftMatch) {
+                const tagName: string = leftMatch[1].toLowerCase();
+                const closeRegExp = this.createInnermostCloseOnlyTagRegExp(tagName);
+                const rightMatch = closeRegExp.exec(right);
+                if (rightMatch) {
+                    const tagParams: TagParams = leftMatch[2] || "";
+                    const tagContents: React.ReactNode = <>
+                        {leftMatch[3]}
+                        {center}
+                        {rightMatch[1]}
+                    </>;
+                    const tag: Tag = this.parserTags[tagName];
+                    return this.processNestedTags(
+                        left.substring(0, leftMatch.index),
+                        tag.createReactNode(this, tagParams, tagContents),
+                        right.substring(rightMatch[0].length),
+                        tagNames
+                    );
+                }
+            } else {
+                return <>
+                    {this.processTags(left, tagNames)}
+                    {center}
+                    {this.processTags(right, tagNames)}
+                </>;
+            }
+        }
+    }
+
+    private processTags(text: string, tagNames: string[]): React.ReactNode {
 		if (tagNames.length === 0 || text.length < 7)
 			return text;
 		
-		innerMostRegExp = this.createInnermostTagRegExp(tagNames);
+		const innerMostRegExp = this.createInnermostTagRegExp(tagNames);
 		
-        const replaceTagsAndContent = (matchStr: string, tagName: string, tagParams: TagParams, tagContents: string) => {
-            tagName = tagName.toLowerCase();
-            tagParams = tagParams || "";
-            tagContents = tagContents || "";
+        const match = innerMostRegExp.exec(text);
+        if (match) {
+            // Build the BBCode tag
+            const tagName: string = match[1].toLowerCase();
+            const tagParams: TagParams = match[2] || "";
+            const tagContents: string = match[3] || "";
             const tag: Tag = this.parserTags[tagName];
-            return tag.openTag(this, tagParams, tagContents) + (tag.content ? tag.content(this, tagParams, tagContents) : tagContents) + tag.closeTag(this, tagParams, tagContents);
-        };
-
-		while (
-			text !== (text = text.replace(innerMostRegExp, replaceTagsAndContent))
-		);
-		
-		return text;
+            
+            const left: string = text.substring(0, match.index);
+            const center = tag.createReactNode(this, tagParams, tagContents);
+            const right: string = text.substring(match.index + match[0].length);
+            return this.processNestedTags(left, center, right, tagNames);
+        } else {
+            return text;
+        }
 	}
 
     process(text: string) {
@@ -158,29 +224,22 @@ class BBCodeParser {
 	}
 }
 
-const bbcode: BBCodeParser = new BBCodeParser(
+const BBCODE_PARSER: BBCodeParser = new BBCodeParser(
     {
         'b': {
-            openTag: function(parser,params,content) {
-                return '<b>';
+            createReactNode(parser, tagParams, tagContents) {
+                return <b>{tagContents}</b>;
             },
-            closeTag: function(parser,params,content) {
-                return '</b>';
-            }
         },
         'code': {
-            openTag: function(parser,params,content) {
-                return '<pre>';
-            },
-            closeTag: function(parser,params,content) {
-                return '</pre>';
+            createReactNode(parser, tagParams, tagContents) {
+                return <pre>{tagContents}</pre>;
             },
             noParse: true
         },
         'color': {
-            openTag: function(parser,params,content) {
-                var colorCode = params.trim() || "inherit";
-                console.log(colorCode);
+            createReactNode(parser, tagParams, tagContents) {
+                var colorCode = tagParams.trim() || "inherit";
                 parser.regExpValidHexColors.lastIndex = 0;
                 if ( colorCode in parser.allowedColors ) {
                     return '<span style="color:' + parser.allowedColors[colorCode] + '">';
@@ -194,148 +253,102 @@ const bbcode: BBCodeParser = new BBCodeParser(
                     }
                 }
 
-                return '<span style="color:' + colorCode + '">';
+                return <span style={{color: colorCode}}>{tagContents}</span>;
             },
-            closeTag: function(parser,params,content) {
-                return '</span>';
-            }
         },
         'h1': {
-            openTag: function(parser,params,content) {
-                return '<h1>';
+            createReactNode(parser, tagParams, tagContents) {
+                return <h1>{tagContents}</h1>;
             },
-            closeTag: function(parser,params,content) {
-                return '</h1>';
-            }
         },
         'h2': {
-            openTag: function(parser,params,content) {
-                return '<h2>';
+            createReactNode(parser, tagParams, tagContents) {
+                return <h2>{tagContents}</h2>;
             },
-            closeTag: function(parser,params,content) {
-                return '</h2>';
-            }
         },
         'h3': {
-            openTag: function(parser,params,content) {
-                return '<h3>';
+            createReactNode(parser, tagParams, tagContents) {
+                return <h3>{tagContents}</h3>;
             },
-            closeTag: function(parser,params,content) {
-                return '</h3>';
-            }
         },
         'h4': {
-            openTag: function(parser,params,content) {
-                return '<h4>';
+            createReactNode(parser, tagParams, tagContents) {
+                return <h4>{tagContents}</h4>;
             },
-            closeTag: function(parser,params,content) {
-                return '</h4>';
-            }
         },
         'h5': {
-            openTag: function(parser,params,content) {
-                return '<h5>';
+            createReactNode(parser, tagParams, tagContents) {
+                return <h5>{tagContents}</h5>;
             },
-            closeTag: function(parser,params,content) {
-                return '</h5>';
-            }
         },
         'h6': {
-            openTag: function(parser,params,content) {
-                return '<h6>';
+            createReactNode(parser, tagParams, tagContents) {
+                return <h6>{tagContents}</h6>;
             },
-            closeTag: function(parser,params,content) {
-                return '</h6>';
-            }
         },
         'i': {
-            openTag: function(parser,params,content) {
-                return '<i>';
+            createReactNode(parser, tagParams, tagContents) {
+                return <i>{tagContents}</i>;
             },
-            closeTag: function(parser,params,content) {
-                return '</i>';
-            }
         },
         'img': {
-            openTag: function(parser,params,content) {
-
-                var myUrl = content;
+            createReactNode(parser, tagParams, tagContents) {
+                var myUrl: string = tagContents?.toString() || '';
 
                 parser.urlPattern.lastIndex = 0;
                 if ( !parser.urlPattern.test( myUrl ) ) {
                     myUrl = "";
                 }
 
-                return '<img class="bbCodeImage" src="' + myUrl + '">';
+                return <img 
+                    className="bbCodeImage"
+                    src={myUrl}
+                />;
             },
-            closeTag: function(parser,params,content) {
-                return '';
-            },
-            content: function(parser,params,content) {
-                return '';
-            }
+            noParse: true
         },
         'list': {
-            openTag: function(parser,params,content) {
-                return '<ul>';
-            },
-            closeTag: function(parser,params,content) {
-                return '</ul>';
+            createReactNode(parser, tagParams, tagContents) {
+                return <ul>{tagContents}</ul>;
             },
             restrictChildrenTo: ["*", "li"]
         },
         'noparse': {
-            openTag: function(parser,params,content) {
-                return '';
-            },
-            closeTag: function(parser,params,content) {
-                return '';
+            createReactNode(parser, tagParams, tagContents) {
+                return tagContents;
             },
             noParse: true
         },
         'quote': {
-            openTag: function(parser,params,content) {
-                return '<blockquote>';
+            createReactNode(parser, tagParams, tagContents) {
+                return <blockquote>{tagContents}</blockquote>;
             },
-            closeTag: function(parser,params,content) {
-                return '</blockquote>';
-            }
         },
         's': {
-            openTag: function(parser,params,content) {
-                return '<s>';
+            createReactNode(parser, tagParams, tagContents) {
+                return <s>{tagContents}</s>;
             },
-            closeTag: function(parser,params,content) {
-                return '</s>';
-            }
         },
         'size': {
-            openTag: function(parser,params,content) {
-                const mySizePx = parseInt(params.trim(), 10) || 0;
+            createReactNode(parser, tagParams, tagContents) {
+                const mySizePx = parseInt(tagParams.trim(), 10) || 0;
                 const mySize: string = mySizePx < 10 || mySizePx > 20 ? 'inherit' : `${mySizePx}px`;
-                return '<span style="font-size:' + mySize + '">';
+                return <span style={{fontSize: mySize}}>{tagContents}</span>;
             },
-            closeTag: function(parser,params,content) {
-                return '</span>';
-            }
         },
         'u': {
-            openTag: function(parser,params,content) {
-                return '<span style="text-decoration:underline">';
+            createReactNode(parser, tagParams, tagContents) {
+                return <span style={{textDecoration: 'underline'}}>{tagContents}</span>;
             },
-            closeTag: function(parser,params,content) {
-                return '</span>';
-            }
         },
         'url': {
-            openTag: function(parser,params,content) {
+            createReactNode(parser, tagParams, tagContents) {
+                let myUrl: string;
 
-                var myUrl;
-
-                if (!params) {
-                    myUrl = content.replace(/<.*?>/g,"");
+                if (!tagParams) {
+                    myUrl = tagContents?.toString().replace(/<.*?>/g,"") || '';
                 } else {
-                    myUrl = params.trim();
+                    myUrl = tagParams.trim();
                 }
 
                 parser.urlPattern.lastIndex = 0;
@@ -343,11 +356,8 @@ const bbcode: BBCodeParser = new BBCodeParser(
                     myUrl = "#";
                 }
 
-                return '<a href="' + myUrl + '">';
+                return <a href={myUrl}>{tagContents}</a>;
             },
-            closeTag: function(parser,params,content) {
-                return '</a>';
-            }
         }
     },
     {
@@ -361,42 +371,17 @@ const bbcode: BBCodeParser = new BBCodeParser(
     }
 );
 
+//#endregion
 
 
-let nextBBCodeId: bigint = 1n;
+export type BBCodeTextCellRendererProps = {
+    value: string | null 
+};
 
-export class BBCodeTextCellRenderer implements ICellRendererComp {
-    private gui: HTMLDivElement;
+export function BBCodeTextCellRenderer(props: BBCodeTextCellRendererProps): React.JSX.Element {
+    const bbcodeNode = React.useMemo(() => {
+        return BBCODE_PARSER.process(props.value || '');
+    }, [props.value]);
 
-    constructor() {
-        this.gui = document.createElement('div');
-        this.gui.id = `bbcode-render-${nextBBCodeId++}`;
-    }
-
-    init(params: ICellRendererParams) {
-        this.refresh(params);
-    }
-
-    getGui(): HTMLElement {
-        return this.gui;
-    }
-
-    refresh(params: ICellRendererParams<any, any, any>): boolean {
-        navigator.locks.request(this.gui.id, () => {
-            // Clear prior children
-            for (const child of this.gui.childNodes) {
-                this.gui.removeChild(child);
-            }
-
-            // Parse Markdown formatting
-            try {
-                const raw: string = String(params.getValue ? (params.getValue() ?? '') : '');
-                const bbcodeHtml = DOMPurify.sanitize(bbcode.process(raw));
-                this.gui.innerHTML = bbcodeHtml;
-            } catch (e) {
-                console.error(e);
-            }
-        });
-        return true;
-    }
+    return <>{bbcodeNode}</>;
 }

@@ -2,16 +2,15 @@ import { ICellEditorComp, ICellEditorParams, ICellRendererComp, ICellRendererPar
 import Choices, { EventChoice, InputChoice } from 'choices.js';
 import classNames from 'classnames';
 import { Channel } from '@tauri-apps/api/core';
-import { MultiSelectDropdownTableCellContent, TableRowLabel } from '../../../api/model/tableRow';
+import { TableListItem } from '../../../../api/model/table';
 
-type AdhocMultiSelectDropdownCellParams = ICellEditorParams & {
-    multiSelectDropdown: MultiSelectDropdownTableCellContent,
-    dropdownValues: {[tableOid: number]: TableRowLabel[]},
-    loadDropdownValues: (tableOid: number) => void,
+type SubtypeCellParams = ICellEditorParams & {
+    subtypes: TableListItem[],
+    subtypeTableOid: number,
     onError: (e: unknown) => void,
 };
 
-export class AdhocMultiSelectCellEditor implements ICellEditorComp {
+export class SubtypeEditor implements ICellEditorComp {
     private gui: HTMLDivElement;
     private choices: Choices;
 
@@ -19,14 +18,11 @@ export class AdhocMultiSelectCellEditor implements ICellEditorComp {
         this.gui = document.createElement('div');
         this.gui.className = classNames('size-full');
         const select = document.createElement('select');
-        select.multiple = true;
         this.gui.appendChild(select);
 
         this.choices = new Choices(select, {
             choices: [],
-            shouldSort: false,
             itemSelectText: '',
-            resetScrollPosition: false,
             classNames: {
                 containerOuter: ['choices', 'size-full'],
                 containerInner: ['choices__inner', 'border-none!', 'bg-transparent!'],
@@ -58,12 +54,11 @@ export class AdhocMultiSelectCellEditor implements ICellEditorComp {
                 addChoice: ['choices__item--selectable', 'add-choice'],
                 noResults: ['has-no-results'],
                 noChoices: ['has-no-choices'],
-            },
-            
+            }
         });
     }
 
-    init(params: AdhocMultiSelectDropdownCellParams) {
+    init(params: ICellEditorParams<SubtypeCellParams>) {
         this.refresh(params);
     }
 
@@ -74,38 +69,29 @@ export class AdhocMultiSelectCellEditor implements ICellEditorComp {
     getValue() {
         const value = this.choices?.getValue();
         if (Array.isArray(value)) {
-            if (value.length > 0) {
-                return value.map((item) => typeof item.value === 'string' ? parseInt(item.value) : null)
-                    .filter((item) => item !== null && Number.isFinite(item));
-            }
+            return value.length > 0 ? value[0].value : null;
         } else if (value) {
-            const intValue = parseInt(value.value);
-            return Number.isFinite(intValue) ? [intValue] : [];
+            return value.value;
+        } else {
+            return null;
         }
-        return [];
     }
 
-    refresh(params: AdhocMultiSelectDropdownCellParams): boolean {
-        const { tableOid, value } = params.multiSelectDropdown;
-        const dropdownValues = params.dropdownValues;
-
-        if (tableOid in dropdownValues) {
-            this.choices.setChoices(
-                dropdownValues[tableOid].map((item) => {
-                    return {
-                        value: item.oid.toString(),
-                        label: item.label,
-                        selected: value.indexOf(item.oid) >= 0
-                    };
-                }), 
-                'value', 
-                'label', 
-                true
-            );
-        } else {
-            this.choices.setChoices([]);
-        }
-        
+    refresh(params: ICellEditorParams<SubtypeCellParams>): boolean {
+        this.choices.setChoices(
+            params.data.subtypes
+                .map(({ oid, name }) => { 
+                    return { 
+                        value: oid.toString(), 
+                        label: name,
+                        selected: oid == params.data.subtypeTableOid
+                    }; 
+                }),
+            'value',
+            'label',
+            true
+        );
+        //this.choices.setValue([params.data.subtypeTableOid.toString()]);
         this.choices.showDropdown(false);
         return true;
     }
